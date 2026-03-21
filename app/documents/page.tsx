@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { ChangeEvent, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import SafeModal from '../../components/SafeModal'
 import PageBackButton from '../../components/PageBackButton'
@@ -64,8 +64,11 @@ type VendorRow = {
 
 type FileRow = {
   id: string
+  purchase_id: string | null
   item_id: string | null
+  cost_id: string | null
   file_type: string | null
+  file_name: string | null
   file_path: string | null
   created_at: string
 }
@@ -78,6 +81,8 @@ type DraftItem = {
   foreign_total: string
   memo: string
   is_preorder: boolean
+  photoFile?: File | null
+  existingPhotoPath?: string | null
 }
 
 type ItemAllocationView = {
@@ -176,6 +181,10 @@ function formatDateInput(raw: string) {
   return v
 }
 
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
 export default function DocumentsPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [items, setItems] = useState<PurchaseItemRow[]>([])
@@ -210,6 +219,11 @@ export default function DocumentsPage() {
   const [ecMemo, setEcMemo] = useState('')
   const [ecVendorName, setEcVendorName] = useState('')
   const [ecDate, setEcDate] = useState('')
+  const [ecSelectedItemIds, setEcSelectedItemIds] = useState<string[]>([])
+  const [ecReceiptFile, setEcReceiptFile] = useState<File | null>(null)
+  const [ecImportDocFile, setEcImportDocFile] = useState<File | null>(null)
+  const [ecExistingReceiptPath, setEcExistingReceiptPath] = useState<string | null>(null)
+  const [ecExistingImportDocPath, setEcExistingImportDocPath] = useState<string | null>(null)
   const [costEditDirty, setCostEditDirty] = useState(false)
 
   const [itemDetailOpen, setItemDetailOpen] = useState(false)
@@ -225,8 +239,19 @@ export default function DocumentsPage() {
   const [fTotalForeign, setFTotalForeign] = useState('')
   const [fTotalKRW, setFTotalKRW] = useState('')
   const [fMemo, setFMemo] = useState('')
+  const [purchaseReceiptFile, setPurchaseReceiptFile] = useState<File | null>(null)
+  const [existingPurchaseReceiptPath, setExistingPurchaseReceiptPath] = useState<string | null>(null)
   const [draftItems, setDraftItems] = useState<DraftItem[]>([
-    { key: crypto.randomUUID(), item_name: '', qty: '1', foreign_total: '', memo: '', is_preorder: false },
+    {
+      key: crypto.randomUUID(),
+      item_name: '',
+      qty: '1',
+      foreign_total: '',
+      memo: '',
+      is_preorder: false,
+      photoFile: null,
+      existingPhotoPath: null,
+    },
   ])
 
   const [cType, setCType] = useState('배송비')
@@ -237,6 +262,8 @@ export default function DocumentsPage() {
   const [cMemo, setCMemo] = useState('')
   const [cVendorName, setCVendorName] = useState('')
   const [cDate, setCDate] = useState('')
+  const [costReceiptFile, setCostReceiptFile] = useState<File | null>(null)
+  const [costImportDocFile, setCostImportDocFile] = useState<File | null>(null)
 
   const purchaseMap = useMemo(() => {
     const map = new Map<string, PurchaseRow>()
@@ -267,6 +294,36 @@ export default function DocumentsPage() {
     }
     return map
   }, [items])
+
+  const filesByItem = useMemo(() => {
+    const map = new Map<string, FileRow[]>()
+    for (const f of files) {
+      if (!f.item_id) continue
+      if (!map.has(f.item_id)) map.set(f.item_id, [])
+      map.get(f.item_id)!.push(f)
+    }
+    return map
+  }, [files])
+
+  const filesByPurchase = useMemo(() => {
+    const map = new Map<string, FileRow[]>()
+    for (const f of files) {
+      if (!f.purchase_id) continue
+      if (!map.has(f.purchase_id)) map.set(f.purchase_id, [])
+      map.get(f.purchase_id)!.push(f)
+    }
+    return map
+  }, [files])
+
+  const filesByCost = useMemo(() => {
+    const map = new Map<string, FileRow[]>()
+    for (const f of files) {
+      if (!f.cost_id) continue
+      if (!map.has(f.cost_id)) map.set(f.cost_id, [])
+      map.get(f.cost_id)!.push(f)
+    }
+    return map
+  }, [files])
 
   const selectedPurchaseItems = useMemo(() => {
     if (!selectedPurchaseId) return []
@@ -365,7 +422,6 @@ export default function DocumentsPage() {
 
   const purchaseCardCounts = useMemo(() => {
     const map = new Map<string, { itemKinds: number; hasPreorder: boolean }>()
-
     for (const p of purchases) {
       const its = itemsByPurchase.get(p.id) ?? []
       map.set(p.id, {
@@ -373,7 +429,6 @@ export default function DocumentsPage() {
         hasPreorder: its.some((x) => !!x.is_preorder && !hasBalanceByItem.get(x.id)),
       })
     }
-
     return map
   }, [purchases, itemsByPurchase, hasBalanceByItem])
 
@@ -401,6 +456,88 @@ export default function DocumentsPage() {
     return vendors
   }, [vendors, ecType])
 
+  function getPublicUrl(path: string | null | undefined) {
+    if (!path) return ''
+    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
+    return data.publicUrl
+  }
+
+  function getPurchaseReceiptPath(purchaseId: string | null | undefined) {
+    if (!purchaseId) return null
+    const found = (filesByPurchase.get(purchaseId) ?? []).find((f) => f.file_type === '매입영수증')
+    return found?.file_path ?? null
+  }
+
+  function getCostReceiptPath(costId: string | null | undefined) {
+    if (!costId) return null
+    const found = (filesByCost.get(costId) ?? []).find((f) => f.file_type === '추가비용영수증')
+    return found?.file_path ?? null
+  }
+
+  function getCostImportDocPath(costId: string | null | undefined) {
+    if (!costId) return null
+    const found = (filesByCost.get(costId) ?? []).find((f) => f.file_type === '수입신고필증')
+    return found?.file_path ?? null
+  }
+
+  async function uploadStorageFile(file: File, folder: string) {
+    const path = `${folder}/${Date.now()}-${safeFileName(file.name)}`
+    const res = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, { upsert: true })
+    if (res.error) throw res.error
+    return path
+  }
+
+  async function removeStoragePath(path: string | null | undefined) {
+    if (!path) return
+    await supabase.storage.from(STORAGE_BUCKET).remove([path])
+  }
+
+  async function upsertPurchaseFile(params: {
+    purchase_id?: string | null
+    item_id?: string | null
+    cost_id?: string | null
+    file_type: string
+    file: File
+    oldPath?: string | null
+  }) {
+    const { purchase_id = null, item_id = null, cost_id = null, file_type, file, oldPath = null } = params
+    if (oldPath) {
+      const oldRows = files.filter(
+        (f) =>
+          f.purchase_id === purchase_id &&
+          f.item_id === item_id &&
+          f.cost_id === cost_id &&
+          f.file_type === file_type
+      )
+      for (const row of oldRows) {
+        await supabase.from('purchase_files').delete().eq('id', row.id)
+      }
+      await removeStoragePath(oldPath)
+    }
+
+    const folder =
+      file_type === '상품사진'
+        ? 'item-photos'
+        : file_type === '매입영수증'
+        ? 'purchase-receipts'
+        : file_type === '수입신고필증'
+        ? 'import-docs'
+        : 'cost-receipts'
+
+    const path = await uploadStorageFile(file, folder)
+
+    const ins = await supabase.from('purchase_files').insert({
+      purchase_id,
+      item_id,
+      cost_id,
+      file_type,
+      file_name: file.name,
+      file_path: path,
+    })
+    if (ins.error) throw ins.error
+    return path
+  }
+
   async function refreshAll() {
     setLoading(true)
     setErr(null)
@@ -422,7 +559,7 @@ export default function DocumentsPage() {
           .from('purchase_costs')
           .select('id,created_at,purchase_id,cost_type,amount,currency,fx_rate,memo,vendor_name,cost_date')
           .order('created_at', { ascending: false })
-          .limit(100),
+          .limit(200),
 
         supabase
           .from('cost_allocations')
@@ -435,7 +572,7 @@ export default function DocumentsPage() {
 
         supabase
           .from('purchase_files')
-          .select('id,item_id,file_type,file_path,created_at')
+          .select('id,purchase_id,item_id,cost_id,file_type,file_name,file_path,created_at')
           .order('created_at', { ascending: false }),
       ])
 
@@ -454,9 +591,7 @@ export default function DocumentsPage() {
       const fs = (fRes.data ?? []) as FileRow[]
 
       const sortedPurchases = [...p].sort((a, b) => {
-        if (a.purchase_date && b.purchase_date) {
-          return a.purchase_date < b.purchase_date ? 1 : -1
-        }
+        if (a.purchase_date && b.purchase_date) return a.purchase_date < b.purchase_date ? 1 : -1
         if (a.purchase_date && !b.purchase_date) return -1
         if (!a.purchase_date && b.purchase_date) return 1
         return a.created_at < b.created_at ? 1 : -1
@@ -491,6 +626,11 @@ export default function DocumentsPage() {
     setSelectedItemIds([])
   }
 
+  function toggleEditCostSelectedItem(id: string) {
+    setEcSelectedItemIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+    setCostEditDirty(true)
+  }
+
   function resetBuyForm() {
     setBuyMode('create')
     setEditingPurchaseId(null)
@@ -503,6 +643,8 @@ export default function DocumentsPage() {
     setFTotalForeign('')
     setFTotalKRW('')
     setFMemo('')
+    setPurchaseReceiptFile(null)
+    setExistingPurchaseReceiptPath(null)
     setDraftItems([
       {
         key: crypto.randomUUID(),
@@ -511,6 +653,8 @@ export default function DocumentsPage() {
         foreign_total: '',
         memo: '',
         is_preorder: false,
+        photoFile: null,
+        existingPhotoPath: null,
       },
     ])
     setBuyDirty(false)
@@ -534,11 +678,13 @@ export default function DocumentsPage() {
     setFCardName(p.card_name ?? '')
     setFCurrency(normalizeCurrencySelectValue(p.currency))
     setFCurrencyCustom(
-      normalizeCurrencySelectValue(p.currency) === '직접입력' ? (p.currency ?? '') : ''
+      normalizeCurrencySelectValue(p.currency) === '직접입력' ? p.currency ?? '' : ''
     )
     setFTotalForeign(String(p.total_foreign ?? ''))
     setFTotalKRW(String(p.total_amount ?? ''))
     setFMemo(p.memo ?? '')
+    setExistingPurchaseReceiptPath(getPurchaseReceiptPath(p.id))
+    setPurchaseReceiptFile(null)
 
     setDraftItems(
       purchaseItems.length > 0
@@ -550,6 +696,9 @@ export default function DocumentsPage() {
             foreign_total: String(it.foreign_total ?? ''),
             memo: it.memo ?? '',
             is_preorder: !!it.is_preorder,
+            photoFile: null,
+            existingPhotoPath:
+              (filesByItem.get(it.id) ?? []).find((f) => f.file_type === '상품사진')?.file_path ?? null,
           }))
         : [
             {
@@ -559,6 +708,8 @@ export default function DocumentsPage() {
               foreign_total: '',
               memo: '',
               is_preorder: false,
+              photoFile: null,
+              existingPhotoPath: null,
             },
           ]
     )
@@ -628,6 +779,8 @@ export default function DocumentsPage() {
 
     setLoading(true)
     try {
+      let purchaseId = editingPurchaseId
+
       if (buyMode === 'edit' && editingPurchaseId) {
         const updP = await supabase
           .from('purchase')
@@ -645,46 +798,6 @@ export default function DocumentsPage() {
           .eq('id', editingPurchaseId)
 
         if (updP.error) throw updP.error
-
-        const prevItems = itemsByPurchase.get(editingPurchaseId) ?? []
-        const prevIds = new Set(prevItems.map((x) => x.id))
-        const nextIds = new Set(cleaned.filter((x) => x.id).map((x) => x.id as string))
-
-        const deleteIds = [...prevIds].filter((id) => !nextIds.has(id))
-        if (deleteIds.length > 0) {
-          const delRes = await supabase.from('purchase_items').delete().in('id', deleteIds)
-          if (delRes.error) throw delRes.error
-        }
-
-        for (const d of cleaned) {
-          const q = Math.max(1, n(d.qty))
-          const ft = Math.max(0, n(d.foreign_total))
-          const foreignUnit = q > 0 ? ft / q : 0
-          const lineKRW = ft * fx
-          const unitKRW = q > 0 ? lineKRW / q : 0
-
-          const payload = {
-            purchase_id: editingPurchaseId,
-            item_name: d.item_name,
-            qty: q,
-            foreign_total: ft,
-            foreign_unit_price: foreignUnit,
-            unit_price: unitKRW,
-            line_total: lineKRW,
-            memo: d.memo || null,
-            is_preorder: d.is_preorder,
-          }
-
-          if (d.id) {
-            const updI = await supabase.from('purchase_items').update(payload).eq('id', d.id)
-            if (updI.error) throw updI.error
-          } else {
-            const insI = await supabase.from('purchase_items').insert(payload)
-            if (insI.error) throw insI.error
-          }
-        }
-
-        setMsg('매입 수정 완료')
       } else {
         const insP = await supabase
           .from('purchase')
@@ -703,36 +816,77 @@ export default function DocumentsPage() {
           .single()
 
         if (insP.error) throw insP.error
-
-        const purchaseId = insP.data.id as string
-
-        const rows = cleaned.map((d) => {
-          const q = Math.max(1, n(d.qty))
-          const ft = Math.max(0, n(d.foreign_total))
-          const foreignUnit = q > 0 ? ft / q : 0
-          const lineKRW = ft * fx
-          const unitKRW = q > 0 ? lineKRW / q : 0
-
-          return {
-            purchase_id: purchaseId,
-            item_name: d.item_name,
-            qty: q,
-            foreign_total: ft,
-            foreign_unit_price: foreignUnit,
-            unit_price: unitKRW,
-            line_total: lineKRW,
-            memo: d.memo || null,
-            is_preorder: d.is_preorder,
-          }
-        })
-
-        const insI = await supabase.from('purchase_items').insert(rows)
-        if (insI.error) throw insI.error
-
-        setMsg(`매입 저장 완료 (환율 자동 계산: ${fx.toFixed(4)})`)
+        purchaseId = insP.data.id as string
         setSelectedPurchaseId(purchaseId)
       }
 
+      if (!purchaseId) throw new Error('매입 ID를 찾을 수 없어.')
+
+      const prevItems = itemsByPurchase.get(purchaseId) ?? []
+      const prevIds = new Set(prevItems.map((x) => x.id))
+      const nextIds = new Set(cleaned.filter((x) => x.id).map((x) => x.id as string))
+
+      const deleteIds = [...prevIds].filter((id) => !nextIds.has(id))
+      if (deleteIds.length > 0) {
+        const delRes = await supabase.from('purchase_items').delete().in('id', deleteIds)
+        if (delRes.error) throw delRes.error
+      }
+
+      const savedItemIds: string[] = []
+
+      for (const d of cleaned) {
+        const q = Math.max(1, n(d.qty))
+        const ft = Math.max(0, n(d.foreign_total))
+        const foreignUnit = q > 0 ? ft / q : 0
+        const lineKRW = ft * fx
+        const unitKRW = q > 0 ? lineKRW / q : 0
+
+        const payload = {
+          purchase_id: purchaseId,
+          item_name: d.item_name,
+          qty: q,
+          foreign_total: ft,
+          foreign_unit_price: foreignUnit,
+          unit_price: unitKRW,
+          line_total: lineKRW,
+          memo: d.memo || null,
+          is_preorder: d.is_preorder,
+        }
+
+        let savedId = d.id
+
+        if (d.id) {
+          const updI = await supabase.from('purchase_items').update(payload).eq('id', d.id)
+          if (updI.error) throw updI.error
+        } else {
+          const insI = await supabase.from('purchase_items').insert(payload).select('id').single()
+          if (insI.error) throw insI.error
+          savedId = insI.data.id as string
+        }
+
+        if (!savedId) throw new Error('상품 저장 ID를 찾을 수 없어.')
+        savedItemIds.push(savedId)
+
+        if (d.photoFile) {
+          await upsertPurchaseFile({
+            item_id: savedId,
+            file_type: '상품사진',
+            file: d.photoFile,
+            oldPath: d.existingPhotoPath ?? null,
+          })
+        }
+      }
+
+      if (purchaseReceiptFile) {
+        await upsertPurchaseFile({
+          purchase_id: purchaseId,
+          file_type: '매입영수증',
+          file: purchaseReceiptFile,
+          oldPath: existingPurchaseReceiptPath ?? null,
+        })
+      }
+
+      setMsg(buyMode === 'edit' ? '매입 수정 완료' : `매입 저장 완료 (환율 자동 계산: ${fx.toFixed(4)})`)
       setBuyModalOpen(false)
       resetBuyForm()
       await refreshAll()
@@ -753,7 +907,9 @@ export default function DocumentsPage() {
       const del = await supabase.from('purchase').delete().eq('id', purchaseId)
       if (del.error) throw del.error
 
-      setSelectedItemIds((prev) => prev.filter((id) => items.find((x) => x.id === id)?.purchase_id !== purchaseId))
+      setSelectedItemIds((prev) =>
+        prev.filter((id) => items.find((x) => x.id === id)?.purchase_id !== purchaseId)
+      )
       if (selectedPurchaseId === purchaseId) setSelectedPurchaseId(null)
 
       setMsg('매입 삭제 완료')
@@ -790,12 +946,19 @@ export default function DocumentsPage() {
     setEcAmount(String(cost.amount ?? ''))
     setEcCurrency(normalizeCurrencySelectValue(cost.currency || 'KRW'))
     setEcCurrencyCustom(
-      normalizeCurrencySelectValue(cost.currency) === '직접입력' ? (cost.currency ?? '') : ''
+      normalizeCurrencySelectValue(cost.currency) === '직접입력' ? cost.currency ?? '' : ''
     )
     setEcFxRate(String(cost.fx_rate ?? 1))
     setEcMemo(cost.memo ?? '')
     setEcVendorName(cost.vendor_name ?? '')
     setEcDate(cost.cost_date ?? '')
+    setEcSelectedItemIds(
+      allocations.filter((a) => a.purchase_cost_id === cost.id).map((a) => a.purchase_item_id)
+    )
+    setEcExistingReceiptPath(getCostReceiptPath(cost.id))
+    setEcExistingImportDocPath(getCostImportDocPath(cost.id))
+    setEcReceiptFile(null)
+    setEcImportDocFile(null)
     setCostEditDirty(false)
     setCostEditModalOpen(true)
   }
@@ -806,6 +969,9 @@ export default function DocumentsPage() {
     const cur = currencyValue(ecCurrency, ecCurrencyCustom)
     const amount = n(ecAmount)
     const fx = n(ecFxRate)
+    const costKRW = toKRW(amount, cur, fx)
+    const chosen = items.filter((it) => ecSelectedItemIds.includes(it.id))
+    const baseSum = chosen.reduce((acc, it) => acc + n(it.line_total), 0)
 
     if (!ecType.trim()) {
       setErr('추가비용 종류를 선택해줘.')
@@ -825,6 +991,14 @@ export default function DocumentsPage() {
     }
     if (!ecDate || ecDate.length !== 10) {
       setErr('날짜를 YYYY-MM-DD 형식으로 입력해줘.')
+      return
+    }
+    if (ecSelectedItemIds.length === 0) {
+      setErr('배분할 상품을 1개 이상 선택해줘.')
+      return
+    }
+    if (baseSum <= 0) {
+      setErr('선택된 상품의 원화합계가 0이야.')
       return
     }
 
@@ -847,6 +1021,51 @@ export default function DocumentsPage() {
         .eq('id', editingCost.id)
 
       if (upd.error) throw upd.error
+
+      const delAlloc = await supabase.from('cost_allocations').delete().eq('purchase_cost_id', editingCost.id)
+      if (delAlloc.error) throw delAlloc.error
+
+      const sorted = [...chosen].sort((a, b) => n(b.line_total) - n(a.line_total))
+      const maxItem = sorted[0]
+      const raw = sorted.map((it) => ({
+        item_id: it.id,
+        raw: (n(it.line_total) / baseSum) * costKRW,
+      }))
+      const alloc = raw.map((r) => ({ item_id: r.item_id, amt: ceilInt(r.raw) }))
+      const allocSum = alloc.reduce((acc, a) => acc + a.amt, 0)
+      const diff = allocSum - Math.round(costKRW)
+
+      if (maxItem) {
+        const idx = alloc.findIndex((a) => a.item_id === maxItem.id)
+        if (idx >= 0) alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
+      }
+
+      const insAlloc = await supabase.from('cost_allocations').insert(
+        alloc.map((a) => ({
+          purchase_cost_id: editingCost.id,
+          purchase_item_id: a.item_id,
+          allocated_amount: a.amt,
+        }))
+      )
+      if (insAlloc.error) throw insAlloc.error
+
+      if (ecReceiptFile) {
+        await upsertPurchaseFile({
+          cost_id: editingCost.id,
+          file_type: '추가비용영수증',
+          file: ecReceiptFile,
+          oldPath: ecExistingReceiptPath ?? null,
+        })
+      }
+
+      if (ecImportDocFile) {
+        await upsertPurchaseFile({
+          cost_id: editingCost.id,
+          file_type: '수입신고필증',
+          file: ecImportDocFile,
+          oldPath: ecExistingImportDocPath ?? null,
+        })
+      }
 
       setMsg('추가비용 수정 완료')
       setCostEditModalOpen(false)
@@ -897,12 +1116,12 @@ export default function DocumentsPage() {
       if (costRes.error) throw costRes.error
 
       const allAlloc = (allCostAllocRes.data ?? []) as CostAllocationRow[]
-      const costMap = new Map<string, PurchaseCostRow>()
-      for (const c of (costRes.data ?? []) as PurchaseCostRow[]) costMap.set(c.id, c)
+      const localCostMap = new Map<string, PurchaseCostRow>()
+      for (const c of (costRes.data ?? []) as PurchaseCostRow[]) localCostMap.set(c.id, c)
 
       const view: ItemAllocationView[] = myAllocRows
         .map((a) => {
-          const c = costMap.get(a.purchase_cost_id)
+          const c = localCostMap.get(a.purchase_cost_id)
           const related = allAlloc
             .filter((x) => x.purchase_cost_id === a.purchase_cost_id && x.purchase_item_id !== it.id)
             .map((x) => itemMap.get(x.purchase_item_id)?.item_name ?? '(이름 없음)')
@@ -996,7 +1215,6 @@ export default function DocumentsPage() {
 
       const sorted = [...chosen].sort((a, b) => n(b.line_total) - n(a.line_total))
       const maxItem = sorted[0]
-
       const raw = sorted.map((it) => ({
         item_id: it.id,
         raw: (n(it.line_total) / baseSum) * costKRW,
@@ -1008,9 +1226,7 @@ export default function DocumentsPage() {
 
       if (maxItem) {
         const idx = alloc.findIndex((a) => a.item_id === maxItem.id)
-        if (idx >= 0) {
-          alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
-        }
+        if (idx >= 0) alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
       }
 
       const insAlloc = await supabase.from('cost_allocations').insert(
@@ -1020,8 +1236,23 @@ export default function DocumentsPage() {
           allocated_amount: a.amt,
         }))
       )
-
       if (insAlloc.error) throw insAlloc.error
+
+      if (costReceiptFile) {
+        await upsertPurchaseFile({
+          cost_id: costId,
+          file_type: '추가비용영수증',
+          file: costReceiptFile,
+        })
+      }
+
+      if (costImportDocFile) {
+        await upsertPurchaseFile({
+          cost_id: costId,
+          file_type: '수입신고필증',
+          file: costImportDocFile,
+        })
+      }
 
       setMsg(`추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`)
       setCostModalOpen(false)
@@ -1034,6 +1265,8 @@ export default function DocumentsPage() {
       setCMemo('')
       setCVendorName('')
       setCDate('')
+      setCostReceiptFile(null)
+      setCostImportDocFile(null)
       await refreshAll()
     } catch (e: any) {
       setErr(e?.message ?? String(e))
@@ -1113,7 +1346,7 @@ export default function DocumentsPage() {
         padding: 14,
         cursor: 'pointer',
         maxWidth: '100%',
-        overflow: 'hidden'
+        overflow: 'hidden',
       }) as React.CSSProperties,
     badge: (color: 'purple' | 'orange' | 'green' | 'gray' = 'gray') =>
       ({
@@ -1210,6 +1443,27 @@ export default function DocumentsPage() {
       boxSizing: 'border-box',
     } as React.CSSProperties,
     hr: { border: 'none', borderTop: '1px solid #eee', margin: '14px 0' } as React.CSSProperties,
+    fileBox: {
+      border: '1px dashed #d9d9e6',
+      borderRadius: 12,
+      padding: 10,
+      background: '#fafafa',
+      display: 'grid',
+      gap: 8,
+    } as React.CSSProperties,
+    fileInfo: { fontSize: 12, color: '#374151', wordBreak: 'break-all' } as React.CSSProperties,
+    chipsWrap: { display: 'flex', flexWrap: 'wrap', gap: 8 } as React.CSSProperties,
+    chip: (on: boolean) =>
+      ({
+        padding: '8px 10px',
+        borderRadius: 999,
+        border: on ? '1px solid #7c3aed' : '1px solid #ddd',
+        background: on ? '#f3e8ff' : '#fff',
+        color: on ? '#5b21b6' : '#374151',
+        fontWeight: 800,
+        cursor: 'pointer',
+        fontSize: 12,
+      }) as React.CSSProperties,
   }
 
   return (
@@ -1233,7 +1487,8 @@ export default function DocumentsPage() {
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={styles.small}>
-            선택된 상품: <b>{selectedItemIds.length}개</b> / 선택 합계(상품 원화합계): <b>{fmtKRW(selectedItemsLineTotalSum)}</b>
+            선택된 상품: <b>{selectedItemIds.length}개</b> / 선택 합계(상품 원화합계):{' '}
+            <b>{fmtKRW(selectedItemsLineTotalSum)}</b>
           </span>
           <button style={styles.btn('ghost')} onClick={clearSelection}>
             선택 해제
@@ -1278,14 +1533,12 @@ export default function DocumentsPage() {
             position: 'sticky',
             top: 16,
             maxHeight: 'calc(100vh - 40px)',
-            overflowY: 'auto',
-            overflowX: 'auto',
+            overflow: 'auto',
             minWidth: 0,
           }}
         >
           <div style={styles.h2}>매입목록</div>
-
-          <div style={{ minWidth: 580, display: 'grid', gap: 10 }}>
+          <div style={{ display: 'grid', gap: 10 }}>
             {purchases.length === 0 && <div style={styles.small}>아직 매입이 없어.</div>}
 
             {purchases.map((p) => {
@@ -1301,23 +1554,18 @@ export default function DocumentsPage() {
                         {cnt?.hasPreorder ? <span style={styles.badge('orange')}>예약 포함</span> : null}
                       </div>
 
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: '#6b7280',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        결제일 {fmtDate(p.purchase_date)} /
-                        결제수단 {p.payment_met || '미입력'} /
-                        카드 {p.card_name || '미입력'} /
-                        상품수 {cnt?.itemKinds ?? 0}개 /
-                        총원화 {fmtKRW(Number(p.total_amount || 0))}
+                      <div style={{ ...styles.small, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <span>결제일: <b>{fmtDate(p.purchase_date)}</b></span>
+                        <span>결제수단: <b>{p.payment_met ?? '미입력'}</b></span>
+                        <span>카드: <b>{p.card_name ?? '미입력'}</b></span>
                       </div>
 
-                      {p.memo ? <div style={{ ...styles.small, marginTop: 4 }}>{p.memo}</div> : null}
+                      <div style={{ ...styles.small, display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+                        <span>상품 종류 수: <b>{cnt?.itemKinds ?? 0}개</b></span>
+                        <span>총원화: <b>{fmtKRW(n(p.total_amount))}</b></span>
+                      </div>
+
+                      <div style={{ ...styles.small, marginTop: 4 }}>등록: {fmtDateTime(p.created_at)}</div>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1399,7 +1647,6 @@ export default function DocumentsPage() {
                     const allocSum = allocationSumByItem.get(it.id) ?? 0
                     const finalUnit = ceilInt((lineTotal + allocSum) / Math.max(1, n(it.qty)))
                     const parentPurchase = purchaseMap.get(it.purchase_id)
-                    const currency = currencyLabel(parentPurchase?.currency)
 
                     return (
                       <tr key={it.id}>
@@ -1413,16 +1660,16 @@ export default function DocumentsPage() {
                         </td>
 
                         <td style={styles.td}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 220 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 220 }}>
                             {itemPhotoMap.get(it.id) ? (
                               <img
                                 src={itemPhotoMap.get(it.id)}
                                 alt={it.item_name ?? '상품'}
                                 style={{
-                                  width: 58,
-                                  height: 58,
+                                  width: 44,
+                                  height: 44,
                                   objectFit: 'cover',
-                                  borderRadius: 12,
+                                  borderRadius: 10,
                                   border: '1px solid #ddd',
                                   background: '#f3f4f6',
                                   flexShrink: 0,
@@ -1431,9 +1678,9 @@ export default function DocumentsPage() {
                             ) : (
                               <div
                                 style={{
-                                  width: 58,
-                                  height: 58,
-                                  borderRadius: 12,
+                                  width: 44,
+                                  height: 44,
+                                  borderRadius: 10,
                                   border: '1px solid #ddd',
                                   background: '#f3f4f6',
                                   color: '#888',
@@ -1456,6 +1703,7 @@ export default function DocumentsPage() {
                                 ) : null}
                               </div>
                               <div style={styles.small}>거래처: {parentPurchase?.supplier ?? '(거래처 없음)'}</div>
+                              <div style={styles.small}>등록: {fmtDateTime(it.created_at)}</div>
                             </div>
                           </div>
                         </td>
@@ -1466,7 +1714,7 @@ export default function DocumentsPage() {
                         <td style={styles.td}>
                           <div style={{ fontWeight: 900 }}>{fmtKRW(lineTotal)}</div>
                           <div style={styles.small}>
-                            외화총액: {fmtNum(n(it.foreign_total))} {currency}
+                            외화총액: {fmtNum(n(it.foreign_total))} {parentPurchase?.currency ?? ''}
                           </div>
                         </td>
 
@@ -1511,6 +1759,8 @@ export default function DocumentsPage() {
                     : n(cost.amount) * n(cost.fx_rate)
 
                 const allocItemCount = allocations.filter((a) => a.purchase_cost_id === cost.id).length
+                const receiptPath = getCostReceiptPath(cost.id)
+                const importDocPath = getCostImportDocPath(cost.id)
 
                 return (
                   <div key={cost.id} style={{ ...styles.card, padding: 12, background: '#fcfcff' }}>
@@ -1521,13 +1771,37 @@ export default function DocumentsPage() {
                           {allocItemCount > 0 ? <span style={styles.badge('purple')}>배분 {allocItemCount}건</span> : null}
                         </div>
                         <div style={styles.small}>
-                          날짜: <b>{fmtDate(cost.cost_date)}</b> / 금액: <b>{fmtNum(n(cost.amount))}</b> {currencyLabel(cost.currency)} / 환율: <b>{fmtNum(n(cost.fx_rate))}</b> / 환산: <b>{fmtKRW(krw)}</b>
+                          날짜: <b>{fmtDate(cost.cost_date)}</b> / 금액: <b>{fmtNum(n(cost.amount))}</b> {currencyLabel(cost.currency)} / 환율:{' '}
+                          <b>{fmtNum(n(cost.fx_rate))}</b> / 환산: <b>{fmtKRW(krw)}</b>
                         </div>
                         {cost.vendor_name ? (
                           <div style={styles.small}>
                             거래처: <b>{cost.vendor_name}</b>
                           </div>
                         ) : null}
+                        <div style={styles.small}>등록: {fmtDateTime(cost.created_at)}</div>
+                        <div style={{ ...styles.small, marginTop: 4 }}>
+                          영수증:{' '}
+                          {receiptPath ? (
+                            <a href={getPublicUrl(receiptPath)} target="_blank" rel="noreferrer">
+                              보기
+                            </a>
+                          ) : (
+                            '미업로드'
+                          )}
+                          {cost.cost_type === '관부과세' || cost.cost_type === '배송비' || cost.cost_type === '잔금' ? (
+                            <>
+                              {' '} / 수입신고필증:{' '}
+                              {importDocPath ? (
+                                <a href={getPublicUrl(importDocPath)} target="_blank" rel="noreferrer">
+                                  보기
+                                </a>
+                              ) : (
+                                '미업로드'
+                              )}
+                            </>
+                          ) : null}
+                        </div>
                         {cost.memo ? <div style={{ marginTop: 6 }}>{cost.memo}</div> : null}
                       </div>
 
@@ -1553,10 +1827,7 @@ export default function DocumentsPage() {
         title={buyMode === 'edit' ? '매입 수정' : '매입 등록 (안에 상품까지)'}
         onClose={requestCloseBuyModal}
       >
-        <div
-          onInputCapture={() => setBuyDirty(true)}
-          onChangeCapture={() => setBuyDirty(true)}
-        >
+        <div onInputCapture={() => setBuyDirty(true)} onChangeCapture={() => setBuyDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
             <button style={styles.btn('ghost')} onClick={requestCloseBuyModal}>
               닫기
@@ -1639,13 +1910,28 @@ export default function DocumentsPage() {
               <input
                 style={{ ...styles.input, background: '#f3f4f6' }}
                 readOnly
-                value={
-                  calcFxRate(n(fTotalKRW), n(fTotalForeign)) > 0
-                    ? calcFxRate(n(fTotalKRW), n(fTotalForeign)).toFixed(4)
-                    : ''
-                }
+                value={calcFxRate(n(fTotalKRW), n(fTotalForeign)) > 0 ? calcFxRate(n(fTotalKRW), n(fTotalForeign)).toFixed(4) : ''}
                 placeholder="자동 계산"
               />
+            </div>
+
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={styles.label}>매입영수증</div>
+              <div style={styles.fileBox}>
+                {existingPurchaseReceiptPath ? (
+                  <div style={styles.fileInfo}>
+                    기존 파일: <a href={getPublicUrl(existingPurchaseReceiptPath)} target="_blank" rel="noreferrer">보기</a>
+                  </div>
+                ) : (
+                  <div style={styles.fileInfo}>기존 파일 없음</div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setPurchaseReceiptFile(e.target.files?.[0] ?? null)}
+                />
+                {purchaseReceiptFile ? <div style={styles.fileInfo}>새 파일: {purchaseReceiptFile.name}</div> : null}
+              </div>
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
@@ -1663,7 +1949,16 @@ export default function DocumentsPage() {
               onClick={() =>
                 setDraftItems((prev) => [
                   ...prev,
-                  { key: crypto.randomUUID(), item_name: '', qty: '1', foreign_total: '', memo: '', is_preorder: false },
+                  {
+                    key: crypto.randomUUID(),
+                    item_name: '',
+                    qty: '1',
+                    foreign_total: '',
+                    memo: '',
+                    is_preorder: false,
+                    photoFile: null,
+                    existingPhotoPath: null,
+                  },
                 ])
               }
             >
@@ -1683,7 +1978,6 @@ export default function DocumentsPage() {
               const foreignUnit = q > 0 ? ft / q : 0
               const lineKRW = ft * fx
               const unitKRW = q > 0 ? lineKRW / q : 0
-              const currency = currencyLabel(currencyValue(fCurrency, fCurrencyCustom))
 
               return (
                 <div key={d.key} style={{ ...styles.card, background: '#fafafa' }}>
@@ -1749,7 +2043,34 @@ export default function DocumentsPage() {
 
                     <div style={{ gridColumn: '1 / -1', display: 'grid', gap: 6 }}>
                       <div style={styles.small}>
-                        수량 <b>{q}</b> / 원화합계 <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b> / 외화총액 <b>{fmtNum(ft)} {currency}</b> / 외화단가 <b>{foreignUnit > 0 ? `${foreignUnit.toFixed(4)} ${currency}` : `0 ${currency}`}</b>
+                        외화단가: <b>{foreignUnit > 0 ? foreignUnit.toFixed(4) : '0'}</b> / 원화단가:{' '}
+                        <b>{unitKRW > 0 ? fmtKRW(unitKRW) : '0원'}</b> / 상품 원화합계:{' '}
+                        <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b>
+                      </div>
+                    </div>
+
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div style={styles.label}>상품사진</div>
+                      <div style={styles.fileBox}>
+                        {d.existingPhotoPath ? (
+                          <div style={styles.fileInfo}>
+                            기존 파일: <a href={getPublicUrl(d.existingPhotoPath)} target="_blank" rel="noreferrer">보기</a>
+                          </div>
+                        ) : (
+                          <div style={styles.fileInfo}>기존 파일 없음</div>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                            setDraftItems((prev) =>
+                              prev.map((x) =>
+                                x.key === d.key ? { ...x, photoFile: e.target.files?.[0] ?? null } : x
+                              )
+                            )
+                          }
+                        />
+                        {d.photoFile ? <div style={styles.fileInfo}>새 파일: {d.photoFile.name}</div> : null}
                       </div>
                     </div>
 
@@ -1777,10 +2098,7 @@ export default function DocumentsPage() {
         title="추가비용 저장 + 선택 상품 자동분배"
         onClose={requestCloseCostModal}
       >
-        <div
-          onInputCapture={() => setCostDirty(true)}
-          onChangeCapture={() => setCostDirty(true)}
-        >
+        <div onInputCapture={() => setCostDirty(true)} onChangeCapture={() => setCostDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
             <button style={styles.btn('ghost')} onClick={requestCloseCostModal}>
               닫기
@@ -1855,6 +2173,30 @@ export default function DocumentsPage() {
             </div>
 
             <div style={styles.field}>
+              <div style={styles.label}>추가비용 영수증</div>
+              <div style={styles.fileBox}>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCostReceiptFile(e.target.files?.[0] ?? null)}
+                />
+                {costReceiptFile ? <div style={styles.fileInfo}>{costReceiptFile.name}</div> : null}
+              </div>
+            </div>
+
+            <div style={styles.field}>
+              <div style={styles.label}>수입신고필증(선택)</div>
+              <div style={styles.fileBox}>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCostImportDocFile(e.target.files?.[0] ?? null)}
+                />
+                {costImportDocFile ? <div style={styles.fileInfo}>{costImportDocFile.name}</div> : null}
+              </div>
+            </div>
+
+            <div style={{ gridColumn: '1 / -1' }}>
               <div style={styles.label}>메모(선택)</div>
               <input style={styles.input} value={cMemo} onChange={(e) => setCMemo(e.target.value)} placeholder="예: DHL / 관세 고지서" />
             </div>
@@ -1887,10 +2229,7 @@ export default function DocumentsPage() {
         title="추가비용 수정"
         onClose={requestCloseCostEditModal}
       >
-        <div
-          onInputCapture={() => setCostEditDirty(true)}
-          onChangeCapture={() => setCostEditDirty(true)}
-        >
+        <div onInputCapture={() => setCostEditDirty(true)} onChangeCapture={() => setCostEditDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
             <button style={styles.btn('ghost')} onClick={requestCloseCostEditModal}>
               닫기
@@ -1939,7 +2278,7 @@ export default function DocumentsPage() {
                 ))}
               </select>
               {ecCurrency === '직접입력' && (
-                <input style={styles.input} value={ecCurrencyCustom} onChange={(e) => setEcCurrencyCustom(e.target.value)} placeholder="예: THB" />
+                <input style={styles.input} value={ecCurrencyCustom} onChange={(e) => setEcCurrencyCustom(e.target.value)} />
               )}
             </div>
 
@@ -1964,8 +2303,62 @@ export default function DocumentsPage() {
             </div>
 
             <div style={styles.field}>
+              <div style={styles.label}>추가비용 영수증</div>
+              <div style={styles.fileBox}>
+                {ecExistingReceiptPath ? (
+                  <div style={styles.fileInfo}>
+                    기존 파일: <a href={getPublicUrl(ecExistingReceiptPath)} target="_blank" rel="noreferrer">보기</a>
+                  </div>
+                ) : (
+                  <div style={styles.fileInfo}>기존 파일 없음</div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setEcReceiptFile(e.target.files?.[0] ?? null)}
+                />
+                {ecReceiptFile ? <div style={styles.fileInfo}>{ecReceiptFile.name}</div> : null}
+              </div>
+            </div>
+
+            <div style={styles.field}>
+              <div style={styles.label}>수입신고필증(선택)</div>
+              <div style={styles.fileBox}>
+                {ecExistingImportDocPath ? (
+                  <div style={styles.fileInfo}>
+                    기존 파일: <a href={getPublicUrl(ecExistingImportDocPath)} target="_blank" rel="noreferrer">보기</a>
+                  </div>
+                ) : (
+                  <div style={styles.fileInfo}>기존 파일 없음</div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setEcImportDocFile(e.target.files?.[0] ?? null)}
+                />
+                {ecImportDocFile ? <div style={styles.fileInfo}>{ecImportDocFile.name}</div> : null}
+              </div>
+            </div>
+
+            <div style={{ gridColumn: '1 / -1' }}>
               <div style={styles.label}>메모</div>
               <input style={styles.input} value={ecMemo} onChange={(e) => setEcMemo(e.target.value)} />
+            </div>
+
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={styles.label}>배분할 상품 선택</div>
+              <div style={styles.chipsWrap}>
+                {items.map((it) => (
+                  <button
+                    type="button"
+                    key={it.id}
+                    style={styles.chip(ecSelectedItemIds.includes(it.id))}
+                    onClick={() => toggleEditCostSelectedItem(it.id)}
+                  >
+                    {it.item_name ?? '(이름 없음)'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1989,7 +2382,7 @@ export default function DocumentsPage() {
                 수량: <b>{fmtNum(n(detailItem.qty))}</b> / 상품 원화합계: <b>{fmtKRW(n(detailItem.line_total))}</b>
               </div>
               <div style={styles.small}>
-                외화총액: <b>{fmtNum(n(detailItem.foreign_total))} {currencyLabel(purchaseMap.get(detailItem.purchase_id)?.currency)}</b> / 외화단가: <b>{n(detailItem.foreign_unit_price).toFixed(4)} {currencyLabel(purchaseMap.get(detailItem.purchase_id)?.currency)}</b>
+                외화총액: <b>{fmtNum(n(detailItem.foreign_total))}</b> / 외화단가: <b>{n(detailItem.foreign_unit_price).toFixed(4)}</b>
               </div>
               {detailItem.memo ? <div style={{ marginTop: 8 }}>{detailItem.memo}</div> : null}
             </div>
