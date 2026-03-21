@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { supabase } from '@/lib/supabase'
 import PageBackButton from '../../components/PageBackButton'
 
@@ -16,6 +16,7 @@ type ItemRow = {
   item_name: string | null
   created_at: string
   is_preorder: boolean | null
+  attachment_url: string | null
 }
 
 type CostRow = {
@@ -38,7 +39,37 @@ type FileRow = {
   file_type: string | null
   file_name: string | null
   file_path: string | null
+  created_at?: string | null
 }
+
+type SaleItemRow = {
+  id: string
+  sale_id: string
+  purchase_item_id: string
+  qty: number | null
+  sale_price: number | null
+  line_total: number | null
+}
+
+type SaleRow = {
+  id: string
+  sale_date: string | null
+  channel: string | null
+  sales_channel: string | null
+  memo: string | null
+  created_at?: string | null
+}
+
+type SaleFileRow = {
+  id: string
+  sale_id: string | null
+  file_type: string | null
+  file_path: string | null
+  created_at?: string | null
+}
+
+const STORAGE_BUCKET = 'purchase-files'
+const SALE_RECEIPT_TYPE = '매출영수증'
 
 function normalizeDate(value: string | null | undefined) {
   if (!value) return ''
@@ -62,14 +93,15 @@ function fmtDate(v: string | null | undefined) {
   return x || '미입력'
 }
 
-const STORAGE_BUCKET = 'purchase-files'
-
 export default function EvidencePage() {
   const [items, setItems] = useState<ItemRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [costs, setCosts] = useState<CostRow[]>([])
   const [allocations, setAllocations] = useState<AllocationRow[]>([])
   const [files, setFiles] = useState<FileRow[]>([])
+  const [saleItems, setSaleItems] = useState<SaleItemRow[]>([])
+  const [sales, setSales] = useState<SaleRow[]>([])
+  const [saleFiles, setSaleFiles] = useState<SaleFileRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -105,15 +137,51 @@ export default function EvidencePage() {
     const m = new Map<string, boolean>()
     allocations.forEach((a) => {
       const type = costTypeMap.get(a.purchase_cost_id)
-      if (type === '잔금') {
-        m.set(a.purchase_item_id, true)
-      }
+      if (type === '잔금') m.set(a.purchase_item_id, true)
     })
     return m
   }, [allocations, costTypeMap])
 
+  const salesByItem = useMemo(() => {
+    const m = new Map<string, SaleItemRow[]>()
+    saleItems.forEach((s) => {
+      if (!m.has(s.purchase_item_id)) m.set(s.purchase_item_id, [])
+      m.get(s.purchase_item_id)!.push(s)
+    })
+    return m
+  }, [saleItems])
+
+  const saleMap = useMemo(() => {
+    const m = new Map<string, SaleRow>()
+    sales.forEach((s) => m.set(s.id, s))
+    return m
+  }, [sales])
+
+  const saleFilesBySaleId = useMemo(() => {
+    const m = new Map<string, SaleFileRow[]>()
+    saleFiles.forEach((f) => {
+      if (!f.sale_id) return
+      if (!m.has(f.sale_id)) m.set(f.sale_id, [])
+      m.get(f.sale_id)!.push(f)
+    })
+    return m
+  }, [saleFiles])
+
+  function getPublicUrl(path: string | null | undefined) {
+    if (!path) return ''
+    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
+    return data.publicUrl
+  }
+
   const itemPhotoMap = useMemo(() => {
     const map = new Map<string, string>()
+
+    for (const item of items) {
+      if (item.attachment_url) {
+        map.set(item.id, item.attachment_url)
+      }
+    }
+
     const imageFiles = files.filter(
       (f) => f.file_type === '상품사진' && f.item_id && f.file_path
     )
@@ -121,18 +189,11 @@ export default function EvidencePage() {
     for (const f of imageFiles) {
       if (!f.item_id || !f.file_path) continue
       if (map.has(f.item_id)) continue
-      const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(f.file_path)
-      map.set(f.item_id, data.publicUrl)
+      map.set(f.item_id, getPublicUrl(f.file_path))
     }
 
     return map
-  }, [files])
-
-  function getPublicUrl(path: string | null | undefined) {
-    if (!path) return null
-    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
-    return data.publicUrl
-  }
+  }, [items, files])
 
   function getPurchaseFile(purchaseId: string, fileType: string) {
     return (
@@ -171,15 +232,62 @@ export default function EvidencePage() {
     return null
   }
 
+  function getLatestSaleReceiptForItem(itemId: string) {
+    const linkedSaleItems = salesByItem.get(itemId) ?? []
+    if (linkedSaleItems.length === 0) return null
+
+    const candidates: {
+      file: SaleFileRow
+      sale: SaleRow | undefined
+      saleDate: string
+      createdAt: string
+    }[] = []
+
+    linkedSaleItems.forEach((saleItem) => {
+      const sale = saleMap.get(saleItem.sale_id)
+      const receiptFiles = (saleFilesBySaleId.get(saleItem.sale_id) ?? []).filter(
+        (f) => f.file_type === SALE_RECEIPT_TYPE && f.file_path
+      )
+
+      receiptFiles.forEach((file) => {
+        candidates.push({
+          file,
+          sale,
+          saleDate: normalizeDate(sale?.sale_date) || '',
+          createdAt: String(file.created_at || ''),
+        })
+      })
+    })
+
+    if (candidates.length === 0) return null
+
+    candidates.sort((a, b) => {
+      const dateCompare = b.saleDate.localeCompare(a.saleDate)
+      if (dateCompare !== 0) return dateCompare
+      return b.createdAt.localeCompare(a.createdAt)
+    })
+
+    return candidates[0]
+  }
+
   async function load() {
     setLoading(true)
     setErr(null)
 
     try {
-      const [itemRes, purchaseRes, costRes, allocRes, fileRes] = await Promise.all([
+      const [
+        itemRes,
+        purchaseRes,
+        costRes,
+        allocRes,
+        fileRes,
+        saleItemRes,
+        saleRes,
+        saleFileRes,
+      ] = await Promise.all([
         supabase
           .from('purchase_items')
-          .select('id,purchase_id,item_name,created_at,is_preorder')
+          .select('id,purchase_id,item_name,created_at,is_preorder,attachment_url')
           .order('created_at', { ascending: false }),
 
         supabase
@@ -196,7 +304,20 @@ export default function EvidencePage() {
 
         supabase
           .from('purchase_files')
-          .select('id,purchase_id,item_id,cost_id,file_type,file_name,file_path')
+          .select('id,purchase_id,item_id,cost_id,file_type,file_name,file_path,created_at')
+          .order('created_at', { ascending: false }),
+
+        supabase
+          .from('sale_items')
+          .select('id,sale_id,purchase_item_id,qty,sale_price,line_total'),
+
+        supabase
+          .from('sales')
+          .select('id,sale_date,channel,sales_channel,memo,created_at'),
+
+        supabase
+          .from('sale_files')
+          .select('id,sale_id,file_type,file_path,created_at')
           .order('created_at', { ascending: false }),
       ])
 
@@ -205,12 +326,18 @@ export default function EvidencePage() {
       if (costRes.error) throw costRes.error
       if (allocRes.error) throw allocRes.error
       if (fileRes.error) throw fileRes.error
+      if (saleItemRes.error) throw saleItemRes.error
+      if (saleRes.error) throw saleRes.error
+      if (saleFileRes.error) throw saleFileRes.error
 
       setItems((itemRes.data ?? []) as ItemRow[])
       setPurchases((purchaseRes.data ?? []) as PurchaseRow[])
       setCosts((costRes.data ?? []) as CostRow[])
       setAllocations((allocRes.data ?? []) as AllocationRow[])
       setFiles((fileRes.data ?? []) as FileRow[])
+      setSaleItems((saleItemRes.data ?? []) as SaleItemRow[])
+      setSales((saleRes.data ?? []) as SaleRow[])
+      setSaleFiles((saleFileRes.data ?? []) as SaleFileRow[])
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -228,15 +355,26 @@ export default function EvidencePage() {
 
     return items.filter((it) => {
       const purchase = purchaseMap.get(it.purchase_id)
+      const latestSaleReceipt = getLatestSaleReceiptForItem(it.id)
+      const latestSale = latestSaleReceipt?.sale
+
       const itemName = String(it.item_name || '').toLowerCase()
       const supplier = String(purchase?.supplier || '').toLowerCase()
       const purchaseDate = String(purchase?.purchase_date || '').toLowerCase()
+      const saleDate = String(latestSale?.sale_date || '').toLowerCase()
+      const saleMemo = String(latestSale?.memo || '').toLowerCase()
 
-      return itemName.includes(q) || supplier.includes(q) || purchaseDate.includes(q)
+      return (
+        itemName.includes(q) ||
+        supplier.includes(q) ||
+        purchaseDate.includes(q) ||
+        saleDate.includes(q) ||
+        saleMemo.includes(q)
+      )
     })
-  }, [items, search, purchaseMap])
+  }, [items, search, purchaseMap, salesByItem, saleMap, saleFilesBySaleId])
 
-  const styles = {
+  const styles: Record<string, CSSProperties> = {
     page: {
       minHeight: '100vh',
       background: '#f7f7fb',
@@ -244,13 +382,13 @@ export default function EvidencePage() {
       padding: 20,
       fontFamily:
         "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif",
-    } as React.CSSProperties,
+    },
     title: {
       fontSize: 24,
       fontWeight: 900,
       color: '#312e81',
       marginBottom: 14,
-    } as React.CSSProperties,
+    },
     topbar: {
       display: 'flex',
       justifyContent: 'space-between',
@@ -258,7 +396,7 @@ export default function EvidencePage() {
       gap: 10,
       marginBottom: 12,
       flexWrap: 'wrap',
-    } as React.CSSProperties,
+    },
     btn: {
       border: '1px solid #ddd',
       background: '#fff',
@@ -267,7 +405,7 @@ export default function EvidencePage() {
       borderRadius: 12,
       cursor: 'pointer',
       fontWeight: 800,
-    } as React.CSSProperties,
+    },
     input: {
       border: '1px solid #d9d9e6',
       borderRadius: 12,
@@ -275,9 +413,9 @@ export default function EvidencePage() {
       outline: 'none',
       fontSize: 14,
       background: '#fff',
-      width: 280,
+      width: 300,
       color: '#111',
-    } as React.CSSProperties,
+    },
     card: {
       background: '#fff',
       border: '1px solid #e6e6ef',
@@ -285,16 +423,17 @@ export default function EvidencePage() {
       padding: 0,
       boxShadow: '0 8px 24px rgba(124, 58, 237, 0.05)',
       overflow: 'hidden',
-    } as React.CSSProperties,
+    },
     tableWrap: {
-      overflowX: 'hidden',
-    } as React.CSSProperties,
+      overflowX: 'auto',
+    },
     table: {
       width: '100%',
+      minWidth: 1500,
       borderCollapse: 'separate',
       borderSpacing: 0,
       background: '#fff',
-    } as React.CSSProperties,
+    },
     th: {
       textAlign: 'left',
       fontSize: 12,
@@ -304,27 +443,27 @@ export default function EvidencePage() {
       background: '#fafafa',
       fontWeight: 900,
       whiteSpace: 'nowrap',
-    } as React.CSSProperties,
+    },
     td: {
       padding: '12px 10px',
       borderBottom: '1px solid #f0f0f5',
       fontSize: 13,
       verticalAlign: 'top',
       whiteSpace: 'nowrap',
-    } as React.CSSProperties,
+    },
     small: {
       fontSize: 11,
       color: '#6b7280',
-    } as React.CSSProperties,
+    },
     ok: {
       color: '#166534',
       fontWeight: 800,
       textDecoration: 'none',
-    } as React.CSSProperties,
+    },
     no: {
       color: '#dc2626',
       fontWeight: 800,
-    } as React.CSSProperties,
+    },
     badge: {
       display: 'inline-flex',
       alignItems: 'center',
@@ -335,7 +474,7 @@ export default function EvidencePage() {
       background: '#ffedd5',
       color: '#9a3412',
       marginLeft: 6,
-    } as React.CSSProperties,
+    },
     errorBox: {
       background: '#fef2f2',
       color: '#991b1b',
@@ -344,16 +483,58 @@ export default function EvidencePage() {
       padding: 12,
       marginBottom: 12,
       fontWeight: 700,
-    } as React.CSSProperties,
+    },
+    thumbBox: {
+      width: 72,
+      height: 72,
+      borderRadius: 12,
+      border: '1px solid #e5e7eb',
+      background: '#f3f4f6',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 11,
+      fontWeight: 800,
+      color: '#6b7280',
+      overflow: 'hidden',
+    },
+    thumbImg: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+      display: 'block',
+    },
   }
 
   const renderFile = (file: FileRow | null) => {
     if (!file?.file_path) return <span style={styles.no}>미업로드</span>
     const url = getPublicUrl(file.file_path)
     return (
-      <a href={url ?? '#'} target="_blank" rel="noreferrer" style={styles.ok}>
+      <a href={url || '#'} target="_blank" rel="noreferrer" style={styles.ok}>
         ✔ 보기
       </a>
+    )
+  }
+
+  const renderSaleReceiptFile = (
+    data:
+      | {
+          file: SaleFileRow
+          sale?: SaleRow
+          saleDate: string
+          createdAt: string
+        }
+      | null
+  ) => {
+    if (!data?.file?.file_path) return <span style={styles.no}>미업로드</span>
+    const url = getPublicUrl(data.file.file_path)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <a href={url || '#'} target="_blank" rel="noreferrer" style={styles.ok}>
+          ✔ 보기
+        </a>
+        <span style={styles.small}>판매일: {fmtDate(data.sale?.sale_date)}</span>
+      </div>
     )
   }
 
@@ -379,7 +560,7 @@ export default function EvidencePage() {
             style={styles.input}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="상품명 / 거래처 / 매입일 검색"
+            placeholder="상품명 / 거래처 / 매입일 / 판매일 검색"
           />
           <button style={styles.btn} onClick={load}>
             새로고침
@@ -394,7 +575,8 @@ export default function EvidencePage() {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={{ ...styles.th, width: 190 }}>상품</th>
+                <th style={{ ...styles.th, width: 110 }}>상품사진</th>
+                <th style={{ ...styles.th, width: 180 }}>상품</th>
                 <th style={{ ...styles.th, width: 140 }}>거래처</th>
                 <th style={{ ...styles.th, width: 110 }}>매입일</th>
                 <th style={{ ...styles.th, width: 110 }}>매입영수증</th>
@@ -402,72 +584,54 @@ export default function EvidencePage() {
                 <th style={{ ...styles.th, width: 90 }}>관부과세</th>
                 <th style={{ ...styles.th, width: 80 }}>잔금</th>
                 <th style={{ ...styles.th, width: 110 }}>수입신고필증</th>
+                <th style={{ ...styles.th, width: 110 }}>매출영수증</th>
               </tr>
             </thead>
+
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td style={styles.td} colSpan={8}>조건에 맞는 상품이 없어.</td>
+                  <td style={styles.td} colSpan={10}>
+                    조건에 맞는 상품이 없어.
+                  </td>
                 </tr>
               ) : (
                 filteredItems.map((it) => {
                   const purchase = purchaseMap.get(it.purchase_id)
-
                   const purchaseReceipt = getPurchaseFile(it.purchase_id, '매입영수증')
                   const shippingReceipt = getCostFileForItem(it.id, '배송비', '추가비용영수증')
                   const taxReceipt = getCostFileForItem(it.id, '관부과세', '추가비용영수증')
                   const balanceReceipt = getCostFileForItem(it.id, '잔금', '추가비용영수증')
                   const customsDoc = getAnyCustomsDocForItem(it.id)
+                  const latestSaleReceipt = getLatestSaleReceiptForItem(it.id)
                   const imageUrl = itemPhotoMap.get(it.id) || ''
 
                   return (
                     <tr key={it.id}>
                       <td style={styles.td}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <div style={styles.thumbBox}>
                           {imageUrl ? (
                             <img
                               src={imageUrl}
                               alt={it.item_name || '상품'}
-                              style={{
-                                width: 60,
-                                height: 60,
-                                borderRadius: 12,
-                                objectFit: 'cover',
-                                border: '1px solid #e5e7eb',
-                                flexShrink: 0,
-                              }}
+                              style={styles.thumbImg}
                             />
                           ) : (
-                            <div
-                              style={{
-                                width: 60,
-                                height: 60,
-                                borderRadius: 12,
-                                border: '1px solid #e5e7eb',
-                                background: '#f3f4f6',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: 11,
-                                fontWeight: 800,
-                                color: '#6b7280',
-                                flexShrink: 0,
-                              }}
-                            >
-                              없음
-                            </div>
+                            <span>없음</span>
                           )}
+                        </div>
+                      </td>
 
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 900, fontSize: 13 }}>
-                              {it.item_name ?? '(이름 없음)'}
-                              {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
-                                <span style={styles.badge}>예약</span>
-                              ) : null}
-                            </div>
-                            <div style={styles.small}>
-                              등록: {new Date(it.created_at).toLocaleString('ko-KR')}
-                            </div>
+                      <td style={styles.td}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900, fontSize: 13 }}>
+                            {it.item_name ?? '(이름 없음)'}
+                            {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
+                              <span style={styles.badge}>예약</span>
+                            ) : null}
+                          </div>
+                          <div style={styles.small}>
+                            등록: {new Date(it.created_at).toLocaleString('ko-KR')}
                           </div>
                         </div>
                       </td>
@@ -479,6 +643,7 @@ export default function EvidencePage() {
                       <td style={styles.td}>{renderFile(taxReceipt)}</td>
                       <td style={styles.td}>{renderFile(balanceReceipt)}</td>
                       <td style={styles.td}>{renderFile(customsDoc)}</td>
+                      <td style={styles.td}>{renderSaleReceiptFile(latestSaleReceipt)}</td>
                     </tr>
                   )
                 })
