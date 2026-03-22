@@ -185,6 +185,87 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+function stripCustomsMemoDetail(raw: string | null | undefined) {
+  const text = (raw ?? '').trim()
+  if (!text) return ''
+  if (!text.startsWith('[관부과세 상세]')) return text
+
+  const parts = text.split('\n\n')
+  if (parts.length <= 1) return ''
+  return parts.slice(1).join('\n\n').trim()
+}
+
+function buildCustomsMemo(baseMemo: string, shipping: string, duty: string, vat: string, customsFee: string) {
+  const detail = [
+    '[관부과세 상세]',
+    `배송비:${n(shipping)}`,
+    `관세:${n(duty)}`,
+    `부가세:${n(vat)}`,
+    `통관수수료:${n(customsFee)}`,
+  ].join('\n')
+
+  const cleanedBase = stripCustomsMemoDetail(baseMemo)
+  return cleanedBase ? `${detail}\n\n${cleanedBase}` : detail
+}
+
+function parseCustomsMemo(memo: string | null | undefined) {
+  const raw = memo ?? ''
+
+  const getNum = (label: string) => {
+    const m = raw.match(new RegExp(`${label}:\\s*([0-9.,]+)`))
+    if (!m) return ''
+    return String(n(String(m[1]).replace(/,/g, '')))
+  }
+
+  return {
+    shipping: getNum('배송비'),
+    duty: getNum('관세'),
+    vat: getNum('부가세'),
+    customsFee: getNum('통관수수료'),
+  }
+}
+
+function customsTotal(shipping: string, duty: string, vat: string, customsFee: string) {
+  return n(shipping) + n(duty) + n(vat) + n(customsFee)
+}
+
+function distributeForeignTotals(values: number[], targetTotal: number) {
+  if (values.length === 0) return []
+
+  const currentSum = values.reduce((a, b) => a + b, 0)
+  const diff = targetTotal - currentSum
+
+  if (Math.abs(diff) < 0.0000001) return values
+
+  const roundedBase = values.map((v) => Math.round(v * 10000) / 10000)
+  const baseSum = roundedBase.reduce((a, b) => a + b, 0)
+
+  if (baseSum <= 0) {
+    const even = Math.floor((targetTotal * 10000) / values.length) / 10000
+    const arr = values.map(() => even)
+    const sum = arr.reduce((a, b) => a + b, 0)
+    const remain = Math.round((targetTotal - sum) * 10000) / 10000
+    if (arr.length > 0) arr[0] = Math.round((arr[0] + remain) * 10000) / 10000
+    return arr
+  }
+
+  const allocated = roundedBase.map((v) => {
+    const share = (v / baseSum) * diff
+    return Math.round((v + share) * 10000) / 10000
+  })
+
+  const allocSum = allocated.reduce((a, b) => a + b, 0)
+  const remain = Math.round((targetTotal - allocSum) * 10000) / 10000
+
+  let maxIdx = 0
+  for (let i = 1; i < roundedBase.length; i++) {
+    if (roundedBase[i] > roundedBase[maxIdx]) maxIdx = i
+  }
+
+  allocated[maxIdx] = Math.round((allocated[maxIdx] + remain) * 10000) / 10000
+  return allocated
+}
+
 function ItemSelectionManager({
   title,
   selectedItems,
@@ -485,6 +566,16 @@ export default function DocumentsPage() {
   const [costReceiptFile, setCostReceiptFile] = useState<File | null>(null)
   const [costImportDocFile, setCostImportDocFile] = useState<File | null>(null)
 
+  const [cShippingAmount, setCShippingAmount] = useState('')
+  const [cDutyAmount, setCDutyAmount] = useState('')
+  const [cVatAmount, setCVatAmount] = useState('')
+  const [cCustomsFeeAmount, setCCustomsFeeAmount] = useState('')
+
+  const [ecShippingAmount, setEcShippingAmount] = useState('')
+  const [ecDutyAmount, setEcDutyAmount] = useState('')
+  const [ecVatAmount, setEcVatAmount] = useState('')
+  const [ecCustomsFeeAmount, setEcCustomsFeeAmount] = useState('')
+
   const purchaseMap = useMemo(() => {
     const map = new Map<string, PurchaseRow>()
     for (const p of purchases) map.set(p.id, p)
@@ -658,27 +749,37 @@ export default function DocumentsPage() {
   }, [purchases, itemsByPurchase, hasBalanceByItem])
 
   const supplierVendorOptions = useMemo(() => {
-    return vendors.filter((v) => !!v.is_product_supplier)
+    return vendors
+      .filter((v) => !!v.is_product_supplier && !!v.name?.trim())
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ko-KR'))
   }, [vendors])
 
   const costVendorOptions = useMemo(() => {
+    let filtered = vendors
+
     if (cType === '배송비' || cType === '관부과세') {
-      return vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in)
+      filtered = vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in)
+    } else if (cType === '잔금') {
+      filtered = vendors.filter((v) => !!v.is_product_supplier)
     }
-    if (cType === '잔금') {
-      return vendors.filter((v) => !!v.is_product_supplier)
-    }
-    return vendors
+
+    return filtered
+      .filter((v) => !!v.name?.trim())
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ko-KR'))
   }, [vendors, cType])
 
   const editCostVendorOptions = useMemo(() => {
+    let filtered = vendors
+
     if (ecType === '배송비' || ecType === '관부과세') {
-      return vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in)
+      filtered = vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in)
+    } else if (ecType === '잔금') {
+      filtered = vendors.filter((v) => !!v.is_product_supplier)
     }
-    if (ecType === '잔금') {
-      return vendors.filter((v) => !!v.is_product_supplier)
-    }
-    return vendors
+
+    return filtered
+      .filter((v) => !!v.name?.trim())
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ko-KR'))
   }, [vendors, ecType])
 
   function getPublicUrl(path: string | null | undefined) {
@@ -1013,6 +1114,9 @@ export default function DocumentsPage() {
       return
     }
 
+    const enteredForeignTotals = cleaned.map((d) => Math.max(0, n(d.foreign_total)))
+    const adjustedForeignTotals = distributeForeignTotals(enteredForeignTotals, totalForeign)
+
     setLoading(true)
     try {
       let purchaseId = editingPurchaseId
@@ -1066,9 +1170,10 @@ export default function DocumentsPage() {
         if (delRes.error) throw delRes.error
       }
 
-      for (const d of cleaned) {
+      for (let idx = 0; idx < cleaned.length; idx++) {
+        const d = cleaned[idx]
         const q = Math.max(1, n(d.qty))
-        const ft = Math.max(0, n(d.foreign_total))
+        const ft = Math.max(0, adjustedForeignTotals[idx] ?? 0)
         const foreignUnit = q > 0 ? ft / q : 0
         const lineKRW = ft * fx
         const unitKRW = q > 0 ? lineKRW / q : 0
@@ -1116,7 +1221,11 @@ export default function DocumentsPage() {
         })
       }
 
-      setMsg(buyMode === 'edit' ? '매입 수정 완료' : `매입 저장 완료 (환율 자동 계산: ${fx.toFixed(4)})`)
+      setMsg(
+        buyMode === 'edit'
+          ? '매입 수정 완료'
+          : `매입 저장 완료 (차액 자동배분 반영 / 환율 ${fx.toFixed(4)})`
+      )
       setBuyModalOpen(false)
       resetBuyForm()
       await refreshAll()
@@ -1173,13 +1282,12 @@ export default function DocumentsPage() {
   function openCostEditModal(cost: PurchaseCostRow) {
     setEditingCost(cost)
     setEcType(cost.cost_type ?? '배송비')
-    setEcAmount(String(cost.amount ?? ''))
     setEcCurrency(normalizeCurrencySelectValue(cost.currency || 'KRW'))
     setEcCurrencyCustom(
       normalizeCurrencySelectValue(cost.currency) === '직접입력' ? cost.currency ?? '' : ''
     )
     setEcFxRate(String(cost.fx_rate ?? 1))
-    setEcMemo(cost.memo ?? '')
+    setEcMemo(stripCustomsMemoDetail(cost.memo))
     setEcVendorName(cost.vendor_name ?? '')
     setEcDate(cost.cost_date ?? '')
     setEcSelectedItemIds(
@@ -1189,6 +1297,22 @@ export default function DocumentsPage() {
     setEcExistingImportDocPath(getCostImportDocPath(cost.id))
     setEcReceiptFile(null)
     setEcImportDocFile(null)
+
+    if ((cost.cost_type ?? '') === '관부과세') {
+      const parsed = parseCustomsMemo(cost.memo)
+      setEcShippingAmount(parsed.shipping)
+      setEcDutyAmount(parsed.duty)
+      setEcVatAmount(parsed.vat)
+      setEcCustomsFeeAmount(parsed.customsFee)
+      setEcAmount(String(cost.amount ?? ''))
+    } else {
+      setEcShippingAmount('')
+      setEcDutyAmount('')
+      setEcVatAmount('')
+      setEcCustomsFeeAmount('')
+      setEcAmount(String(cost.amount ?? ''))
+    }
+
     setCostEditDirty(false)
     setCostEditModalOpen(true)
   }
@@ -1197,9 +1321,20 @@ export default function DocumentsPage() {
     if (!editingCost) return
 
     const cur = currencyValue(ecCurrency, ecCurrencyCustom)
-    const amount = n(ecAmount)
+    const rawAmount =
+      ecType === '관부과세'
+        ? customsTotal(ecShippingAmount, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
+        : n(ecAmount)
+
+    const amount = rawAmount
     const fx = n(ecFxRate)
     const costKRW = toKRW(amount, cur, fx)
+
+    const finalMemo =
+      ecType === '관부과세'
+        ? buildCustomsMemo(ecMemo, ecShippingAmount, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
+        : (ecMemo || null)
+
     const chosen = items.filter((it) => ecSelectedItemIds.includes(it.id))
     const baseSum = chosen.reduce((acc, it) => acc + n(it.line_total), 0)
 
@@ -1244,7 +1379,7 @@ export default function DocumentsPage() {
           amount,
           currency: cur,
           fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
-          memo: ecMemo || null,
+          memo: finalMemo,
           vendor_name: ecVendorName || null,
           cost_date: ecDate,
         })
@@ -1376,9 +1511,19 @@ export default function DocumentsPage() {
     setMsg(null)
 
     const cur = currencyValue(cCurrency, cCurrencyCustom)
-    const amount = n(cAmount)
+    const rawAmount =
+      cType === '관부과세'
+        ? customsTotal(cShippingAmount, cDutyAmount, cVatAmount, cCustomsFeeAmount)
+        : n(cAmount)
+
+    const amount = rawAmount
     const fx = n(cFxRate)
     const costKRW = toKRW(amount, cur, fx)
+
+    const finalMemo =
+      cType === '관부과세'
+        ? buildCustomsMemo(cMemo, cShippingAmount, cDutyAmount, cVatAmount, cCustomsFeeAmount)
+        : (cMemo || null)
 
     if (!cType.trim()) {
       setErr('추가비용 종류를 선택해줘.')
@@ -1429,7 +1574,7 @@ export default function DocumentsPage() {
           amount,
           currency: cur,
           fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
-          memo: cMemo || null,
+          memo: finalMemo,
           vendor_name: cVendorName || null,
           cost_date: cDate,
         })
@@ -1491,6 +1636,10 @@ export default function DocumentsPage() {
       setCMemo('')
       setCVendorName('')
       setCDate('')
+      setCShippingAmount('')
+      setCDutyAmount('')
+      setCVatAmount('')
+      setCCustomsFeeAmount('')
       setCostReceiptFile(null)
       setCostImportDocFile(null)
       await refreshAll()
@@ -2079,7 +2228,7 @@ export default function DocumentsPage() {
                               </>
                             ) : null}
                           </div>
-                          {cost.memo ? <div style={{ marginTop: 6 }}>{cost.memo}</div> : null}
+                          {cost.memo ? <div style={{ marginTop: 6, whiteSpace: 'pre-line' }}>{cost.memo}</div> : null}
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 'fit-content', flexShrink: 0 }}>
@@ -2124,18 +2273,18 @@ export default function DocumentsPage() {
           <div style={styles.grid2}>
             <div style={styles.field}>
               <div style={styles.label}>거래처(선택)</div>
-              <input
-                list="supplier-vendor-list"
-                style={styles.input}
+              <select
+                style={styles.select}
                 value={fSupplier}
                 onChange={(e) => setFSupplier(e.target.value)}
-                placeholder="거래처관리에서 등록한 거래처 선택 또는 직접 입력"
-              />
-              <datalist id="supplier-vendor-list">
+              >
+                <option value="">선택 안함</option>
                 {supplierVendorOptions.map((v) => (
-                  <option key={v.id} value={v.name ?? ''} />
+                  <option key={v.id} value={v.name ?? ''}>
+                    {v.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </div>
 
             <div style={styles.field}>
@@ -2410,10 +2559,43 @@ export default function DocumentsPage() {
               />
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>금액</div>
-              <input style={styles.input} value={cAmount} onChange={(e) => setCAmount(e.target.value)} placeholder="예: 20000" />
-            </div>
+            {cType === '관부과세' ? (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>배송비</div>
+                  <input style={styles.input} value={cShippingAmount} onChange={(e) => setCShippingAmount(e.target.value)} placeholder="예: 12000" />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>관세</div>
+                  <input style={styles.input} value={cDutyAmount} onChange={(e) => setCDutyAmount(e.target.value)} placeholder="예: 3000" />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>부가세</div>
+                  <input style={styles.input} value={cVatAmount} onChange={(e) => setCVatAmount(e.target.value)} placeholder="예: 1500" />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>통관수수료</div>
+                  <input style={styles.input} value={cCustomsFeeAmount} onChange={(e) => setCCustomsFeeAmount(e.target.value)} placeholder="예: 5500" />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>합계 금액(자동)</div>
+                  <input
+                    style={{ ...styles.input, background: '#f3f4f6' }}
+                    readOnly
+                    value={String(customsTotal(cShippingAmount, cDutyAmount, cVatAmount, cCustomsFeeAmount))}
+                  />
+                </div>
+              </>
+            ) : (
+              <div style={styles.field}>
+                <div style={styles.label}>금액</div>
+                <input style={styles.input} value={cAmount} onChange={(e) => setCAmount(e.target.value)} placeholder="예: 20000" />
+              </div>
+            )}
 
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
@@ -2436,18 +2618,18 @@ export default function DocumentsPage() {
 
             <div style={styles.field}>
               <div style={styles.label}>거래처</div>
-              <input
-                list="cost-vendor-list"
-                style={styles.input}
+              <select
+                style={styles.select}
                 value={cVendorName}
                 onChange={(e) => setCVendorName(e.target.value)}
-                placeholder="거래처관리에서 등록한 거래처 선택 또는 직접 입력"
-              />
-              <datalist id="cost-vendor-list">
+              >
+                <option value="">선택 안함</option>
                 {costVendorOptions.map((v) => (
-                  <option key={v.id} value={v.name ?? ''} />
+                  <option key={v.id} value={v.name ?? ''}>
+                    {v.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </div>
 
             <div style={styles.field}>
@@ -2476,7 +2658,7 @@ export default function DocumentsPage() {
 
             <div style={{ gridColumn: '1 / -1' }}>
               <div style={styles.label}>메모(선택)</div>
-              <input style={styles.input} value={cMemo} onChange={(e) => setCMemo(e.target.value)} placeholder="예: DHL / 관세 고지서" />
+              <input style={styles.input} value={cMemo} onChange={(e) => setCMemo(e.target.value)} placeholder={cType === '관부과세' ? '예: 고지서 메모 / 특이사항' : '예: DHL / 일반 메모'} />
             </div>
           </div>
 
@@ -2533,10 +2715,43 @@ export default function DocumentsPage() {
               />
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>금액</div>
-              <input style={styles.input} value={ecAmount} onChange={(e) => setEcAmount(e.target.value)} />
-            </div>
+            {ecType === '관부과세' ? (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>배송비</div>
+                  <input style={styles.input} value={ecShippingAmount} onChange={(e) => setEcShippingAmount(e.target.value)} />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>관세</div>
+                  <input style={styles.input} value={ecDutyAmount} onChange={(e) => setEcDutyAmount(e.target.value)} />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>부가세</div>
+                  <input style={styles.input} value={ecVatAmount} onChange={(e) => setEcVatAmount(e.target.value)} />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>통관수수료</div>
+                  <input style={styles.input} value={ecCustomsFeeAmount} onChange={(e) => setEcCustomsFeeAmount(e.target.value)} />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>합계 금액(자동)</div>
+                  <input
+                    style={{ ...styles.input, background: '#f3f4f6' }}
+                    readOnly
+                    value={String(customsTotal(ecShippingAmount, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount))}
+                  />
+                </div>
+              </>
+            ) : (
+              <div style={styles.field}>
+                <div style={styles.label}>금액</div>
+                <input style={styles.input} value={ecAmount} onChange={(e) => setEcAmount(e.target.value)} />
+              </div>
+            )}
 
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
@@ -2559,17 +2774,18 @@ export default function DocumentsPage() {
 
             <div style={styles.field}>
               <div style={styles.label}>거래처</div>
-              <input
-                list="cost-vendor-list-edit"
-                style={styles.input}
+              <select
+                style={styles.select}
                 value={ecVendorName}
                 onChange={(e) => setEcVendorName(e.target.value)}
-              />
-              <datalist id="cost-vendor-list-edit">
+              >
+                <option value="">선택 안함</option>
                 {editCostVendorOptions.map((v) => (
-                  <option key={v.id} value={v.name ?? ''} />
+                  <option key={v.id} value={v.name ?? ''}>
+                    {v.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </div>
 
             <div style={styles.field}>
@@ -2674,7 +2890,7 @@ export default function DocumentsPage() {
                       <td style={styles.td}><b>{fmtKRW(a.amount_krw)}</b></td>
                       <td style={styles.td}>{a.related_item_names.length > 0 ? a.related_item_names.join(', ') : '-'}</td>
                       <td style={styles.td}>{a.vendor_name ?? '-'}</td>
-                      <td style={styles.td}>{a.memo ?? ''}</td>
+                      <td style={{ ...styles.td, whiteSpace: 'pre-line' }}>{a.memo ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>

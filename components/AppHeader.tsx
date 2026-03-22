@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import React from 'react'
+import { supabase } from '@/lib/supabase'
 
 const MENUS = [
   { href: '/', label: '대시보드' },
@@ -15,6 +16,12 @@ const MENUS = [
 
 export default function AppHeader() {
   const pathname = usePathname()
+  const router = useRouter()
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    router.replace('/login')
+  }
 
   return (
     <header
@@ -39,6 +46,7 @@ export default function AppHeader() {
           flexWrap: 'wrap',
         }}
       >
+        {/* 로고 */}
         <Link
           href="/"
           style={{
@@ -56,42 +64,72 @@ export default function AppHeader() {
           <span>카키쿠케코 상점</span>
         </Link>
 
-        <nav
+        {/* 메뉴 + 로그아웃 묶음 */}
+        <div
           style={{
             display: 'flex',
-            gap: 8,
+            alignItems: 'center',
+            gap: 12,
             flexWrap: 'wrap',
             justifyContent: 'flex-end',
           }}
         >
-          {MENUS.map((menu) => {
-            const active =
-              pathname === menu.href ||
-              (menu.href !== '/' && pathname.startsWith(menu.href))
+          {/* 메뉴 */}
+          <nav
+            style={{
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            {MENUS.map((menu) => {
+              const active =
+                pathname === menu.href ||
+                (menu.href !== '/' && pathname.startsWith(menu.href))
 
-            return (
-              <Link
-                key={menu.href}
-                href={menu.href}
-                style={{
-                  textDecoration: 'none',
-                  padding: '10px 14px',
-                  borderRadius: 14,
-                  border: active ? '1px solid #7c3aed' : '1px solid #d5d7e2',
-                  background: active ? '#7c3aed' : '#fff',
-                  color: active ? '#fff' : '#111827',
-                  fontSize: 14,
-                  fontWeight: 800,
-                  whiteSpace: 'nowrap',
-                  lineHeight: 1.2,
-                  boxShadow: active ? '0 8px 20px rgba(124,58,237,0.18)' : 'none',
-                }}
-              >
-                {menu.label}
-              </Link>
-            )
-          })}
-        </nav>
+              return (
+                <Link
+                  key={menu.href}
+                  href={menu.href}
+                  style={{
+                    textDecoration: 'none',
+                    padding: '10px 14px',
+                    borderRadius: 14,
+                    border: active ? '1px solid #7c3aed' : '1px solid #d5d7e2',
+                    background: active ? '#7c3aed' : '#fff',
+                    color: active ? '#fff' : '#111827',
+                    fontSize: 14,
+                    fontWeight: 800,
+                    whiteSpace: 'nowrap',
+                    lineHeight: 1.2,
+                    boxShadow: active
+                      ? '0 8px 20px rgba(124,58,237,0.18)'
+                      : 'none',
+                  }}
+                >
+                  {menu.label}
+                </Link>
+              )
+            })}
+          </nav>
+
+          {/* 로그아웃 버튼 */}
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: '10px 14px',
+              borderRadius: 14,
+              border: '1px solid #ef4444',
+              background: '#fff',
+              color: '#ef4444',
+              fontSize: 14,
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            로그아웃
+          </button>
+        </div>
       </div>
     </header>
   )

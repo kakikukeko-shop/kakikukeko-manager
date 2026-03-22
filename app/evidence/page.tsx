@@ -580,8 +580,8 @@ export default function EvidencePage() {
                 <th style={{ ...styles.th, width: 140 }}>거래처</th>
                 <th style={{ ...styles.th, width: 110 }}>매입일</th>
                 <th style={{ ...styles.th, width: 110 }}>매입영수증</th>
-                <th style={{ ...styles.th, width: 90 }}>배송비</th>
-                <th style={{ ...styles.th, width: 90 }}>관부과세</th>
+                <th style={{ ...styles.th, width: 100 }}>배송비</th>
+                <th style={{ ...styles.th, width: 100 }}>관부과세</th>
                 <th style={{ ...styles.th, width: 80 }}>잔금</th>
                 <th style={{ ...styles.th, width: 110 }}>수입신고필증</th>
                 <th style={{ ...styles.th, width: 110 }}>매출영수증</th>
@@ -600,7 +600,7 @@ export default function EvidencePage() {
                   const purchase = purchaseMap.get(it.purchase_id)
                   const purchaseReceipt = getPurchaseFile(it.purchase_id, '매입영수증')
                   const shippingReceipt = getCostFileForItem(it.id, '배송비', '추가비용영수증')
-                  const taxReceipt = getCostFileForItem(it.id, '관부과세', '추가비용영수증')
+                  const customsReceipt = getCostFileForItem(it.id, '관부과세', '추가비용영수증')
                   const balanceReceipt = getCostFileForItem(it.id, '잔금', '추가비용영수증')
                   const customsDoc = getAnyCustomsDocForItem(it.id)
                   const latestSaleReceipt = getLatestSaleReceiptForItem(it.id)
@@ -640,7 +640,7 @@ export default function EvidencePage() {
                       <td style={styles.td}>{fmtDate(purchase?.purchase_date)}</td>
                       <td style={styles.td}>{renderFile(purchaseReceipt)}</td>
                       <td style={styles.td}>{renderFile(shippingReceipt)}</td>
-                      <td style={styles.td}>{renderFile(taxReceipt)}</td>
+                      <td style={styles.td}>{renderFile(customsReceipt)}</td>
                       <td style={styles.td}>{renderFile(balanceReceipt)}</td>
                       <td style={styles.td}>{renderFile(customsDoc)}</td>
                       <td style={styles.td}>{renderSaleReceiptFile(latestSaleReceipt)}</td>

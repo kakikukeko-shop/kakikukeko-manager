@@ -1,6 +1,7 @@
 import './globals.css'
 import type { Metadata } from 'next'
 import AppHeader from '../components/AppHeader'
+import AuthGuard from '../components/AuthGuard'
 
 export const metadata: Metadata = {
   title: '카키쿠케코 관리자',
@@ -23,21 +24,20 @@ export default function RootLayout({
             "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif",
         }}
       >
-        <AppHeader />
-
-        <main
-          style={{
-            width: '100%',
-            maxWidth: '100%',
-            margin: 0,
-            padding: 16,
-            boxSizing: 'border-box',
-            fontFamily:
-              "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif",
-          }}
-        >
-          {children}
-        </main>
+        <AuthGuard>
+          <AppHeader />
+          <main
+            style={{
+              width: '100%',
+              maxWidth: '100%',
+              margin: 0,
+              padding: 16,
+              boxSizing: 'border-box',
+            }}
+          >
+            {children}
+          </main>
+        </AuthGuard>
       </body>
     </html>
   )
