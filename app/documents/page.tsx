@@ -185,6 +185,226 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+function ItemSelectionManager({
+  title,
+  selectedItems,
+  allItems,
+  purchaseMap,
+  selectedIds,
+  onRemove,
+  onAdd,
+}: {
+  title: string
+  selectedItems: PurchaseItemRow[]
+  allItems: PurchaseItemRow[]
+  purchaseMap: Map<string, PurchaseRow>
+  selectedIds: string[]
+  onRemove: (id: string) => void
+  onAdd: (id: string) => void
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const addableItems = useMemo(() => {
+    const selectedSet = new Set(selectedIds)
+    const q = search.trim().toLowerCase()
+
+    return allItems.filter((it) => {
+      if (selectedSet.has(it.id)) return false
+      if (!q) return true
+
+      const name = (it.item_name ?? '').toLowerCase()
+      const memo = (it.memo ?? '').toLowerCase()
+      const supplier = (purchaseMap.get(it.purchase_id)?.supplier ?? '').toLowerCase()
+
+      return name.includes(q) || memo.includes(q) || supplier.includes(q)
+    })
+  }, [allItems, purchaseMap, search, selectedIds])
+
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 900 }}>{title}({selectedItems.length}개)</div>
+        <button
+          type="button"
+          onClick={() => setPickerOpen((prev) => !prev)}
+          style={{
+            border: '1px solid #ddd',
+            background: '#fff',
+            color: '#111',
+            padding: '8px 12px',
+            borderRadius: 10,
+            cursor: 'pointer',
+            fontWeight: 800,
+            fontSize: 12,
+          }}
+        >
+          {pickerOpen ? '추가창 닫기' : '+ 상품 추가'}
+        </button>
+      </div>
+
+      {selectedItems.length === 0 ? (
+        <div
+          style={{
+            border: '1px dashed #ddd',
+            borderRadius: 14,
+            padding: 14,
+            background: '#fafafa',
+            fontSize: 12,
+            color: '#6b7280',
+          }}
+        >
+          선택된 상품 없음
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gap: 8,
+            maxHeight: 220,
+            overflowY: 'auto',
+            border: '1px solid #e5e7eb',
+            borderRadius: 14,
+            padding: 10,
+            background: '#fafafa',
+          }}
+        >
+          {selectedItems.map((it) => (
+            <div
+              key={it.id}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                gap: 8,
+                alignItems: 'start',
+                border: '1px solid #ececf3',
+                borderRadius: 12,
+                background: '#fff',
+                padding: '10px 12px',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 900 }}>{it.item_name ?? '(이름 없음)'}</div>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                  매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'} / 수량 {fmtNum(n(it.qty))} / 상품 원화합계 {fmtKRW(n(it.line_total))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemove(it.id)}
+                style={{
+                  border: '1px solid #fecaca',
+                  background: '#fff',
+                  color: '#dc2626',
+                  padding: '6px 8px',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontWeight: 800,
+                  fontSize: 12,
+                  flexShrink: 0,
+                  minWidth: 0,
+                  width: 'fit-content',
+                }}
+              >
+                제거
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pickerOpen && (
+        <div
+          style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: 14,
+            background: '#fff',
+            padding: 12,
+            display: 'grid',
+            gap: 10,
+          }}
+        >
+          <input
+            style={{
+              border: '1px solid #d9d9e6',
+              borderRadius: 12,
+              padding: '10px 12px',
+              outline: 'none',
+              fontSize: 14,
+              background: '#fff',
+              width: '100%',
+              color: '#111',
+              boxSizing: 'border-box',
+            }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="상품명 / 메모 / 거래처 검색"
+          />
+
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              maxHeight: 260,
+              overflowY: 'auto',
+              border: '1px solid #f0f0f5',
+              borderRadius: 12,
+              padding: 8,
+              background: '#fafafa',
+            }}
+          >
+            {addableItems.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#6b7280', padding: 8 }}>추가할 수 있는 상품이 없어.</div>
+            ) : (
+              addableItems.map((it) => (
+                <div
+                  key={it.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr auto',
+                    gap: 8,
+                    alignItems: 'start',
+                    border: '1px solid #ececf3',
+                    borderRadius: 12,
+                    background: '#fff',
+                    padding: '10px 12px',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 900 }}>{it.item_name ?? '(이름 없음)'}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>
+                      매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'} / 수량 {fmtNum(n(it.qty))} / 상품 원화합계 {fmtKRW(n(it.line_total))}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onAdd(it.id)}
+                    style={{
+                      border: '1px solid #6d28d9',
+                      background: '#6d28d9',
+                      color: '#fff',
+                      padding: '6px 8px',
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      fontWeight: 800,
+                      fontSize: 12,
+                      flexShrink: 0,
+                      minWidth: 0,
+                      width: 'fit-content',
+                    }}
+                  >
+                    추가
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function DocumentsPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [items, setItems] = useState<PurchaseItemRow[]>([])
@@ -360,6 +580,11 @@ export default function DocumentsPage() {
     return items.filter((it) => set.has(it.id))
   }, [items, selectedItemIds])
 
+  const editSelectedItems = useMemo(() => {
+    const set = new Set(ecSelectedItemIds)
+    return items.filter((it) => set.has(it.id))
+  }, [items, ecSelectedItemIds])
+
   const selectedItemsLineTotalSum = useMemo(() => {
     return selectedItems.reduce((acc, it) => acc + n(it.line_total), 0)
   }, [selectedItems])
@@ -501,6 +726,7 @@ export default function DocumentsPage() {
     oldPath?: string | null
   }) {
     const { purchase_id = null, item_id = null, cost_id = null, file_type, file, oldPath = null } = params
+
     if (oldPath) {
       const oldRows = files.filter(
         (f) =>
@@ -622,12 +848,25 @@ export default function DocumentsPage() {
     setSelectedItemIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
+  function addSelectedItem(id: string) {
+    setSelectedItemIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }
+
+  function removeSelectedItem(id: string) {
+    setSelectedItemIds((prev) => prev.filter((x) => x !== id))
+  }
+
   function clearSelection() {
     setSelectedItemIds([])
   }
 
-  function toggleEditCostSelectedItem(id: string) {
-    setEcSelectedItemIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  function addEditCostSelectedItem(id: string) {
+    setEcSelectedItemIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+    setCostEditDirty(true)
+  }
+
+  function removeEditCostSelectedItem(id: string) {
+    setEcSelectedItemIds((prev) => prev.filter((x) => x !== id))
     setCostEditDirty(true)
   }
 
@@ -671,15 +910,12 @@ export default function DocumentsPage() {
 
     setBuyMode('edit')
     setEditingPurchaseId(p.id)
-
     setFSupplier(p.supplier ?? '')
     setFPurchaseDate(p.purchase_date ?? '')
     setFPaymentMet(p.payment_met ?? '카드')
     setFCardName(p.card_name ?? '')
     setFCurrency(normalizeCurrencySelectValue(p.currency))
-    setFCurrencyCustom(
-      normalizeCurrencySelectValue(p.currency) === '직접입력' ? p.currency ?? '' : ''
-    )
+    setFCurrencyCustom(normalizeCurrencySelectValue(p.currency) === '직접입력' ? p.currency ?? '' : '')
     setFTotalForeign(String(p.total_foreign ?? ''))
     setFTotalKRW(String(p.total_amount ?? ''))
     setFMemo(p.memo ?? '')
@@ -796,7 +1032,6 @@ export default function DocumentsPage() {
             memo: fMemo || null,
           })
           .eq('id', editingPurchaseId)
-
         if (updP.error) throw updP.error
       } else {
         const insP = await supabase
@@ -814,7 +1049,6 @@ export default function DocumentsPage() {
           })
           .select('id')
           .single()
-
         if (insP.error) throw insP.error
         purchaseId = insP.data.id as string
         setSelectedPurchaseId(purchaseId)
@@ -831,8 +1065,6 @@ export default function DocumentsPage() {
         const delRes = await supabase.from('purchase_items').delete().in('id', deleteIds)
         if (delRes.error) throw delRes.error
       }
-
-      const savedItemIds: string[] = []
 
       for (const d of cleaned) {
         const q = Math.max(1, n(d.qty))
@@ -854,7 +1086,6 @@ export default function DocumentsPage() {
         }
 
         let savedId = d.id
-
         if (d.id) {
           const updI = await supabase.from('purchase_items').update(payload).eq('id', d.id)
           if (updI.error) throw updI.error
@@ -865,7 +1096,6 @@ export default function DocumentsPage() {
         }
 
         if (!savedId) throw new Error('상품 저장 ID를 찾을 수 없어.')
-        savedItemIds.push(savedId)
 
         if (d.photoFile) {
           await upsertPurchaseFile({
@@ -1019,7 +1249,6 @@ export default function DocumentsPage() {
           cost_date: ecDate,
         })
         .eq('id', editingCost.id)
-
       if (upd.error) throw upd.error
 
       const delAlloc = await supabase.from('cost_allocations').delete().eq('purchase_cost_id', editingCost.id)
@@ -1105,14 +1334,12 @@ export default function DocumentsPage() {
         .from('cost_allocations')
         .select('purchase_cost_id,purchase_item_id,allocated_amount')
         .in('purchase_cost_id', costIds)
-
       if (allCostAllocRes.error) throw allCostAllocRes.error
 
       const costRes = await supabase
         .from('purchase_costs')
         .select('id,created_at,cost_type,amount,currency,fx_rate,memo,vendor_name,cost_date')
         .in('id', costIds)
-
       if (costRes.error) throw costRes.error
 
       const allAlloc = (allCostAllocRes.data ?? []) as CostAllocationRow[]
@@ -1184,7 +1411,6 @@ export default function DocumentsPage() {
 
     const chosen = selectedItems
     const baseSum = chosen.reduce((acc, it) => acc + n(it.line_total), 0)
-
     if (baseSum <= 0) {
       setErr('선택된 상품의 원화합계가 0이야.')
       return
@@ -1327,7 +1553,7 @@ export default function DocumentsPage() {
     } as React.CSSProperties,
     layout: {
       display: 'grid',
-      gridTemplateColumns: '700px minmax(0, 1fr)',
+      gridTemplateColumns: '520px minmax(0, 1fr)',
       gap: 16,
       alignItems: 'start',
     } as React.CSSProperties,
@@ -1452,18 +1678,6 @@ export default function DocumentsPage() {
       gap: 8,
     } as React.CSSProperties,
     fileInfo: { fontSize: 12, color: '#374151', wordBreak: 'break-all' } as React.CSSProperties,
-    chipsWrap: { display: 'flex', flexWrap: 'wrap', gap: 8 } as React.CSSProperties,
-    chip: (on: boolean) =>
-      ({
-        padding: '8px 10px',
-        borderRadius: 999,
-        border: on ? '1px solid #7c3aed' : '1px solid #ddd',
-        background: on ? '#f3e8ff' : '#fff',
-        color: on ? '#5b21b6' : '#374151',
-        fontWeight: 800,
-        cursor: 'pointer',
-        fontSize: 12,
-      }) as React.CSSProperties,
   }
 
   return (
@@ -1487,8 +1701,7 @@ export default function DocumentsPage() {
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={styles.small}>
-            선택된 상품: <b>{selectedItemIds.length}개</b> / 선택 합계(상품 원화합계):{' '}
-            <b>{fmtKRW(selectedItemsLineTotalSum)}</b>
+            선택된 상품: <b>{selectedItemIds.length}개</b> / 선택 합계(상품 원화합계): <b>{fmtKRW(selectedItemsLineTotalSum)}</b>
           </span>
           <button style={styles.btn('ghost')} onClick={clearSelection}>
             선택 해제
@@ -1549,26 +1762,20 @@ export default function DocumentsPage() {
                 <div key={p.id} style={styles.purchaseCard(active)} onClick={() => setSelectedPurchaseId(p.id)}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start' }}>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 6 }}>
+                      <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 6 }}>
                         {p.supplier?.trim() ? p.supplier : '(거래처 없음)'}{' '}
                         {cnt?.hasPreorder ? <span style={styles.badge('orange')}>예약 포함</span> : null}
                       </div>
 
-                      <div style={{ ...styles.small, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                        <span>결제일: <b>{fmtDate(p.purchase_date)}</b></span>
-                        <span>결제수단: <b>{p.payment_met ?? '미입력'}</b></span>
-                        <span>카드: <b>{p.card_name ?? '미입력'}</b></span>
+                      <div style={{ ...styles.small, display: 'grid', gap: 2 }}>
+                        <div>결제일: <b>{fmtDate(p.purchase_date)}</b></div>
+                        <div>결제수단: <b>{p.payment_met ?? '미입력'}</b> / 카드: <b>{p.card_name ?? '미입력'}</b></div>
+                        <div>상품 종류 수: <b>{cnt?.itemKinds ?? 0}개</b> / 총원화: <b>{fmtKRW(n(p.total_amount))}</b></div>
+                        <div>등록: {fmtDateTime(p.created_at)}</div>
                       </div>
-
-                      <div style={{ ...styles.small, display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
-                        <span>상품 종류 수: <b>{cnt?.itemKinds ?? 0}개</b></span>
-                        <span>총원화: <b>{fmtKRW(n(p.total_amount))}</b></span>
-                      </div>
-
-                      <div style={{ ...styles.small, marginTop: 4 }}>등록: {fmtDateTime(p.created_at)}</div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
                       <button
                         style={styles.smallBtn}
                         onClick={(e) => {
@@ -1601,7 +1808,7 @@ export default function DocumentsPage() {
               <div style={styles.h2}>상품목록</div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input
-                  style={{ ...styles.input, width: 260 }}
+                  style={{ ...styles.input, width: 280 }}
                   value={itemSearch}
                   onChange={(e) => setItemSearch(e.target.value)}
                   placeholder="전체 상품 검색 (상품명/메모/거래처)"
@@ -1746,77 +1953,154 @@ export default function DocumentsPage() {
             </div>
           </div>
 
-          <div style={styles.card}>
-            <div style={styles.h2}>{selectedPurchase ? '선택 매입 관련 추가비용' : '추가비용'}</div>
-
-            <div style={{ display: 'grid', gap: 10 }}>
-              {selectedPurchaseRelatedCosts.length === 0 && <div style={styles.small}>추가비용이 없어.</div>}
-
-              {selectedPurchaseRelatedCosts.map((cost) => {
-                const krw =
-                  normalizeCurrencyCode(cost.currency) === 'KRW'
-                    ? n(cost.amount)
-                    : n(cost.amount) * n(cost.fx_rate)
-
-                const allocItemCount = allocations.filter((a) => a.purchase_cost_id === cost.id).length
-                const receiptPath = getCostReceiptPath(cost.id)
-                const importDocPath = getCostImportDocPath(cost.id)
-
-                return (
-                  <div key={cost.id} style={{ ...styles.card, padding: 12, background: '#fcfcff' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start' }}>
-                      <div>
-                        <div style={{ fontWeight: 900, marginBottom: 6 }}>
-                          {cost.cost_type ?? '추가비용'}{' '}
-                          {allocItemCount > 0 ? <span style={styles.badge('purple')}>배분 {allocItemCount}건</span> : null}
-                        </div>
-                        <div style={styles.small}>
-                          날짜: <b>{fmtDate(cost.cost_date)}</b> / 금액: <b>{fmtNum(n(cost.amount))}</b> {currencyLabel(cost.currency)} / 환율:{' '}
-                          <b>{fmtNum(n(cost.fx_rate))}</b> / 환산: <b>{fmtKRW(krw)}</b>
-                        </div>
-                        {cost.vendor_name ? (
-                          <div style={styles.small}>
-                            거래처: <b>{cost.vendor_name}</b>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+              gap: 16,
+              alignItems: 'start',
+            }}
+          >
+            <div style={styles.card}>
+              <div style={styles.h2}>선택된상품</div>
+              {selectedItems.length === 0 ? (
+                <div style={styles.small}>선택된 상품이 없어.</div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    maxHeight: 360,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {selectedItems.map((it) => {
+                    const allocSum = allocationSumByItem.get(it.id) ?? 0
+                    return (
+                      <div
+                        key={it.id}
+                        style={{
+                          ...styles.card,
+                          padding: 12,
+                          background: '#fcfcff',
+                          width: '100%',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr auto',
+                            gap: 8,
+                            alignItems: 'start',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 900 }}>{it.item_name ?? '(이름 없음)'}</div>
+                            <div style={styles.small}>
+                              매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'}
+                            </div>
+                            <div style={styles.small}>
+                              수량 {fmtNum(n(it.qty))} / 상품 원화합계 {fmtKRW(n(it.line_total))} / 현재 배분 {fmtKRW(allocSum)}
+                            </div>
                           </div>
-                        ) : null}
-                        <div style={styles.small}>등록: {fmtDateTime(cost.created_at)}</div>
-                        <div style={{ ...styles.small, marginTop: 4 }}>
-                          영수증:{' '}
-                          {receiptPath ? (
-                            <a href={getPublicUrl(receiptPath)} target="_blank" rel="noreferrer">
-                              보기
-                            </a>
-                          ) : (
-                            '미업로드'
-                          )}
-                          {cost.cost_type === '관부과세' || cost.cost_type === '배송비' || cost.cost_type === '잔금' ? (
-                            <>
-                              {' '} / 수입신고필증:{' '}
-                              {importDocPath ? (
-                                <a href={getPublicUrl(importDocPath)} target="_blank" rel="noreferrer">
-                                  보기
-                                </a>
-                              ) : (
-                                '미업로드'
-                              )}
-                            </>
-                          ) : null}
+                          <button
+                            style={{
+                              ...styles.dangerSmallBtn,
+                              padding: '6px 8px',
+                              minWidth: 0,
+                              width: 'fit-content',
+                              flexShrink: 0,
+                            }}
+                            onClick={() => removeSelectedItem(it.id)}
+                          >
+                            제거
+                          </button>
                         </div>
-                        {cost.memo ? <div style={{ marginTop: 6 }}>{cost.memo}</div> : null}
                       </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <button style={styles.smallBtn} onClick={() => openCostEditModal(cost)}>
-                          수정
-                        </button>
-                        <button style={styles.dangerSmallBtn} onClick={() => deleteCost(cost.id)}>
-                          삭제
-                        </button>
+            <div style={styles.card}>
+              <div style={styles.h2}>{selectedPurchase ? '선택 매입 관련 추가비용' : '추가비용'}</div>
+
+              <div style={{ display: 'grid', gap: 10, maxHeight: 360, overflowY: 'auto' }}>
+                {selectedPurchaseRelatedCosts.length === 0 && <div style={styles.small}>추가비용이 없어.</div>}
+
+                {selectedPurchaseRelatedCosts.map((cost) => {
+                  const krw =
+                    normalizeCurrencyCode(cost.currency) === 'KRW'
+                      ? n(cost.amount)
+                      : n(cost.amount) * n(cost.fx_rate)
+
+                  const allocItemCount = allocations.filter((a) => a.purchase_cost_id === cost.id).length
+                  const receiptPath = getCostReceiptPath(cost.id)
+                  const importDocPath = getCostImportDocPath(cost.id)
+
+                  return (
+                    <div key={cost.id} style={{ ...styles.card, padding: 12, background: '#fcfcff' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                            {cost.cost_type ?? '추가비용'}{' '}
+                            {allocItemCount > 0 ? <span style={styles.badge('purple')}>배분 {allocItemCount}건</span> : null}
+                          </div>
+                          <div style={styles.small}>
+                            날짜: <b>{fmtDate(cost.cost_date)}</b> / 금액: <b>{fmtNum(n(cost.amount))}</b> {currencyLabel(cost.currency)} / 환율:{' '}
+                            <b>{fmtNum(n(cost.fx_rate))}</b> / 환산: <b>{fmtKRW(krw)}</b>
+                          </div>
+                          {cost.vendor_name ? (
+                            <div style={styles.small}>
+                              거래처: <b>{cost.vendor_name}</b>
+                            </div>
+                          ) : null}
+                          <div style={styles.small}>등록: {fmtDateTime(cost.created_at)}</div>
+                          <div style={{ ...styles.small, marginTop: 4 }}>
+                            영수증:{' '}
+                            {receiptPath ? (
+                              <a href={getPublicUrl(receiptPath)} target="_blank" rel="noreferrer">
+                                보기
+                              </a>
+                            ) : (
+                              '미업로드'
+                            )}
+                            {cost.cost_type === '관부과세' || cost.cost_type === '배송비' || cost.cost_type === '잔금' ? (
+                              <>
+                                {' '} / 수입신고필증:{' '}
+                                {importDocPath ? (
+                                  <a href={getPublicUrl(importDocPath)} target="_blank" rel="noreferrer">
+                                    보기
+                                  </a>
+                                ) : (
+                                  '미업로드'
+                                )}
+                              </>
+                            ) : null}
+                          </div>
+                          {cost.memo ? <div style={{ marginTop: 6 }}>{cost.memo}</div> : null}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 'fit-content', flexShrink: 0 }}>
+                          <button
+                            style={{ ...styles.smallBtn, padding: '6px 8px', minWidth: 0 }}
+                            onClick={() => openCostEditModal(cost)}
+                          >
+                            수정
+                          </button>
+                          <button
+                            style={{ ...styles.dangerSmallBtn, padding: '6px 8px', minWidth: 0 }}
+                            onClick={() => deleteCost(cost.id)}
+                          >
+                            삭제
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -2064,9 +2348,7 @@ export default function DocumentsPage() {
                           accept="image/*"
                           onChange={(e: ChangeEvent<HTMLInputElement>) =>
                             setDraftItems((prev) =>
-                              prev.map((x) =>
-                                x.key === d.key ? { ...x, photoFile: e.target.files?.[0] ?? null } : x
-                              )
+                              prev.map((x) => (x.key === d.key ? { ...x, photoFile: e.target.files?.[0] ?? null } : x))
                             )
                           }
                         />
@@ -2093,11 +2375,7 @@ export default function DocumentsPage() {
         </div>
       </SafeModal>
 
-      <SafeModal
-        open={costModalOpen}
-        title="추가비용 저장 + 선택 상품 자동분배"
-        onClose={requestCloseCostModal}
-      >
+      <SafeModal open={costModalOpen} title="추가비용 저장 + 선택 상품 자동분배" onClose={requestCloseCostModal}>
         <div onInputCapture={() => setCostDirty(true)} onChangeCapture={() => setCostDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
             <button style={styles.btn('ghost')} onClick={requestCloseCostModal}>
@@ -2204,31 +2482,23 @@ export default function DocumentsPage() {
 
           <div style={styles.hr} />
 
-          <div style={{ fontWeight: 900, marginBottom: 6 }}>선택된 상품({selectedItemIds.length}개)</div>
-          <div style={styles.small}>
+          <div style={{ ...styles.small, marginBottom: 8 }}>
             배분 기준: <b>상품 원화합계</b> 비율 / 소수점은 <b>무조건 올림</b> / 오차는 <b>상품 원화합계가 가장 큰 상품</b>에 몰아줌
           </div>
 
-          <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-            {selectedItems.slice(0, 8).map((it) => (
-              <div key={it.id} style={{ ...styles.card, padding: 10 }}>
-                <div style={{ fontWeight: 900 }}>{it.item_name ?? '(이름 없음)'}</div>
-                <div style={styles.small}>
-                  매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'} / 상품 원화합계:{' '}
-                  <b>{fmtKRW(n(it.line_total))}</b>
-                </div>
-              </div>
-            ))}
-            {selectedItems.length > 8 && <div style={styles.small}>…외 {selectedItems.length - 8}개</div>}
-          </div>
+          <ItemSelectionManager
+            title="배분할 상품"
+            selectedItems={selectedItems}
+            allItems={items}
+            purchaseMap={purchaseMap}
+            selectedIds={selectedItemIds}
+            onRemove={removeSelectedItem}
+            onAdd={addSelectedItem}
+          />
         </div>
       </SafeModal>
 
-      <SafeModal
-        open={costEditModalOpen}
-        title="추가비용 수정"
-        onClose={requestCloseCostEditModal}
-      >
+      <SafeModal open={costEditModalOpen} title="추가비용 수정" onClose={requestCloseCostEditModal}>
         <div onInputCapture={() => setCostEditDirty(true)} onChangeCapture={() => setCostEditDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
             <button style={styles.btn('ghost')} onClick={requestCloseCostEditModal}>
@@ -2346,29 +2616,21 @@ export default function DocumentsPage() {
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
-              <div style={styles.label}>배분할 상품 선택</div>
-              <div style={styles.chipsWrap}>
-                {items.map((it) => (
-                  <button
-                    type="button"
-                    key={it.id}
-                    style={styles.chip(ecSelectedItemIds.includes(it.id))}
-                    onClick={() => toggleEditCostSelectedItem(it.id)}
-                  >
-                    {it.item_name ?? '(이름 없음)'}
-                  </button>
-                ))}
-              </div>
+              <ItemSelectionManager
+                title="배분할 상품"
+                selectedItems={editSelectedItems}
+                allItems={items}
+                purchaseMap={purchaseMap}
+                selectedIds={ecSelectedItemIds}
+                onRemove={removeEditCostSelectedItem}
+                onAdd={addEditCostSelectedItem}
+              />
             </div>
           </div>
         </div>
       </SafeModal>
 
-      <SafeModal
-        open={itemDetailOpen}
-        title="상품 상세"
-        onClose={() => setItemDetailOpen(false)}
-      >
+      <SafeModal open={itemDetailOpen} title="상품 상세" onClose={() => setItemDetailOpen(false)}>
         {detailItem ? (
           <>
             <div style={styles.card}>
@@ -2409,12 +2671,8 @@ export default function DocumentsPage() {
                     <tr key={idx}>
                       <td style={styles.td}>{a.cost_type ?? ''}</td>
                       <td style={styles.td}>{fmtDate(a.cost_date)}</td>
-                      <td style={styles.td}>
-                        <b>{fmtKRW(a.amount_krw)}</b>
-                      </td>
-                      <td style={styles.td}>
-                        {a.related_item_names.length > 0 ? a.related_item_names.join(', ') : '-'}
-                      </td>
+                      <td style={styles.td}><b>{fmtKRW(a.amount_krw)}</b></td>
+                      <td style={styles.td}>{a.related_item_names.length > 0 ? a.related_item_names.join(', ') : '-'}</td>
                       <td style={styles.td}>{a.vendor_name ?? '-'}</td>
                       <td style={styles.td}>{a.memo ?? ''}</td>
                     </tr>
