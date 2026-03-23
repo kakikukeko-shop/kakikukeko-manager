@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import SafeModal from '../components/SafeModal'
+import BackupRestoreButtons from '../components/BackupRestoreButtons'
 
 type SaleItemSummary = {
   qty: number | null
@@ -233,6 +234,30 @@ export default function DashboardPage() {
     load()
   }, [])
 
+  // ✅ 하루 1번 자동백업
+  useEffect(() => {
+    async function autoBackupOncePerDay() {
+      try {
+        const key = 'last_auto_backup_date'
+        const today = getTodayKey()
+        const last = localStorage.getItem(key)
+
+        if (last === today) return
+
+        const res = await fetch('/api/backup?auto=1')
+        const data = await res.json()
+
+        if (res.ok && data?.ok) {
+          localStorage.setItem(key, today)
+        }
+      } catch {
+        // 자동백업 실패해도 화면은 그대로 사용
+      }
+    }
+
+    autoBackupOncePerDay()
+  }, [])
+
   const normalizedSales = useMemo<NormalizedSaleRow[]>(() => {
     return sales.map((row) => ({
       ...row,
@@ -443,27 +468,74 @@ export default function DashboardPage() {
           borderRadius: 24,
           padding: 24,
           boxShadow: '0 10px 30px rgba(124, 58, 237, 0.06)',
+          display: 'grid',
+          gridTemplateColumns: '1fr 420px',
+          gap: 18,
+          alignItems: 'center',
         }}
       >
-        <div
-          style={{
-            fontSize: 28,
-            fontWeight: 900,
-            color: '#312e81',
-            marginBottom: 8,
-          }}
-        >
-          대시보드
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 28,
+              fontWeight: 900,
+              color: '#312e81',
+              marginBottom: 8,
+            }}
+          >
+            대시보드
+          </div>
+
+          <div
+            style={{
+              fontSize: 15,
+              color: '#4b5563',
+              fontWeight: 600,
+            }}
+          >
+            오늘/이번달/올해/누적 기준으로 매출과 매입을 한눈에 볼 수 있어.
+          </div>
         </div>
 
         <div
           style={{
-            fontSize: 15,
-            color: '#4b5563',
-            fontWeight: 600,
+            border: '1px solid #e5e7eb',
+            borderRadius: 20,
+            padding: '14px 16px',
+            background: '#fcfcff',
+            boxShadow: '0 8px 24px rgba(124, 58, 237, 0.05)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 14,
+            minWidth: 0,
           }}
         >
-          오늘/이번달/올해/누적 기준으로 매출과 매입을 한눈에 볼 수 있어.
+          <div style={{ display: 'grid', gap: 4, flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 900,
+                color: '#312e81',
+                lineHeight: 1.2,
+              }}
+            >
+              백업관리
+            </div>
+
+            <div
+              style={{
+                fontSize: 12,
+                color: '#6b7280',
+                fontWeight: 700,
+                lineHeight: 1.5,
+              }}
+            >
+              자동백업(하루 1회 저장) / 백업 다운로드 / 복구
+            </div>
+          </div>
+
+          <BackupRestoreButtons />
         </div>
       </section>
 
@@ -683,7 +755,7 @@ export default function DashboardPage() {
 
       <SafeModal
         open={metricModalOpen}
-        title={modalTitle}
+        title={selectedMetric ? modalTitle : ''}
         onClose={() => {
           setMetricModalOpen(false)
           setSelectedMetric(null)
