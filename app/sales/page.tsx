@@ -204,6 +204,14 @@ function publicUrl(path: string | null | undefined) {
   return data.publicUrl
 }
 
+function formatMoney(value: number | null | undefined) {
+  return `${Number(value || 0).toLocaleString()}원`
+}
+
+function getSaleChannelLabel(row: SaleRow) {
+  return (row.channel || row.sales_channel || '온라인') as '온라인' | '오프라인'
+}
+
 function allocateBySalesAmount(totalAmount: number, baseAmounts: number[]) {
   const safeTotal = Math.round(totalAmount || 0)
   const safeBases = baseAmounts.map((v) => Math.max(0, Math.round(v || 0)))
@@ -433,6 +441,10 @@ export default function SalesPage() {
     return map
   }, [files])
 
+  const editingSaleItemIdSet = useMemo(() => {
+    return new Set((originalSale?.sale_items || []).map((item) => String(item.purchase_item_id || '')))
+  }, [originalSale])
+
   const productOptions = useMemo<ProductOption[]>(() => {
     const arrivedMap = new Map<string, number>()
     for (const a of arrivals) {
@@ -477,12 +489,26 @@ export default function SalesPage() {
           purchase_unit_price: finalUnitPrice,
           stock_qty: stockQty,
           isBlockedPreorder,
+          isEditingTarget: editingSaleItemIdSet.has(item.id),
         }
       })
-      .filter((item) => item.item_name && item.stock_qty > 0 && !item.isBlockedPreorder)
-      .map(({ isBlockedPreorder: _drop, ...rest }) => rest)
+      .filter(
+        (item) =>
+          item.item_name &&
+          !item.isBlockedPreorder &&
+          (item.stock_qty > 0 || item.isEditingTarget)
+      )
+      .map(({ isBlockedPreorder: _drop, isEditingTarget: _editDrop, ...rest }) => rest)
       .sort((a, b) => a.item_name.localeCompare(b.item_name, 'ko'))
-  }, [purchaseItems, arrivals, saleItems, balanceDoneItemIdSet, costAllocations, itemPhotoMap])
+  }, [
+    purchaseItems,
+    arrivals,
+    saleItems,
+    balanceDoneItemIdSet,
+    costAllocations,
+    itemPhotoMap,
+    editingSaleItemIdSet,
+  ])
 
   const selectedProductMap = useMemo(() => {
     const map = new Map<string, ProductOption>()
@@ -1124,7 +1150,7 @@ export default function SalesPage() {
         </div>
 
         <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
-          <div className="overflow-x-auto">
+          <div className="max-h-[620px] overflow-auto">
             <table className="w-full text-[13px]">
               <thead className="bg-slate-50 text-slate-700">
                 <tr className="border-b border-slate-200">
@@ -1162,135 +1188,195 @@ export default function SalesPage() {
                 ) : (
                   filteredSales.map((row) => {
                     const items = row.sale_items || []
-                    const rowChannel = (row.channel || row.sales_channel || '온라인') as
-                      | '온라인'
-                      | '오프라인'
-                    const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0)
-                    const itemNameText = items
-                      .map((item) => String(item.purchase_items?.item_name || '-'))
-                      .join(', ')
-                    const firstImageId = String(items[0]?.purchase_item_id || '')
-                    const firstImageUrl =
-                      itemPhotoMap.get(firstImageId) ||
-                      String(items[0]?.purchase_items?.attachment_url || '')
+                    const rowChannel = getSaleChannelLabel(row)
                     const receiptFiles = (saleFileMap.get(row.id) || []).filter(
                       (file) => file.file_type === SALE_RECEIPT_TYPE
                     )
                     const receiptUrl = receiptFiles[0]?.file_path
                       ? publicUrl(receiptFiles[0].file_path)
                       : ''
+                    const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0)
+                    const saleMemo = row.memo || '-'
 
-                    return (
-                      <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
-                        <td className="px-2 py-3 align-top">
-                          <div className="flex items-start gap-2 min-w-0">
-                            {firstImageUrl ? (
-                              <img
-                                src={firstImageUrl}
-                                alt={itemNameText}
-                                className="h-11 w-11 rounded-xl border border-slate-200 object-cover flex-shrink-0"
-                              />
-                            ) : (
-                              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-[11px] font-bold text-slate-500">
-                                없음
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <div className="break-words font-extrabold text-slate-900">
-                                {itemNameText}
-                              </div>
-                              <div className="mt-1 text-xs text-slate-500">
-                                상품 {items.length}개 / 총수량 {totalQty}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td className="px-2 py-3 align-top">
-                          <span
-                            className={`rounded-full px-2 py-1 text-[11px] font-extrabold ${
-                              rowChannel === '온라인'
-                                ? 'bg-violet-100 text-violet-700'
-                                : 'bg-emerald-100 text-emerald-700'
+                    if (items.length === 0) {
+                      return (
+                        <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
+                          <td className="px-2 py-3 align-top">
+                            <div className="text-sm font-bold text-slate-500">상품 없음</div>
+                          </td>
+                          <td className="px-2 py-3 align-top">
+                            <span
+                              className={`rounded-full px-2 py-1 text-[11px] font-extrabold ${
+                                rowChannel === '온라인'
+                                  ? 'bg-violet-100 text-violet-700'
+                                  : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                            >
+                              {rowChannel}
+                            </span>
+                          </td>
+                          <td className="px-2 py-3 align-top font-medium text-slate-800">{row.sale_date}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-slate-900">0</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.purchase_amount)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.total_product_amount)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-rose-600">- {formatMoney(row.discount_amount)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-slate-800">+ {formatMoney(row.prepaid_shipping_fee)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.actual_shipping_fee)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.selling_fee)}</td>
+                          <td className="px-2 py-3 align-top text-right font-extrabold text-slate-900">{formatMoney(row.final_amount)}</td>
+                          <td
+                            className={`px-2 py-3 align-top text-right font-extrabold ${
+                              Number(row.profit_amount || 0) >= 0
+                                ? 'text-emerald-700'
+                                : 'text-rose-600'
                             }`}
                           >
-                            {rowChannel}
-                          </span>
-                        </td>
+                            {formatMoney(row.profit_amount)}
+                          </td>
+                          <td className="px-2 py-3 align-top">
+                            {receiptUrl ? (
+                              <a
+                                href={receiptUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-extrabold text-emerald-700"
+                              >
+                                보기
+                              </a>
+                            ) : (
+                              <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-extrabold text-rose-600">
+                                미업로드
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-3 align-top font-medium text-slate-700">
+                            <div className="max-w-[160px] break-words whitespace-normal">{saleMemo}</div>
+                          </td>
+                          <td className="px-2 py-3 align-top">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                className="rounded-2xl border border-slate-300 px-2 py-2 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50"
+                                onClick={() => openEditModal(row)}
+                              >
+                                수정
+                              </button>
+                              <button
+                                className="rounded-2xl border border-rose-200 px-2 py-2 text-[11px] font-extrabold text-rose-600 hover:bg-rose-50"
+                                onClick={() => deleteSale(row)}
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    }
 
-                        <td className="px-2 py-3 align-top font-medium text-slate-800">
-                          {row.sale_date}
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-slate-900">
-                          {totalQty}
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-slate-900">
-                          {Number(row.purchase_amount || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-slate-900">
-                          {Number(row.total_product_amount || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-rose-600">
-                          - {Number(row.discount_amount || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-slate-800">
-                          + {Number(row.prepaid_shipping_fee || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-amber-600">
-                          - {Number(row.actual_shipping_fee || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-bold text-amber-600">
-                          - {Number(row.selling_fee || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top text-right font-extrabold text-slate-900">
-                          {Number(row.final_amount || 0).toLocaleString()}원
-                        </td>
-                        <td
-                          className={`px-2 py-3 align-top text-right font-extrabold ${
-                            Number(row.profit_amount || 0) >= 0
-                              ? 'text-emerald-700'
-                              : 'text-rose-600'
-                          }`}
-                        >
-                          {Number(row.profit_amount || 0).toLocaleString()}원
-                        </td>
-                        <td className="px-2 py-3 align-top">
-                          {receiptUrl ? (
-                            <a
-                              href={receiptUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-extrabold text-emerald-700"
-                            >
-                              보기
-                            </a>
-                          ) : (
-                            <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-extrabold text-rose-600">
-                              미업로드
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-3 align-top font-medium text-slate-700">
-                          <div className="max-w-[160px] break-words">{row.memo || '-'}</div>
-                        </td>
-                        <td className="px-2 py-3 align-top">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              className="rounded-2xl border border-slate-300 px-2 py-2 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50"
-                              onClick={() => openEditModal(row)}
-                            >
-                              수정
-                            </button>
-                            <button
-                              className="rounded-2xl border border-rose-200 px-2 py-2 text-[11px] font-extrabold text-rose-600 hover:bg-rose-50"
-                              onClick={() => deleteSale(row)}
-                            >
-                              삭제
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
+                    return items.map((item, idx) => {
+                      const imageId = String(item.purchase_item_id || '')
+                      const imageUrl =
+                        itemPhotoMap.get(imageId) || String(item.purchase_items?.attachment_url || '')
+                      const itemName = String(item.purchase_items?.item_name || '-')
+                      const itemQty = Number(item.qty || 0)
+                      const saleUnitPrice = Number(item.sale_price || 0)
+                      const itemLineTotal = Number(item.line_total || saleUnitPrice * itemQty)
+
+                      return (
+                        <tr key={`${row.id}-${item.id}-${idx}`} className="border-b border-slate-100 last:border-b-0">
+                          <td className="px-2 py-3 align-top">
+                            <div className="flex min-w-0 items-start gap-2">
+                              {imageUrl ? (
+                                <img
+                                  src={imageUrl}
+                                  alt={itemName}
+                                  className="h-11 w-11 rounded-xl border border-slate-200 object-cover flex-shrink-0"
+                                />
+                              ) : (
+                                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-[11px] font-bold text-slate-500">
+                                  없음
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div className="whitespace-normal break-words font-extrabold text-slate-900">{itemName}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  수량 {itemQty}개 / 판매가 {formatMoney(saleUnitPrice)} / 상품금액 {formatMoney(itemLineTotal)}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {idx === 0 ? (
+                            <>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top">
+                                <span
+                                  className={`rounded-full px-2 py-1 text-[11px] font-extrabold ${
+                                    rowChannel === '온라인'
+                                      ? 'bg-violet-100 text-violet-700'
+                                      : 'bg-emerald-100 text-emerald-700'
+                                  }`}
+                                >
+                                  {rowChannel}
+                                </span>
+                              </td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top font-medium text-slate-800">{row.sale_date}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-900">{totalQty}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.purchase_amount)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.total_product_amount)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-rose-600">- {formatMoney(row.discount_amount)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-800">+ {formatMoney(row.prepaid_shipping_fee)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.actual_shipping_fee)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.selling_fee)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-extrabold text-slate-900">{formatMoney(row.final_amount)}</td>
+                              <td
+                                rowSpan={items.length}
+                                className={`px-2 py-3 align-top text-right font-extrabold ${
+                                  Number(row.profit_amount || 0) >= 0
+                                    ? 'text-emerald-700'
+                                    : 'text-rose-600'
+                                }`}
+                              >
+                                {formatMoney(row.profit_amount)}
+                              </td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top">
+                                {receiptUrl ? (
+                                  <a
+                                    href={receiptUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-extrabold text-emerald-700"
+                                  >
+                                    보기
+                                  </a>
+                                ) : (
+                                  <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-extrabold text-rose-600">
+                                    미업로드
+                                  </span>
+                                )}
+                              </td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top font-medium text-slate-700">
+                                <div className="max-w-[160px] break-words whitespace-normal">{saleMemo}</div>
+                              </td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    className="rounded-2xl border border-slate-300 px-2 py-2 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50"
+                                    onClick={() => openEditModal(row)}
+                                  >
+                                    수정
+                                  </button>
+                                  <button
+                                    className="rounded-2xl border border-rose-200 px-2 py-2 text-[11px] font-extrabold text-rose-600 hover:bg-rose-50"
+                                    onClick={() => deleteSale(row)}
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
+                              </td>
+                            </>
+                          ) : null}
+                        </tr>
+                      )
+                    })
                   })
                 )}
               </tbody>
@@ -1311,7 +1397,7 @@ export default function SalesPage() {
           resetForm()
         }}
       >
-        <div className="grid gap-6 overflow-x-hidden">
+        <div className="grid gap-6">
           <div className="grid gap-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
@@ -1368,7 +1454,8 @@ export default function SalesPage() {
                 </button>
               </div>
 
-              <div className="grid gap-3">
+              <div className="max-h-[420px] overflow-y-auto overflow-x-hidden pr-1">
+                <div className="grid gap-3">
                 {saleLines.map((line, idx) => {
                   const preview = linePreview.find((v) => v.rowId === line.rowId)
                   const excludeIds = selectedIds.filter((id) => id && id !== line.purchase_item_id)
@@ -1391,7 +1478,23 @@ export default function SalesPage() {
                         </button>
                       </div>
 
-                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_90px_120px_120px]">
+                      <div className="grid gap-3 lg:grid-cols-[120px_minmax(0,1fr)_90px_140px_140px]">
+                        <div>
+                          <label className="mb-2 block text-xs font-extrabold text-slate-700">
+                            상품사진
+                          </label>
+                          <div className="flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                            {preview?.attachment_url ? (
+                              <img
+                                src={preview.attachment_url}
+                                alt={preview?.item_name || '상품'}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-xs font-bold text-slate-400">없음</span>
+                            )}
+                          </div>
+                        </div>
                         <div>
                           <label className="mb-2 block text-xs font-extrabold text-slate-700">
                             상품 선택
@@ -1414,6 +1517,9 @@ export default function SalesPage() {
                             }}
                             excludeIds={excludeIds}
                           />
+                          <div className="mt-2 min-h-[40px] whitespace-normal break-words text-sm font-bold text-slate-700">
+                            {preview?.item_name || '상품 선택 전'}
+                          </div>
                         </div>
 
                         <div>
@@ -1464,6 +1570,7 @@ export default function SalesPage() {
                     </div>
                   )
                 })}
+                </div>
               </div>
             </div>
 
@@ -1626,7 +1733,7 @@ export default function SalesPage() {
                   >
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-extrabold text-slate-900">
+                        <div className="whitespace-normal break-words text-sm font-extrabold text-slate-900">
                           상품 {idx + 1} · {line.item_name}
                         </div>
                         <div className="mt-1 text-xs font-medium text-slate-500">

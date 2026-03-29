@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 type PurchaseRow = {
@@ -62,6 +62,18 @@ type SaleItemRow = {
   memo: string | null
   created_at: string
 }
+
+type SortMode =
+  | 'name_asc'
+  | 'name_desc'
+  | 'purchase_recent'
+  | 'purchase_old'
+  | 'stock_desc'
+  | 'stock_asc'
+  | 'cost_desc'
+  | 'cost_asc'
+  | 'created_recent'
+  | 'created_old'
 
 const STORAGE_BUCKET = 'purchase-files'
 
@@ -140,7 +152,10 @@ export default function ProductsPage() {
   const [err, setErr] = useState<string | null>(null)
 
   const [search, setSearch] = useState('')
-  const [filterMode, setFilterMode] = useState<'전체' | '미도착있음' | '입고완료' | '예약포함' | '재고있음' | '재고없음'>('전체')
+  const [filterMode, setFilterMode] = useState<
+    '전체' | '미도착있음' | '입고완료' | '예약포함' | '재고있음' | '재고없음'
+  >('전체')
+  const [sortMode, setSortMode] = useState<SortMode>('name_asc')
 
   const [arrivalModalOpen, setArrivalModalOpen] = useState(false)
   const [arrivalTarget, setArrivalTarget] = useState<ItemRow | null>(null)
@@ -162,6 +177,15 @@ export default function ProductsPage() {
   const [editArrivalQty, setEditArrivalQty] = useState('')
   const [editArrivalDate, setEditArrivalDate] = useState('')
   const [editArrivalMemo, setEditArrivalMemo] = useState('')
+
+  const [bulkModalOpen, setBulkModalOpen] = useState(false)
+  const [bulkArrivalDate, setBulkArrivalDate] = useState('')
+  const [bulkArrivalMemo, setBulkArrivalMemo] = useState('')
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
+  const [bulkQtyMap, setBulkQtyMap] = useState<Record<string, string>>({})
+
+  const pageRef = useRef<HTMLDivElement | null>(null)
+  const pendingScrollRestoreRef = useRef<number | null>(null)
 
   const purchaseMap = useMemo(() => {
     const m = new Map<string, PurchaseRow>()
@@ -222,7 +246,9 @@ export default function ProductsPage() {
 
   const itemPhotoMap = useMemo(() => {
     const m = new Map<string, string>()
-    const itemImageFiles = files.filter((f) => f.file_type === '상품사진' && f.item_id && f.file_path)
+    const itemImageFiles = files.filter(
+      (f) => f.file_type === '상품사진' && f.item_id && f.file_path
+    )
 
     itemImageFiles.forEach((f) => {
       if (!f.item_id || !f.file_path) return
@@ -234,46 +260,53 @@ export default function ProductsPage() {
     return m
   }, [files])
 
-  async function load() {
+  async function load(options?: { preserveScroll?: boolean }) {
+    if (options?.preserveScroll) {
+      pendingScrollRestoreRef.current = window.scrollY
+    }
+
     setLoading(true)
     setErr(null)
     setMsg(null)
 
     try {
-      const [itemRes, purchaseRes, allocRes, costRes, arrivalRes, fileRes, saleItemRes] = await Promise.all([
-        supabase
-          .from('purchase_items')
-          .select('id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,offline_price,created_at')
-          .order('created_at', { ascending: false }),
+      const [itemRes, purchaseRes, allocRes, costRes, arrivalRes, fileRes, saleItemRes] =
+        await Promise.all([
+          supabase
+            .from('purchase_items')
+            .select(
+              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,offline_price,created_at'
+            )
+            .order('created_at', { ascending: false }),
 
-        supabase
-          .from('purchase')
-          .select('id,purchase_date,supplier')
-          .order('created_at', { ascending: false }),
+          supabase
+            .from('purchase')
+            .select('id,purchase_date,supplier')
+            .order('created_at', { ascending: false }),
 
-        supabase
-          .from('cost_allocations')
-          .select('purchase_cost_id,purchase_item_id,allocated_amount'),
+          supabase
+            .from('cost_allocations')
+            .select('purchase_cost_id,purchase_item_id,allocated_amount'),
 
-        supabase
-          .from('purchase_costs')
-          .select('id,cost_type'),
+          supabase.from('purchase_costs').select('id,cost_type'),
 
-        supabase
-          .from('purchase_item_arrivals')
-          .select('id,purchase_item_id,arrived_qty,arrived_date,memo,created_at')
-          .order('created_at', { ascending: false }),
+          supabase
+            .from('purchase_item_arrivals')
+            .select('id,purchase_item_id,arrived_qty,arrived_date,memo,created_at')
+            .order('created_at', { ascending: false }),
 
-        supabase
-          .from('purchase_files')
-          .select('id,item_id,file_type,file_path,created_at')
-          .order('created_at', { ascending: false }),
+          supabase
+            .from('purchase_files')
+            .select('id,item_id,file_type,file_path,created_at')
+            .order('created_at', { ascending: false }),
 
-        supabase
-          .from('sale_items')
-          .select('id,sale_id,purchase_item_id,qty,sale_price,shipping_fee,discount_amount,memo,created_at')
-          .order('created_at', { ascending: false }),
-      ])
+          supabase
+            .from('sale_items')
+            .select(
+              'id,sale_id,purchase_item_id,qty,sale_price,shipping_fee,discount_amount,memo,created_at'
+            )
+            .order('created_at', { ascending: false }),
+        ])
 
       if (itemRes.error) throw itemRes.error
       if (purchaseRes.error) throw purchaseRes.error
@@ -301,6 +334,16 @@ export default function ProductsPage() {
     load()
   }, [])
 
+  useEffect(() => {
+    if (!loading && pendingScrollRestoreRef.current !== null) {
+      const y = pendingScrollRestoreRef.current
+      pendingScrollRestoreRef.current = null
+      setTimeout(() => {
+        window.scrollTo({ top: y, behavior: 'auto' })
+      }, 0)
+    }
+  }, [loading])
+
   const rows = useMemo(() => {
     const mapped: FlatRow[] = items.map((item) => {
       const purchase = purchaseMap.get(item.purchase_id) ?? null
@@ -316,7 +359,8 @@ export default function ProductsPage() {
       const soldQty = soldQtyByItem.get(item.id) ?? 0
       const stockQty = Math.max(0, arrivedQty - soldQty)
 
-      const lastArrivedDate = myArrivals.length > 0 ? normalizeDate(myArrivals[0].arrived_date) : null
+      const lastArrivedDate =
+        myArrivals.length > 0 ? normalizeDate(myArrivals[0].arrived_date) : null
       const isComplete = remainingArrivalQty <= 0 && totalQty > 0
 
       return {
@@ -340,8 +384,10 @@ export default function ProductsPage() {
     const filtered = mapped.filter((row) => {
       const name = (row.item.item_name ?? '').toLowerCase()
       const supplier = (row.purchase?.supplier ?? '').toLowerCase()
+      const memo = (row.item.memo ?? '').toLowerCase()
 
-      const matchSearch = !q || name.includes(q) || supplier.includes(q)
+      const matchSearch =
+        !q || name.includes(q) || supplier.includes(q) || memo.includes(q)
       if (!matchSearch) return false
 
       if (filterMode === '미도착있음') return row.remainingArrivalQty > 0
@@ -353,18 +399,108 @@ export default function ProductsPage() {
     })
 
     filtered.sort((a, b) => {
-      const nameCompare = (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
-      if (nameCompare !== 0) return nameCompare
-
-      const da = normalizeDate(a.purchase?.purchase_date)
-      const db = normalizeDate(b.purchase?.purchase_date)
-      if (da && db) return da < db ? 1 : -1
-
-      return a.item.created_at < b.item.created_at ? 1 : -1
+      if (sortMode === 'name_asc') {
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'name_desc') {
+        return (b.item.item_name ?? '').localeCompare(a.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'purchase_recent') {
+        const da = normalizeDate(a.purchase?.purchase_date)
+        const db = normalizeDate(b.purchase?.purchase_date)
+        if (da !== db) return db.localeCompare(da)
+        return b.item.created_at.localeCompare(a.item.created_at)
+      }
+      if (sortMode === 'purchase_old') {
+        const da = normalizeDate(a.purchase?.purchase_date)
+        const db = normalizeDate(b.purchase?.purchase_date)
+        if (da !== db) return da.localeCompare(db)
+        return a.item.created_at.localeCompare(b.item.created_at)
+      }
+      if (sortMode === 'stock_desc') {
+        if (b.stockQty !== a.stockQty) return b.stockQty - a.stockQty
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'stock_asc') {
+        if (a.stockQty !== b.stockQty) return a.stockQty - b.stockQty
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'cost_desc') {
+        if (b.finalUnitCost !== a.finalUnitCost) return b.finalUnitCost - a.finalUnitCost
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'cost_asc') {
+        if (a.finalUnitCost !== b.finalUnitCost) return a.finalUnitCost - b.finalUnitCost
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
+      if (sortMode === 'created_recent') {
+        return b.item.created_at.localeCompare(a.item.created_at)
+      }
+      if (sortMode === 'created_old') {
+        return a.item.created_at.localeCompare(b.item.created_at)
+      }
+      return 0
     })
 
     return filtered
-  }, [items, purchaseMap, allocationSumByItem, arrivalsByItem, itemPhotoMap, search, filterMode, hasBalanceByItem, soldQtyByItem])
+  }, [
+    items,
+    purchaseMap,
+    allocationSumByItem,
+    arrivalsByItem,
+    itemPhotoMap,
+    search,
+    filterMode,
+    sortMode,
+    hasBalanceByItem,
+    soldQtyByItem,
+  ])
+
+  const rowMap = useMemo(() => {
+    const m = new Map<string, FlatRow>()
+    rows.forEach((row) => m.set(row.item.id, row))
+    return m
+  }, [rows])
+
+  const visibleRows = useMemo(() => rows, [rows])
+
+  const selectedRows = useMemo(
+    () => selectedItemIds.map((id) => rowMap.get(id)).filter(Boolean) as FlatRow[],
+    [selectedItemIds, rowMap]
+  )
+
+  const summary = useMemo(() => {
+    const totalKinds = rows.length
+    const totalQty = rows.reduce((acc, row) => acc + row.totalQty, 0)
+    const totalStock = rows.reduce((acc, row) => acc + row.stockQty, 0)
+    const totalUndelivered = rows.reduce((acc, row) => acc + row.remainingArrivalQty, 0)
+    return { totalKinds, totalQty, totalStock, totalUndelivered }
+  }, [rows])
+
+  function toggleSelectItem(itemId: string) {
+    setSelectedItemIds((prev) => {
+      if (prev.includes(itemId)) return prev.filter((id) => id !== itemId)
+      return [...prev, itemId]
+    })
+  }
+
+  function toggleSelectAllVisible() {
+    const visibleIds = visibleRows.map((row) => row.item.id)
+    if (visibleIds.length === 0) return
+
+    const allSelected = visibleIds.every((id) => selectedItemIds.includes(id))
+    if (allSelected) {
+      setSelectedItemIds((prev) => prev.filter((id) => !visibleIds.includes(id)))
+      return
+    }
+
+    setSelectedItemIds((prev) => Array.from(new Set([...prev, ...visibleIds])))
+  }
+
+  function clearSelectedItems() {
+    setSelectedItemIds([])
+    setBulkQtyMap({})
+  }
 
   function openArrivalModal(item: ItemRow) {
     setArrivalTarget(item)
@@ -374,11 +510,31 @@ export default function ProductsPage() {
     setArrivalModalOpen(true)
   }
 
+  function openBulkModal() {
+    if (selectedRows.length === 0) {
+      setErr('입고처리할 상품을 먼저 체크해줘.')
+      return
+    }
+
+    const nextQtyMap: Record<string, string> = {}
+    selectedRows.forEach((row) => {
+      nextQtyMap[row.item.id] = String(row.remainingArrivalQty)
+    })
+
+    setBulkQtyMap(nextQtyMap)
+    setBulkArrivalDate(new Date().toISOString().slice(0, 10))
+    setBulkArrivalMemo('')
+    setBulkModalOpen(true)
+  }
+
   async function saveArrival() {
     if (!arrivalTarget) return
 
     const totalQty = Math.max(0, n(arrivalTarget.qty))
-    const currentArrived = (arrivalsByItem.get(arrivalTarget.id) ?? []).reduce((acc, a) => acc + n(a.arrived_qty), 0)
+    const currentArrived = (arrivalsByItem.get(arrivalTarget.id) ?? []).reduce(
+      (acc, a) => acc + n(a.arrived_qty),
+      0
+    )
     const remain = Math.max(0, totalQty - currentArrived)
     const qty = n(arrivalQty)
 
@@ -399,7 +555,7 @@ export default function ProductsPage() {
       const ins = await supabase.from('purchase_item_arrivals').insert({
         purchase_item_id: arrivalTarget.id,
         arrived_qty: qty,
-        arrived_date: normalizeDate(arrivalDate) || null,
+        arrived_date: normalizeDate(arrivalDate) || new Date().toISOString().slice(0, 10),
         memo: arrivalMemo || null,
       })
 
@@ -407,7 +563,7 @@ export default function ProductsPage() {
 
       setMsg('부분입고 저장 완료')
       setArrivalModalOpen(false)
-      await load()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -415,9 +571,12 @@ export default function ProductsPage() {
     }
   }
 
-  async function completeArrival(item: ItemRow) {
+  async function completeArrival(item: ItemRow, customDate?: string) {
     const totalQty = Math.max(0, n(item.qty))
-    const currentArrived = (arrivalsByItem.get(item.id) ?? []).reduce((acc, a) => acc + n(a.arrived_qty), 0)
+    const currentArrived = (arrivalsByItem.get(item.id) ?? []).reduce(
+      (acc, a) => acc + n(a.arrived_qty),
+      0
+    )
     const remain = Math.max(0, totalQty - currentArrived)
 
     if (remain <= 0) {
@@ -433,14 +592,74 @@ export default function ProductsPage() {
       const ins = await supabase.from('purchase_item_arrivals').insert({
         purchase_item_id: item.id,
         arrived_qty: remain,
-        arrived_date: new Date().toISOString().slice(0, 10),
+        arrived_date: normalizeDate(customDate) || new Date().toISOString().slice(0, 10),
         memo: '입고완료 버튼',
       })
 
       if (ins.error) throw ins.error
 
       setMsg('전량 입고완료 처리됨')
-      await load()
+      await load({ preserveScroll: true })
+    } catch (e: any) {
+      setErr(e?.message ?? String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function saveBulkArrival() {
+    if (selectedRows.length === 0) {
+      setErr('선택된 상품이 없어.')
+      return
+    }
+
+    const arrivalDateValue =
+      normalizeDate(bulkArrivalDate) || new Date().toISOString().slice(0, 10)
+    const inserts: {
+      purchase_item_id: string
+      arrived_qty: number
+      arrived_date: string
+      memo: string | null
+    }[] = []
+
+    for (const row of selectedRows) {
+      const rawQty = bulkQtyMap[row.item.id]
+      const qty = n(rawQty)
+
+      if (qty <= 0) continue
+
+      if (qty > row.remainingArrivalQty) {
+        setErr(
+          `${row.item.item_name ?? '(이름 없음)'}의 남은 미도착 수량(${row.remainingArrivalQty}개)보다 크게 입력했어.`
+        )
+        return
+      }
+
+      inserts.push({
+        purchase_item_id: row.item.id,
+        arrived_qty: qty,
+        arrived_date: arrivalDateValue,
+        memo: bulkArrivalMemo || '선택 입고처리',
+      })
+    }
+
+    if (inserts.length === 0) {
+      setErr('입고수량을 1개 이상 입력해줘.')
+      return
+    }
+
+    try {
+      setLoading(true)
+      setErr(null)
+      setMsg(null)
+
+      const ins = await supabase.from('purchase_item_arrivals').insert(inserts)
+      if (ins.error) throw ins.error
+
+      setMsg(`${inserts.length}개 상품 입고처리 완료`)
+      setBulkModalOpen(false)
+      clearSelectedItems()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -460,7 +679,7 @@ export default function ProductsPage() {
       if (del.error) throw del.error
 
       setMsg('입고이력 삭제 완료')
-      await load()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -488,7 +707,138 @@ export default function ProductsPage() {
       if (del.error) throw del.error
 
       setMsg('가장 최근 입고처리를 취소했어.')
-      await load()
+      await load({ preserveScroll: true })
+    } catch (e: any) {
+      setErr(e?.message ?? String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function revertSelectedLatest() {
+    if (selectedItemIds.length === 0) {
+      setErr('선택된 상품이 없어.')
+      return
+    }
+
+    try {
+      setLoading(true)
+      setErr(null)
+      setMsg(null)
+
+      for (const itemId of selectedItemIds) {
+        const histories = arrivalsByItem.get(itemId) ?? []
+        if (histories.length === 0) continue
+        const latest = histories[0]
+
+        const del = await supabase.from('purchase_item_arrivals').delete().eq('id', latest.id)
+        if (del.error) throw del.error
+      }
+
+      setMsg('선택 상품 최근 입고 취소 완료')
+      clearSelectedItems()
+      await load({ preserveScroll: true })
+    } catch (e: any) {
+      setErr(e?.message ?? String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function revertSelectedAll() {
+    if (selectedItemIds.length === 0) {
+      setErr('선택된 상품이 없어.')
+      return
+    }
+
+    if (
+      !confirm(
+        '선택 상품들의 입고이력을 전부 삭제하고 미도착으로 되돌릴까?'
+      )
+    )
+      return
+
+    try {
+      setLoading(true)
+      setErr(null)
+      setMsg(null)
+
+      for (const itemId of selectedItemIds) {
+        const del = await supabase
+          .from('purchase_item_arrivals')
+          .delete()
+          .eq('purchase_item_id', itemId)
+        if (del.error) throw del.error
+      }
+
+      setMsg('선택 상품 전체 입고이력 삭제 완료')
+      clearSelectedItems()
+      await load({ preserveScroll: true })
+    } catch (e: any) {
+      setErr(e?.message ?? String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function deleteSelectedItems() {
+    if (selectedItemIds.length === 0) {
+      setErr('선택된 상품이 없어.')
+      return
+    }
+
+    if (
+      !confirm(
+        '선택한 상품을 삭제할까?\n입고이력/배분/상품사진/매출연결까지 함께 지워질 수 있어.'
+      )
+    )
+      return
+
+    try {
+      setLoading(true)
+      setErr(null)
+      setMsg(null)
+
+      for (const itemId of selectedItemIds) {
+        const linkedSaleCount = saleItems.filter((s) => s.purchase_item_id === itemId).length
+        if (linkedSaleCount > 0) {
+          throw new Error(
+            `판매내역과 연결된 상품은 삭제할 수 없어. 먼저 매출관리에서 해당 상품 판매내역을 정리해줘.`
+          )
+        }
+      }
+
+      const targetFiles = files.filter((f) => f.item_id && selectedItemIds.includes(f.item_id))
+      const fileIds = targetFiles.map((f) => f.id)
+      const filePaths = targetFiles.map((f) => f.file_path).filter(Boolean) as string[]
+
+      if (fileIds.length > 0) {
+        const delFiles = await supabase.from('purchase_files').delete().in('id', fileIds)
+        if (delFiles.error) throw delFiles.error
+      }
+
+      if (filePaths.length > 0) {
+        await supabase.storage.from(STORAGE_BUCKET).remove(filePaths)
+      }
+
+      const delArrivals = await supabase
+        .from('purchase_item_arrivals')
+        .delete()
+        .in('purchase_item_id', selectedItemIds)
+      if (delArrivals.error) throw delArrivals.error
+
+      const delAlloc = await supabase
+        .from('cost_allocations')
+        .delete()
+        .in('purchase_item_id', selectedItemIds)
+      if (delAlloc.error) throw delAlloc.error
+
+      const delItems = await supabase.from('purchase_items').delete().in('id', selectedItemIds)
+      if (delItems.error) throw delItems.error
+
+      setMsg(`선택 상품 ${selectedItemIds.length}개 삭제 완료`)
+      clearSelectedItems()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -525,7 +875,7 @@ export default function ProductsPage() {
 
       setMsg('상품/재고 정보 수정 완료')
       setEditModalOpen(false)
-      await load()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -573,7 +923,7 @@ export default function ProductsPage() {
 
       setMsg('입고이력 수정 완료')
       setEditArrivalModalOpen(false)
-      await load()
+      await load({ preserveScroll: true })
     } catch (e: any) {
       setErr(e?.message ?? String(e))
     } finally {
@@ -590,7 +940,9 @@ export default function ProductsPage() {
       fontFamily:
         "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Apple SD Gothic Neo, Noto Sans KR, 'Malgun Gothic', sans-serif",
     } as React.CSSProperties,
+
     title: { fontSize: 24, fontWeight: 900, color: '#312e81' } as React.CSSProperties,
+
     topbar: {
       display: 'flex',
       gap: 10,
@@ -599,18 +951,36 @@ export default function ProductsPage() {
       flexWrap: 'wrap',
       marginBottom: 14,
     } as React.CSSProperties,
-    btn: (kind: 'primary' | 'ghost' | 'green' = 'ghost') =>
+
+    btn: (kind: 'primary' | 'ghost' | 'green' | 'danger' = 'ghost') =>
       ({
         border: '1px solid',
-        borderColor: kind === 'primary' ? '#6d28d9' : kind === 'green' ? '#16a34a' : '#ddd',
-        background: kind === 'primary' ? '#6d28d9' : kind === 'green' ? '#16a34a' : '#fff',
-        color: kind === 'primary' || kind === 'green' ? '#fff' : '#111',
+        borderColor:
+          kind === 'primary'
+            ? '#6d28d9'
+            : kind === 'green'
+            ? '#16a34a'
+            : kind === 'danger'
+            ? '#ef4444'
+            : '#ddd',
+        background:
+          kind === 'primary'
+            ? '#6d28d9'
+            : kind === 'green'
+            ? '#16a34a'
+            : kind === 'danger'
+            ? '#ef4444'
+            : '#fff',
+        color:
+          kind === 'primary' || kind === 'green' || kind === 'danger' ? '#fff' : '#111',
         padding: '9px 12px',
         borderRadius: 12,
         cursor: 'pointer',
         fontWeight: 800,
         fontSize: 14,
+        whiteSpace: 'nowrap',
       }) as React.CSSProperties,
+
     smallBtn: {
       border: '1px solid #ddd',
       background: '#fff',
@@ -620,7 +990,9 @@ export default function ProductsPage() {
       cursor: 'pointer',
       fontWeight: 800,
       fontSize: 12,
+      whiteSpace: 'nowrap',
     } as React.CSSProperties,
+
     dangerSmallBtn: {
       border: '1px solid #fecaca',
       background: '#fff',
@@ -630,7 +1002,9 @@ export default function ProductsPage() {
       cursor: 'pointer',
       fontWeight: 800,
       fontSize: 12,
+      whiteSpace: 'nowrap',
     } as React.CSSProperties,
+
     card: {
       background: '#fff',
       border: '1px solid #e6e6ef',
@@ -638,17 +1012,26 @@ export default function ProductsPage() {
       padding: 14,
       boxShadow: '0 8px 24px rgba(124, 58, 237, 0.05)',
     } as React.CSSProperties,
-    tableWrap: { overflowX: 'auto' } as React.CSSProperties,
+
+    tableWrap: {
+      width: '100%',
+      maxHeight: 'calc(100vh - 270px)',
+      overflowY: 'auto',
+      overflowX: 'auto',
+      borderRadius: 18,
+      border: '1px solid #e6e6ef',
+      background: '#fff',
+      boxShadow: '0 8px 24px rgba(124, 58, 237, 0.05)',
+    } as React.CSSProperties,
+
     table: {
       width: '100%',
-      minWidth: 1520,
+      minWidth: 1640,
       borderCollapse: 'separate',
       borderSpacing: 0,
       background: '#fff',
-      border: '1px solid #e6e6ef',
-      borderRadius: 18,
-      overflow: 'hidden',
     } as React.CSSProperties,
+
     th: {
       textAlign: 'left',
       fontSize: 12,
@@ -658,7 +1041,11 @@ export default function ProductsPage() {
       background: '#fafafa',
       fontWeight: 900,
       whiteSpace: 'nowrap',
+      position: 'sticky',
+      top: 0,
+      zIndex: 5,
     } as React.CSSProperties,
+
     td: {
       padding: '12px 10px',
       borderBottom: '1px solid #f0f0f5',
@@ -666,7 +1053,9 @@ export default function ProductsPage() {
       verticalAlign: 'middle',
       whiteSpace: 'nowrap',
     } as React.CSSProperties,
+
     small: { fontSize: 12, color: '#6b7280' } as React.CSSProperties,
+
     input: {
       border: '1px solid #d9d9e6',
       borderRadius: 12,
@@ -677,8 +1066,11 @@ export default function ProductsPage() {
       width: '100%',
       boxSizing: 'border-box',
     } as React.CSSProperties,
+
     field: { display: 'grid', gap: 6 } as React.CSSProperties,
+
     label: { fontSize: 12, color: '#374151', fontWeight: 800 } as React.CSSProperties,
+
     modalOverlay: {
       position: 'fixed',
       inset: 0,
@@ -689,8 +1081,9 @@ export default function ProductsPage() {
       padding: 16,
       zIndex: 50,
     } as React.CSSProperties,
+
     modal: {
-      width: 'min(1100px, 96vw)',
+      width: 'min(1200px, 96vw)',
       maxHeight: '90vh',
       overflow: 'auto',
       background: '#fff',
@@ -699,6 +1092,7 @@ export default function ProductsPage() {
       boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
       padding: 16,
     } as React.CSSProperties,
+
     modalHeader: {
       display: 'flex',
       justifyContent: 'space-between',
@@ -706,12 +1100,14 @@ export default function ProductsPage() {
       gap: 10,
       marginBottom: 12,
     } as React.CSSProperties,
+
     grid2: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
       gap: 12,
       alignItems: 'start',
     } as React.CSSProperties,
+
     badge: (kind: 'orange' | 'green' | 'gray' = 'gray') =>
       ({
         display: 'inline-flex',
@@ -720,15 +1116,19 @@ export default function ProductsPage() {
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 800,
-        background: kind === 'orange' ? '#ffedd5' : kind === 'green' ? '#dcfce7' : '#f3f4f6',
-        color: kind === 'orange' ? '#9a3412' : kind === 'green' ? '#166534' : '#374151',
+        background:
+          kind === 'orange' ? '#ffedd5' : kind === 'green' ? '#dcfce7' : '#f3f4f6',
+        color:
+          kind === 'orange' ? '#9a3412' : kind === 'green' ? '#166534' : '#374151',
       }) as React.CSSProperties,
+
     thumbCell: {
       display: 'flex',
       alignItems: 'center',
       gap: 10,
       minWidth: 220,
     } as React.CSSProperties,
+
     thumb: {
       width: 48,
       height: 48,
@@ -738,17 +1138,77 @@ export default function ProductsPage() {
       background: '#f3f4f6',
       flexShrink: 0,
     } as React.CSSProperties,
+
+    checkCell: {
+      textAlign: 'center',
+      width: 52,
+    } as React.CSSProperties,
   }
 
   return (
-    <div style={styles.page}>
+    <div ref={pageRef} style={styles.page}>
       <div style={styles.topbar}>
-        <div style={styles.title}>상품 / 재고관리</div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div style={styles.title}>상품 / 재고관리</div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              style={styles.btn('primary')}
+              onClick={openBulkModal}
+              disabled={selectedRows.length === 0 || loading}
+            >
+              선택 입고처리 ({selectedRows.length})
+            </button>
+
+            <button
+              style={styles.btn('ghost')}
+              onClick={revertSelectedLatest}
+              disabled={selectedItemIds.length === 0 || loading}
+            >
+              선택 미도착(최근취소)
+            </button>
+
+            <button
+              style={styles.btn('ghost')}
+              onClick={revertSelectedAll}
+              disabled={selectedItemIds.length === 0 || loading}
+            >
+              선택 미도착(전체삭제)
+            </button>
+
+            <button
+              style={styles.btn('danger')}
+              onClick={deleteSelectedItems}
+              disabled={selectedItemIds.length === 0 || loading}
+            >
+              체크상품삭제
+            </button>
+
+            <button
+              style={styles.btn('ghost')}
+              onClick={toggleSelectAllVisible}
+              disabled={visibleRows.length === 0}
+            >
+              {visibleRows.length > 0 &&
+              visibleRows.every((row) => selectedItemIds.includes(row.item.id))
+                ? '보이는 항목 선택해제'
+                : '보이는 항목 전체선택'}
+            </button>
+
+            <button
+              style={styles.btn('ghost')}
+              onClick={clearSelectedItems}
+              disabled={selectedItemIds.length === 0}
+            >
+              선택해제
+            </button>
+          </div>
+        </div>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             style={{ ...styles.input, width: 240 }}
-            placeholder="상품명 / 거래처 검색"
+            placeholder="상품명 / 거래처 / 메모 검색"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -766,20 +1226,97 @@ export default function ProductsPage() {
             <option value="재고없음">재고없음</option>
           </select>
 
-          <button style={styles.btn('ghost')} onClick={load} disabled={loading}>
+          <select
+            style={{ ...styles.input, width: 180 }}
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+          >
+            <option value="name_asc">상품명 오름차순</option>
+            <option value="name_desc">상품명 내림차순</option>
+            <option value="purchase_recent">매입일 최근순</option>
+            <option value="purchase_old">매입일 오래된순</option>
+            <option value="stock_desc">재고 많은순</option>
+            <option value="stock_asc">재고 적은순</option>
+            <option value="cost_desc">원가 높은순</option>
+            <option value="cost_asc">원가 낮은순</option>
+            <option value="created_recent">등록 최근순</option>
+            <option value="created_old">등록 오래된순</option>
+          </select>
+
+          <button style={styles.btn('ghost')} onClick={() => load()} disabled={loading}>
             새로고침
           </button>
         </div>
       </div>
 
+      <div
+        style={{
+          ...styles.card,
+          marginBottom: 12,
+          display: 'flex',
+          gap: 18,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}
+      >
+        <div style={styles.small}>
+          상품 종류수 <b>{summary.totalKinds}개</b>
+        </div>
+        <div style={styles.small}>
+          상품 총수량 <b>{fmtNum(summary.totalQty)}개</b>
+        </div>
+        <div style={styles.small}>
+          현재재고 <b>{fmtNum(summary.totalStock)}개</b>
+        </div>
+        <div style={styles.small}>
+          미도착 <b>{fmtNum(summary.totalUndelivered)}개</b>
+        </div>
+      </div>
+
+      {selectedItemIds.length > 0 ? (
+        <div
+          style={{
+            ...styles.card,
+            marginBottom: 12,
+            background: '#faf5ff',
+            borderColor: '#ddd6fe',
+          }}
+        >
+          <div style={{ fontWeight: 900, color: '#5b21b6', marginBottom: 6 }}>
+            체크된 상품 {selectedItemIds.length}개
+          </div>
+          <div style={{ fontSize: 13, color: '#6b7280' }}>
+            선택 입고처리 / 선택 미도착 / 체크상품삭제를 한 번에 할 수 있어.
+          </div>
+        </div>
+      ) : null}
+
       {msg ? (
-        <div style={{ ...styles.card, marginBottom: 12, background: '#ecfdf5', borderColor: '#bbf7d0', color: '#065f46', fontWeight: 800 }}>
+        <div
+          style={{
+            ...styles.card,
+            marginBottom: 12,
+            background: '#ecfdf5',
+            borderColor: '#bbf7d0',
+            color: '#065f46',
+            fontWeight: 800,
+          }}
+        >
           ✅ {msg}
         </div>
       ) : null}
 
       {err ? (
-        <div style={{ ...styles.card, marginBottom: 12, background: '#fef2f2', borderColor: '#fecaca', color: '#991b1b', fontWeight: 800 }}>
+        <div
+          style={{
+            ...styles.card,
+            marginBottom: 12,
+            background: '#fef2f2',
+            borderColor: '#fecaca',
+            color: '#991b1b',
+            fontWeight: 800,
+          }}
+        >
           ❌ {err}
         </div>
       ) : null}
@@ -793,6 +1330,16 @@ export default function ProductsPage() {
           <table style={styles.table}>
             <thead>
               <tr>
+                <th style={{ ...styles.th, ...styles.checkCell }}>
+                  <input
+                    type="checkbox"
+                    checked={
+                      visibleRows.length > 0 &&
+                      visibleRows.every((row) => selectedItemIds.includes(row.item.id))
+                    }
+                    onChange={toggleSelectAllVisible}
+                  />
+                </th>
                 <th style={styles.th}>상품</th>
                 <th style={styles.th}>매입일</th>
                 <th style={styles.th}>거래처</th>
@@ -814,15 +1361,29 @@ export default function ProductsPage() {
             </thead>
             <tbody>
               {rows.map((row) => {
-                const onlineProfit = n(row.item.online_price) - n(row.item.online_shipping) - row.finalUnitCost
+                const onlineProfit =
+                  n(row.item.online_price) - n(row.item.online_shipping) - row.finalUnitCost
                 const offlineProfit = n(row.item.offline_price) - row.finalUnitCost
+                const isChecked = selectedItemIds.includes(row.item.id)
 
                 return (
                   <tr key={row.item.id}>
+                    <td style={{ ...styles.td, ...styles.checkCell }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelectItem(row.item.id)}
+                      />
+                    </td>
+
                     <td style={styles.td}>
                       <div style={styles.thumbCell}>
                         {row.photoUrl ? (
-                          <img src={row.photoUrl} alt={row.item.item_name ?? '상품'} style={styles.thumb} />
+                          <img
+                            src={row.photoUrl}
+                            alt={row.item.item_name ?? '상품'}
+                            style={styles.thumb}
+                          />
                         ) : (
                           <div
                             style={{
@@ -838,7 +1399,9 @@ export default function ProductsPage() {
                           </div>
                         )}
                         <div>
-                          <div style={{ fontWeight: 900 }}>{row.item.item_name ?? '(이름 없음)'}</div>
+                          <div style={{ fontWeight: 900 }}>
+                            {row.item.item_name ?? '(이름 없음)'}
+                          </div>
                           {row.isReservationOpen ? (
                             <div style={{ marginTop: 4 }}>
                               <span style={styles.badge('orange')}>예약</span>
@@ -851,19 +1414,47 @@ export default function ProductsPage() {
                     <td style={styles.td}>{fmtDate(row.purchase?.purchase_date)}</td>
                     <td style={styles.td}>{row.purchase?.supplier ?? '(거래처 없음)'}</td>
                     <td style={styles.td}>
-                      <div><b>{fmtKRW(row.finalUnitCost)}</b></div>
+                      <div>
+                        <b>{fmtKRW(row.finalUnitCost)}</b>
+                      </div>
                       <div style={styles.small}>배분포함</div>
                     </td>
                     <td style={styles.td}>{fmtNum(row.totalQty)}</td>
                     <td style={styles.td}>{fmtNum(row.arrivedQty)}</td>
                     <td style={styles.td}>{fmtNum(row.soldQty)}</td>
-                    <td style={styles.td}><b>{fmtNum(row.stockQty)}</b></td>
+                    <td style={styles.td}>
+                      <b>{fmtNum(row.stockQty)}</b>
+                    </td>
                     <td style={styles.td}>{fmtNum(row.remainingArrivalQty)}</td>
-                    <td style={styles.td}>{n(row.item.online_price) > 0 ? fmtKRW(n(row.item.online_price)) : '미입력'}</td>
-                    <td style={styles.td}>{n(row.item.online_shipping) > 0 ? fmtKRW(n(row.item.online_shipping)) : '미입력'}</td>
-                    <td style={styles.td}>{n(row.item.online_price) > 0 ? <b>{fmtKRW(onlineProfit)}</b> : '미입력'}</td>
-                    <td style={styles.td}>{n(row.item.offline_price) > 0 ? fmtKRW(n(row.item.offline_price)) : '미입력'}</td>
-                    <td style={styles.td}>{n(row.item.offline_price) > 0 ? <b>{fmtKRW(offlineProfit)}</b> : '미입력'}</td>
+                    <td style={styles.td}>
+                      {n(row.item.online_price) > 0
+                        ? fmtKRW(n(row.item.online_price))
+                        : '미입력'}
+                    </td>
+                    <td style={styles.td}>
+                      {n(row.item.online_shipping) > 0
+                        ? fmtKRW(n(row.item.online_shipping))
+                        : '미입력'}
+                    </td>
+                    <td style={styles.td}>
+                      {n(row.item.online_price) > 0 ? (
+                        <b>{fmtKRW(onlineProfit)}</b>
+                      ) : (
+                        '미입력'
+                      )}
+                    </td>
+                    <td style={styles.td}>
+                      {n(row.item.offline_price) > 0
+                        ? fmtKRW(n(row.item.offline_price))
+                        : '미입력'}
+                    </td>
+                    <td style={styles.td}>
+                      {n(row.item.offline_price) > 0 ? (
+                        <b>{fmtKRW(offlineProfit)}</b>
+                      ) : (
+                        '미입력'
+                      )}
+                    </td>
                     <td style={styles.td}>{fmtDate(row.lastArrivedDate)}</td>
                     <td style={styles.td}>
                       {row.isComplete ? (
@@ -878,22 +1469,41 @@ export default function ProductsPage() {
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {!row.isComplete ? (
                           <>
-                            <button style={styles.smallBtn} onClick={() => openArrivalModal(row.item)}>
+                            <button
+                              style={styles.smallBtn}
+                              onClick={() => openArrivalModal(row.item)}
+                            >
                               부분입고
                             </button>
-                            <button style={styles.btn('green')} onClick={() => completeArrival(row.item)}>
+                            <button
+                              style={styles.btn('green')}
+                              onClick={() => {
+                                const input = prompt(
+                                  '입고날짜를 입력해줘 (YYYY-MM-DD)',
+                                  new Date().toISOString().slice(0, 10)
+                                )
+                                if (input === null) return
+                                completeArrival(row.item, input)
+                              }}
+                            >
                               입고완료
                             </button>
                           </>
                         ) : null}
 
                         {row.arrivedQty > 0 ? (
-                          <button style={styles.smallBtn} onClick={() => revertToUndelivered(row.item.id)}>
+                          <button
+                            style={styles.smallBtn}
+                            onClick={() => revertToUndelivered(row.item.id)}
+                          >
                             미도착으로
                           </button>
                         ) : null}
 
-                        <button style={styles.smallBtn} onClick={() => openHistoryModal(row.item)}>
+                        <button
+                          style={styles.smallBtn}
+                          onClick={() => openHistoryModal(row.item)}
+                        >
                           입고이력
                         </button>
                         <button style={styles.smallBtn} onClick={() => openEditModal(row.item)}>
@@ -906,6 +1516,121 @@ export default function ProductsPage() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {bulkModalOpen && (
+        <div style={styles.modalOverlay} onMouseDown={() => setBulkModalOpen(false)}>
+          <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div style={{ fontSize: 18, fontWeight: 900 }}>선택 상품 일괄 입고처리</div>
+              <button style={styles.btn('ghost')} onClick={() => setBulkModalOpen(false)}>
+                닫기
+              </button>
+            </div>
+
+            <div
+              style={{
+                ...styles.card,
+                marginBottom: 12,
+                background: '#faf5ff',
+                borderColor: '#ddd6fe',
+              }}
+            >
+              <div style={{ fontWeight: 900, color: '#5b21b6' }}>
+                선택된 상품 {selectedRows.length}개
+              </div>
+              <div style={{ ...styles.small, marginTop: 4 }}>
+                같은 날짜에 들어온 상품은 여기서 한 번에 처리하면 돼.
+              </div>
+            </div>
+
+            <div style={styles.grid2}>
+              <div style={styles.field}>
+                <div style={styles.label}>입고날짜</div>
+                <input
+                  style={styles.input}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="YYYY-MM-DD"
+                  value={bulkArrivalDate}
+                  onChange={(e) => setBulkArrivalDate(formatDateTyping(e.target.value))}
+                />
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.label}>메모</div>
+                <input
+                  style={styles.input}
+                  value={bulkArrivalMemo}
+                  onChange={(e) => setBulkArrivalMemo(e.target.value)}
+                  placeholder="선택"
+                />
+              </div>
+            </div>
+
+            <div style={{ ...styles.card, marginTop: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>상품별 입고수량</div>
+
+              <div style={{ display: 'grid', gap: 10 }}>
+                {selectedRows.map((row) => (
+                  <div
+                    key={row.item.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 140px 140px',
+                      gap: 10,
+                      alignItems: 'center',
+                      padding: '10px 0',
+                      borderBottom: '1px solid #f0f0f5',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 800 }}>{row.item.item_name ?? '(이름 없음)'}</div>
+                      <div style={styles.small}>
+                        거래처 {row.purchase?.supplier ?? '(거래처 없음)'} / 남은 미도착{' '}
+                        {fmtNum(row.remainingArrivalQty)}개
+                      </div>
+                    </div>
+
+                    <input
+                      style={styles.input}
+                      value={bulkQtyMap[row.item.id] ?? ''}
+                      onChange={(e) =>
+                        setBulkQtyMap((prev) => ({
+                          ...prev,
+                          [row.item.id]: e.target.value,
+                        }))
+                      }
+                      placeholder="입고수량"
+                    />
+
+                    <button
+                      style={styles.smallBtn}
+                      onClick={() =>
+                        setBulkQtyMap((prev) => ({
+                          ...prev,
+                          [row.item.id]: String(row.remainingArrivalQty),
+                        }))
+                      }
+                    >
+                      남은수량 전부
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button style={styles.btn('ghost')} onClick={() => setBulkModalOpen(false)}>
+                닫기
+              </button>
+              <button style={styles.btn('primary')} onClick={saveBulkArrival}>
+                저장
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -923,14 +1648,24 @@ export default function ProductsPage() {
               <div style={{ fontWeight: 900 }}>{arrivalTarget.item_name ?? '(이름 없음)'}</div>
               <div style={styles.small}>
                 총수량: {fmtNum(n(arrivalTarget.qty))} / 현재입고:{' '}
-                {fmtNum((arrivalsByItem.get(arrivalTarget.id) ?? []).reduce((acc, a) => acc + n(a.arrived_qty), 0))}
+                {fmtNum(
+                  (arrivalsByItem.get(arrivalTarget.id) ?? []).reduce(
+                    (acc, a) => acc + n(a.arrived_qty),
+                    0
+                  )
+                )}
               </div>
             </div>
 
             <div style={styles.grid2}>
               <div style={styles.field}>
                 <div style={styles.label}>입고수량</div>
-                <input style={styles.input} value={arrivalQty} onChange={(e) => setArrivalQty(e.target.value)} placeholder="숫자만" />
+                <input
+                  style={styles.input}
+                  value={arrivalQty}
+                  onChange={(e) => setArrivalQty(e.target.value)}
+                  placeholder="숫자만"
+                />
               </div>
 
               <div style={styles.field}>
@@ -949,7 +1684,12 @@ export default function ProductsPage() {
 
             <div style={{ ...styles.field, marginTop: 12 }}>
               <div style={styles.label}>메모</div>
-              <input style={styles.input} value={arrivalMemo} onChange={(e) => setArrivalMemo(e.target.value)} placeholder="선택" />
+              <input
+                style={styles.input}
+                value={arrivalMemo}
+                onChange={(e) => setArrivalMemo(e.target.value)}
+                placeholder="선택"
+              />
             </div>
 
             <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
@@ -979,17 +1719,32 @@ export default function ProductsPage() {
             <div style={styles.grid2}>
               <div style={styles.field}>
                 <div style={styles.label}>온라인판매가</div>
-                <input style={styles.input} value={eOnlinePrice} onChange={(e) => setEOnlinePrice(e.target.value)} placeholder="숫자만" />
+                <input
+                  style={styles.input}
+                  value={eOnlinePrice}
+                  onChange={(e) => setEOnlinePrice(e.target.value)}
+                  placeholder="숫자만"
+                />
               </div>
 
               <div style={styles.field}>
                 <div style={styles.label}>온라인배송비</div>
-                <input style={styles.input} value={eOnlineShipping} onChange={(e) => setEOnlineShipping(e.target.value)} placeholder="숫자만" />
+                <input
+                  style={styles.input}
+                  value={eOnlineShipping}
+                  onChange={(e) => setEOnlineShipping(e.target.value)}
+                  placeholder="숫자만"
+                />
               </div>
 
               <div style={styles.field}>
                 <div style={styles.label}>오프라인판매가</div>
-                <input style={styles.input} value={eOfflinePrice} onChange={(e) => setEOfflinePrice(e.target.value)} placeholder="숫자만" />
+                <input
+                  style={styles.input}
+                  value={eOfflinePrice}
+                  onChange={(e) => setEOfflinePrice(e.target.value)}
+                  placeholder="숫자만"
+                />
               </div>
             </div>
 
@@ -1047,7 +1802,9 @@ export default function ProductsPage() {
               <tbody>
                 {(arrivalsByItem.get(historyTarget.id) ?? []).length === 0 ? (
                   <tr>
-                    <td style={styles.td} colSpan={5}>입고이력이 없어.</td>
+                    <td style={styles.td} colSpan={5}>
+                      입고이력이 없어.
+                    </td>
                   </tr>
                 ) : (
                   (arrivalsByItem.get(historyTarget.id) ?? []).map((a) => (
@@ -1072,7 +1829,10 @@ export default function ProductsPage() {
                           <button style={styles.smallBtn} onClick={() => openEditArrivalModal(a)}>
                             수정
                           </button>
-                          <button style={styles.dangerSmallBtn} onClick={() => deleteArrival(a.id)}>
+                          <button
+                            style={styles.dangerSmallBtn}
+                            onClick={() => deleteArrival(a.id)}
+                          >
                             삭제
                           </button>
                         </div>

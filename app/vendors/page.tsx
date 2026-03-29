@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import SafeModal from '../../components/SafeModal'
-import PageBackButton from '../../components/PageBackButton'
 
 type VendorRow = {
   id: string
@@ -24,6 +23,17 @@ type VendorRow = {
   memo?: string | null
 }
 
+type PurchaseRow = {
+  id: string
+  supplier?: string | null
+}
+
+type PurchaseCostRow = {
+  id: string
+  vendor_name?: string | null
+  cost_type?: string | null
+}
+
 function fmtDateTime(v?: string | null) {
   if (!v) return '-'
   try {
@@ -33,8 +43,14 @@ function fmtDateTime(v?: string | null) {
   }
 }
 
+function normalizeName(v?: string | null) {
+  return String(v ?? '').trim().toLowerCase()
+}
+
 export default function VendorsPage() {
   const [vendors, setVendors] = useState<VendorRow[]>([])
+  const [purchases, setPurchases] = useState<PurchaseRow[]>([])
+  const [purchaseCosts, setPurchaseCosts] = useState<PurchaseCostRow[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
@@ -64,18 +80,42 @@ export default function VendorsPage() {
     setErr(null)
     setMsg(null)
 
-    const res = await supabase
-      .from('vendors')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const [vendorRes, purchaseRes, purchaseCostRes] = await Promise.all([
+      supabase
+        .from('vendors')
+        .select('*')
+        .order('created_at', { ascending: false }),
 
-    if (res.error) {
-      setErr(res.error.message)
+      supabase
+        .from('purchase')
+        .select('id,supplier'),
+
+      supabase
+        .from('purchase_costs')
+        .select('id,vendor_name,cost_type'),
+    ])
+
+    if (vendorRes.error) {
+      setErr(vendorRes.error.message)
       setLoading(false)
       return
     }
 
-    setVendors((res.data ?? []) as VendorRow[])
+    if (purchaseRes.error) {
+      setErr(purchaseRes.error.message)
+      setLoading(false)
+      return
+    }
+
+    if (purchaseCostRes.error) {
+      setErr(purchaseCostRes.error.message)
+      setLoading(false)
+      return
+    }
+
+    setVendors((vendorRes.data ?? []) as VendorRow[])
+    setPurchases((purchaseRes.data ?? []) as PurchaseRow[])
+    setPurchaseCosts((purchaseCostRes.data ?? []) as PurchaseCostRow[])
     setLoading(false)
   }
 
@@ -83,11 +123,67 @@ export default function VendorsPage() {
     load()
   }, [])
 
+  const purchaseUsageCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+
+    purchases.forEach((p) => {
+      const key = normalizeName(p.supplier)
+      if (!key) return
+      map.set(key, (map.get(key) ?? 0) + 1)
+    })
+
+    return map
+  }, [purchases])
+
+  const costUsageCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+
+    purchaseCosts.forEach((c) => {
+      const key = normalizeName(c.vendor_name)
+      if (!key) return
+      map.set(key, (map.get(key) ?? 0) + 1)
+    })
+
+    return map
+  }, [purchaseCosts])
+
+  function getUsageInfo(v: VendorRow) {
+    const key = normalizeName(v.name)
+    const purchaseCount = purchaseUsageCountMap.get(key) ?? 0
+    const costCount = costUsageCountMap.get(key) ?? 0
+
+    const totalCount = purchaseCount + costCount
+
+    let label = `이용 ${totalCount}회`
+
+    if (v.is_product_supplier && !v.is_forwarder && !v.is_carry_in) {
+      label = `매입 ${purchaseCount}회`
+    } else if (!v.is_product_supplier && (v.is_forwarder || v.is_carry_in)) {
+      label = `추가비용 ${costCount}회`
+    } else if (v.is_product_supplier && (v.is_forwarder || v.is_carry_in)) {
+      label = `매입 ${purchaseCount}회 / 추가비용 ${costCount}회`
+    }
+
+    return {
+      purchaseCount,
+      costCount,
+      totalCount,
+      label,
+    }
+  }
+
+  function getActiveStatusLabel(v: VendorRow) {
+    return v.is_active === false ? '거래중단' : '사용중'
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return vendors
 
     return vendors.filter((v) => {
+      const usage = getUsageInfo(v)
+      const activeStatus = getActiveStatusLabel(v)
+
       const fields = [
         v.name,
         v.product_type,
@@ -96,10 +192,20 @@ export default function VendorsPage() {
         v.email,
         v.phone,
         v.memo,
+        `${usage.purchaseCount}`,
+        `${usage.costCount}`,
+        `${usage.totalCount}`,
+        usage.label,
+        activeStatus,
+        v.is_active === false ? '거래중단' : '사용중',
+        `매입 ${usage.purchaseCount}회`,
+        `추가비용 ${usage.costCount}회`,
+        `이용 ${usage.totalCount}회`,
       ]
+
       return fields.some((x) => String(x || '').toLowerCase().includes(q))
     })
-  }, [vendors, search])
+  }, [vendors, search, purchaseUsageCountMap, costUsageCountMap])
 
   function resetForm() {
     setEditingId(null)
@@ -415,8 +521,6 @@ export default function VendorsPage() {
 
   return (
     <div style={styles.page}>
-      <PageBackButton />
-
       <div style={styles.topbar}>
         <div style={styles.title}>거래처관리</div>
 
@@ -445,113 +549,155 @@ export default function VendorsPage() {
         <div style={styles.card}>불러오는 중...</div>
       ) : (
         <div
+          data-vendors-grid="true"
           style={{
             ...styles.grid,
           }}
         >
-          {filtered.map((v) => (
-            <div key={v.id} style={styles.card}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                  marginBottom: 10,
-                }}
-              >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 18,
-                      fontWeight: 900,
-                      color: '#111827',
-                      lineHeight: 1.2,
-                      wordBreak: 'break-word',
-                      marginBottom: 8,
-                    }}
-                  >
-                    {v.name || '(이름 없음)'}
+          {filtered.map((v) => {
+            const usage = getUsageInfo(v)
+            const activeStatus = getActiveStatusLabel(v)
+
+            return (
+              <div key={v.id} style={styles.card}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    marginBottom: 10,
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 900,
+                        color: '#111827',
+                        lineHeight: 1.2,
+                        wordBreak: 'break-word',
+                        marginBottom: 8,
+                      }}
+                    >
+                      {v.name || '(이름 없음)'}
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {v.is_online ? (
+                        <span style={styles.badge('#dbeafe', '#1d4ed8')}>온라인</span>
+                      ) : null}
+                      {v.is_offline ? (
+                        <span style={styles.badge('#fef3c7', '#92400e')}>오프라인</span>
+                      ) : null}
+                      {v.is_product_supplier ? (
+                        <span style={styles.badge('#ede9fe', '#6d28d9')}>상품거래처</span>
+                      ) : null}
+                      {v.is_forwarder ? (
+                        <span style={styles.badge('#e0e7ff', '#4338ca')}>배대지</span>
+                      ) : null}
+                      {v.is_carry_in ? (
+                        <span style={styles.badge('#fae8ff', '#a21caf')}>휴대품반입</span>
+                      ) : null}
+                      {v.is_domestic ? (
+                        <span style={styles.badge('#dcfce7', '#166534')}>국내</span>
+                      ) : (
+                        <span style={styles.badge('#ecfccb', '#3f6212')}>해외</span>
+                      )}
+                      {v.is_active === false ? (
+                        <span style={styles.badge('#fee2e2', '#b91c1c')}>거래중단</span>
+                      ) : (
+                        <span style={styles.badge('#dcfce7', '#166534')}>사용중</span>
+                      )}
+                      <span style={styles.badge('#f3f4f6', '#374151')}>{usage.label}</span>
+                    </div>
                   </div>
 
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {v.is_online ? <span style={styles.badge('#dbeafe', '#1d4ed8')}>온라인</span> : null}
-                    {v.is_offline ? <span style={styles.badge('#fef3c7', '#92400e')}>오프라인</span> : null}
-                    {v.is_product_supplier ? <span style={styles.badge('#ede9fe', '#6d28d9')}>상품거래처</span> : null}
-                    {v.is_forwarder ? <span style={styles.badge('#e0e7ff', '#4338ca')}>배대지</span> : null}
-                    {v.is_carry_in ? <span style={styles.badge('#fae8ff', '#a21caf')}>휴대품반입</span> : null}
-                    {v.is_domestic ? (
-                      <span style={styles.badge('#dcfce7', '#166534')}>국내</span>
-                    ) : (
-                      <span style={styles.badge('#ecfccb', '#3f6212')}>해외</span>
-                    )}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'row',
+                      gap: 6,
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <button style={styles.actionBtn} onClick={() => openEdit(v)}>
+                      수정
+                    </button>
+                    <button style={styles.actionDeleteBtn} onClick={() => deleteVendor(v.id)}>
+                      삭제
+                    </button>
                   </div>
                 </div>
 
                 <div
                   style={{
-                    display: 'flex',
-                    flexDirection: 'row',
-                    gap: 6,
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    flexShrink: 0,
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '10px 14px',
+                    marginTop: 4,
                   }}
                 >
-                  <button style={styles.actionBtn} onClick={() => openEdit(v)}>
-                    수정
-                  </button>
-                  <button style={styles.actionDeleteBtn} onClick={() => deleteVendor(v.id)}>
-                    삭제
-                  </button>
+                  <div>
+                    <div style={styles.detailLabel}>상품종류</div>
+                    <div style={styles.detailValue}>{v.product_type || '-'}</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>사용 상태</div>
+                    <div style={styles.detailValue}>{activeStatus}</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>이용현황</div>
+                    <div style={styles.detailValue}>{usage.label}</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>매입건수</div>
+                    <div style={styles.detailValue}>{usage.purchaseCount}회</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>추가비용건수</div>
+                    <div style={styles.detailValue}>{usage.costCount}회</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>전화번호</div>
+                    <div style={styles.detailValue}>{v.phone || '-'}</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.detailLabel}>이메일</div>
+                    <div style={styles.detailValue}>{v.email || '-'}</div>
+                  </div>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={styles.detailLabel}>주소/온라인주소</div>
+                    <div style={styles.detailValue}>{v.address || '-'}</div>
+                  </div>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={styles.detailLabel}>웹사이트</div>
+                    <div style={styles.detailValue}>{v.website || '-'}</div>
+                  </div>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={styles.detailLabel}>메모</div>
+                    <div style={styles.detailValue}>{v.memo || '-'}</div>
+                  </div>
+
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={styles.detailLabel}>등록</div>
+                    <div style={styles.detailValue}>{fmtDateTime(v.created_at)}</div>
+                  </div>
                 </div>
               </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '10px 14px',
-                  marginTop: 4,
-                }}
-              >
-                <div>
-                  <div style={styles.detailLabel}>상품종류</div>
-                  <div style={styles.detailValue}>{v.product_type || '-'}</div>
-                </div>
-
-                <div>
-                  <div style={styles.detailLabel}>전화번호</div>
-                  <div style={styles.detailValue}>{v.phone || '-'}</div>
-                </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={styles.detailLabel}>주소/온라인주소</div>
-                  <div style={styles.detailValue}>{v.address || '-'}</div>
-                </div>
-
-                <div>
-                  <div style={styles.detailLabel}>웹사이트</div>
-                  <div style={styles.detailValue}>{v.website || '-'}</div>
-                </div>
-
-                <div>
-                  <div style={styles.detailLabel}>이메일</div>
-                  <div style={styles.detailValue}>{v.email || '-'}</div>
-                </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={styles.detailLabel}>메모</div>
-                  <div style={styles.detailValue}>{v.memo || '-'}</div>
-                </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={styles.detailLabel}>등록</div>
-                  <div style={styles.detailValue}>{fmtDateTime(v.created_at)}</div>
-                </div>
-              </div>
-            </div>
-          ))}
+            )
+          })}
 
           {!loading && filtered.length === 0 ? (
             <div style={styles.card}>조건에 맞는 거래처가 없어.</div>
