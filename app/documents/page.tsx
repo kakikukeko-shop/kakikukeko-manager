@@ -126,6 +126,25 @@ const PURCHASE_SORT_OPTIONS = [
   { value: 'amount_asc', label: '총원화 작은순' },
 ] as const
 
+
+const ITEM_SORT_OPTIONS = [
+  { value: 'amount_desc', label: '원화합계 높은순' },
+  { value: 'amount_asc', label: '원화합계 낮은순' },
+  { value: 'name', label: '이름순' },
+  { value: 'final_unit_desc', label: '최종단가 높은순' },
+  { value: 'final_unit_asc', label: '최종단가 낮은순' },
+  { value: 'qty_desc', label: '수량 많은순' },
+  { value: 'qty_asc', label: '수량 작은순' },
+] as const
+
+const RELATED_COST_SORT_OPTIONS = [
+  { value: 'date_desc', label: '날짜 최신순' },
+  { value: 'date_asc', label: '날짜 오래된순' },
+  { value: 'amount_desc', label: '금액 높은순' },
+  { value: 'amount_asc', label: '금액 낮은순' },
+  { value: 'name', label: '이름순' },
+] as const
+
 function normalizeCostType(raw: string | null | undefined) {
   const v = String(raw ?? '').trim()
   if (!v) return ''
@@ -811,6 +830,10 @@ export default function DocumentsPage() {
   const [purchaseSearch, setPurchaseSearch] = useState('')
   const [purchaseSort, setPurchaseSort] =
     useState<(typeof PURCHASE_SORT_OPTIONS)[number]['value']>('recent')
+  const [itemSort, setItemSort] =
+    useState<(typeof ITEM_SORT_OPTIONS)[number]['value']>('amount_desc')
+  const [relatedCostSort, setRelatedCostSort] =
+    useState<(typeof RELATED_COST_SORT_OPTIONS)[number]['value']>('date_desc')
 
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -1060,6 +1083,32 @@ export default function DocumentsPage() {
     return map
   }, [allocations])
 
+  const sortedVisibleItems = useMemo(() => {
+    const list = [...visibleItems]
+
+    list.sort((a, b) => {
+      if (itemSort === 'name') {
+        return (a.item_name ?? '').localeCompare(b.item_name ?? '', 'ko-KR')
+      }
+
+      if (itemSort === 'amount_desc') return n(b.line_total) - n(a.line_total)
+      if (itemSort === 'amount_asc') return n(a.line_total) - n(b.line_total)
+
+      if (itemSort === 'qty_desc') return n(b.qty) - n(a.qty)
+      if (itemSort === 'qty_asc') return n(a.qty) - n(b.qty)
+
+      const finalUnitA = Math.ceil((n(a.line_total) + (allocationSumByItem.get(a.id) ?? 0)) / Math.max(1, n(a.qty)))
+      const finalUnitB = Math.ceil((n(b.line_total) + (allocationSumByItem.get(b.id) ?? 0)) / Math.max(1, n(b.qty)))
+
+      if (itemSort === 'final_unit_desc') return finalUnitB - finalUnitA
+      if (itemSort === 'final_unit_asc') return finalUnitA - finalUnitB
+
+      return 0
+    })
+
+    return list
+  }, [visibleItems, itemSort, allocationSumByItem])
+
   const selectedPurchaseRelatedCosts = useMemo(() => {
     if (!selectedPurchaseId) return []
 
@@ -1075,8 +1124,35 @@ export default function DocumentsPage() {
       }
     }
 
-    return costs.filter((c) => relatedCostIds.has(c.id))
-  }, [costs, allocations, selectedPurchaseId, selectedPurchaseItemIds])
+    const list = costs.filter((c) => relatedCostIds.has(c.id))
+
+    list.sort((a, b) => {
+      const dateA = a.cost_date ?? ''
+      const dateB = b.cost_date ?? ''
+
+      if (relatedCostSort === 'date_desc') {
+        if (dateA && dateB) return dateB.localeCompare(dateA)
+        if (dateA && !dateB) return -1
+        if (!dateA && dateB) return 1
+        return String(b.created_at).localeCompare(String(a.created_at))
+      }
+
+      if (relatedCostSort === 'date_asc') {
+        if (dateA && dateB) return dateA.localeCompare(dateB)
+        if (dateA && !dateB) return -1
+        if (!dateA && dateB) return 1
+        return String(a.created_at).localeCompare(String(b.created_at))
+      }
+
+      if (relatedCostSort === 'amount_desc') return n(b.amount) - n(a.amount)
+      if (relatedCostSort === 'amount_asc') return n(a.amount) - n(b.amount)
+      if (relatedCostSort === 'name') return (a.cost_type ?? '').localeCompare(b.cost_type ?? '', 'ko-KR')
+
+      return 0
+    })
+
+    return list
+  }, [costs, allocations, selectedPurchaseId, selectedPurchaseItemIds, relatedCostSort])
 
   const costTypeMap = useMemo(() => {
     const map = new Map<string, string | null>()
@@ -2635,6 +2711,19 @@ export default function DocumentsPage() {
                   onChange={(e) => setItemSearch(e.target.value)}
                   placeholder="현재 매입 상품 검색 (상품명/메모/거래처)"
                 />
+                <select
+                  style={{ ...styles.select, width: 220 }}
+                  value={itemSort}
+                  onChange={(e) =>
+                    setItemSort(e.target.value as (typeof ITEM_SORT_OPTIONS)[number]['value'])
+                  }
+                >
+                  {ITEM_SORT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
                 <div style={styles.small}>
                   {selectedPurchase ? (
                     <>
@@ -2674,14 +2763,14 @@ export default function DocumentsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleItems.length === 0 ? (
+                  {sortedVisibleItems.length === 0 ? (
                     <tr>
                       <td style={styles.td} colSpan={8}>
                         <span style={styles.small}>조건에 맞는 상품이 없어.</span>
                       </td>
                     </tr>
                   ) : (
-                    visibleItems.map((it) => {
+                    sortedVisibleItems.map((it) => {
                       const checked = selectedItemIds.includes(it.id)
                       const lineTotal = n(it.line_total)
                       const allocSum = allocationSumByItem.get(it.id) ?? 0
@@ -2861,7 +2950,32 @@ export default function DocumentsPage() {
             </div>
 
             <div style={styles.card}>
-              <div style={styles.h2}>{selectedPurchase ? '선택 매입 관련 추가비용' : '추가비용'}</div>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={styles.h2}>{selectedPurchase ? '선택 매입 관련 추가비용' : '추가비용'}</div>
+                <select
+                  style={{ ...styles.select, width: 200 }}
+                  value={relatedCostSort}
+                  onChange={(e) =>
+                    setRelatedCostSort(
+                      e.target.value as (typeof RELATED_COST_SORT_OPTIONS)[number]['value']
+                    )
+                  }
+                >
+                  {RELATED_COST_SORT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               <div style={{ display: 'grid', gap: 10, maxHeight: 240, overflowY: 'auto' }}>
                 {selectedPurchaseRelatedCosts.length === 0 && (

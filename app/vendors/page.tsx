@@ -47,12 +47,21 @@ function normalizeName(v?: string | null) {
   return String(v ?? '').trim().toLowerCase()
 }
 
+
+const VENDOR_SORT_OPTIONS = [
+  { value: 'name', label: '이름순' },
+  { value: 'usage_desc', label: '이용횟수 많은순' },
+  { value: 'usage_asc', label: '이용횟수 적은순' },
+] as const
+
 export default function VendorsPage() {
   const [vendors, setVendors] = useState<VendorRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [purchaseCosts, setPurchaseCosts] = useState<PurchaseCostRow[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [sort, setSort] =
+    useState<(typeof VENDOR_SORT_OPTIONS)[number]['value']>('name')
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -178,34 +187,48 @@ export default function VendorsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return vendors
 
-    return vendors.filter((v) => {
-      const usage = getUsageInfo(v)
-      const activeStatus = getActiveStatusLabel(v)
+    const searched = !q
+      ? vendors
+      : vendors.filter((v) => {
+          const usage = getUsageInfo(v)
+          const activeStatus = getActiveStatusLabel(v)
 
-      const fields = [
-        v.name,
-        v.product_type,
-        v.address,
-        v.website,
-        v.email,
-        v.phone,
-        v.memo,
-        `${usage.purchaseCount}`,
-        `${usage.costCount}`,
-        `${usage.totalCount}`,
-        usage.label,
-        activeStatus,
-        v.is_active === false ? '거래중단' : '사용중',
-        `매입 ${usage.purchaseCount}회`,
-        `추가비용 ${usage.costCount}회`,
-        `이용 ${usage.totalCount}회`,
-      ]
+          const fields = [
+            v.name,
+            v.product_type,
+            v.address,
+            v.website,
+            v.email,
+            v.phone,
+            v.memo,
+            `${usage.purchaseCount}`,
+            `${usage.costCount}`,
+            `${usage.totalCount}`,
+            usage.label,
+            activeStatus,
+            v.is_active === false ? '거래중단' : '사용중',
+            `매입 ${usage.purchaseCount}회`,
+            `추가비용 ${usage.costCount}회`,
+            `이용 ${usage.totalCount}회`,
+          ]
 
-      return fields.some((x) => String(x || '').toLowerCase().includes(q))
+          return fields.some((x) => String(x || '').toLowerCase().includes(q))
+        })
+
+    const list = [...searched]
+
+    list.sort((a, b) => {
+      const usageA = getUsageInfo(a)
+      const usageB = getUsageInfo(b)
+
+      if (sort === 'usage_desc') return usageB.totalCount - usageA.totalCount
+      if (sort === 'usage_asc') return usageA.totalCount - usageB.totalCount
+      return (a.name ?? '').localeCompare(b.name ?? '', 'ko-KR')
     })
-  }, [vendors, search, purchaseUsageCountMap, costUsageCountMap])
+
+    return list
+  }, [vendors, search, sort, purchaseUsageCountMap, costUsageCountMap])
 
   function resetForm() {
     setEditingId(null)
@@ -539,6 +562,19 @@ export default function VendorsPage() {
               placeholder="거래처 검색"
             />
           </div>
+          <div style={{ width: 180 }}>
+            <select
+              style={styles.input}
+              value={sort}
+              onChange={(e) => setSort(e.target.value as (typeof VENDOR_SORT_OPTIONS)[number]['value'])}
+            >
+              {VENDOR_SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -655,15 +691,6 @@ export default function VendorsPage() {
                     <div style={styles.detailValue}>{usage.label}</div>
                   </div>
 
-                  <div>
-                    <div style={styles.detailLabel}>매입건수</div>
-                    <div style={styles.detailValue}>{usage.purchaseCount}회</div>
-                  </div>
-
-                  <div>
-                    <div style={styles.detailLabel}>추가비용건수</div>
-                    <div style={styles.detailValue}>{usage.costCount}회</div>
-                  </div>
 
                   <div>
                     <div style={styles.detailLabel}>전화번호</div>

@@ -160,6 +160,17 @@ type AllocatedLine = {
 const STORAGE_BUCKET = 'purchase-files'
 const SALE_RECEIPT_TYPE = '매출영수증'
 
+
+const SALE_SORT_OPTIONS = [
+  { value: 'date_desc', label: '판매일 최신순' },
+  { value: 'date_asc', label: '판매일 오래된순' },
+  { value: 'name', label: '이름순' },
+  { value: 'profit_desc', label: '이익금액 높은순' },
+  { value: 'profit_asc', label: '이익금액 낮은순' },
+  { value: 'qty_desc', label: '수량 많은순' },
+  { value: 'qty_asc', label: '수량 작은순' },
+] as const
+
 const purpleBtn =
   'inline-flex items-center justify-center rounded-2xl bg-violet-600 px-4 py-2.5 text-sm font-extrabold text-white hover:bg-violet-700 active:scale-[0.99] disabled:opacity-60'
 
@@ -383,6 +394,8 @@ export default function SalesPage() {
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [channelFilter, setChannelFilter] = useState<'전체' | '온라인' | '오프라인'>('전체')
+  const [saleSort, setSaleSort] =
+    useState<(typeof SALE_SORT_OPTIONS)[number]['value']>('date_desc')
 
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -1085,7 +1098,7 @@ export default function SalesPage() {
   const filteredSales = useMemo(() => {
     const q = search.trim().toLowerCase()
 
-    return sales.filter((row) => {
+    const list = sales.filter((row) => {
       const itemNames = (row.sale_items || [])
         .map((item) => String(item.purchase_items?.item_name || ''))
         .join(' ')
@@ -1107,7 +1120,31 @@ export default function SalesPage() {
 
       return searchOk && channelOk
     })
-  }, [sales, search, channelFilter])
+
+    list.sort((a, b) => {
+      const nameA = (a.sale_items || [])
+        .map((item) => String(item.purchase_items?.item_name || ''))
+        .join(' / ')
+      const nameB = (b.sale_items || [])
+        .map((item) => String(item.purchase_items?.item_name || ''))
+        .join(' / ')
+      const qtyA = (a.sale_items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0)
+      const qtyB = (b.sale_items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0)
+      const dateA = String(a.sale_date || '')
+      const dateB = String(b.sale_date || '')
+
+      if (saleSort === 'name') return nameA.localeCompare(nameB, 'ko')
+      if (saleSort === 'profit_desc') return Number(b.profit_amount || 0) - Number(a.profit_amount || 0)
+      if (saleSort === 'profit_asc') return Number(a.profit_amount || 0) - Number(b.profit_amount || 0)
+      if (saleSort === 'qty_desc') return qtyB - qtyA
+      if (saleSort === 'qty_asc') return qtyA - qtyB
+      if (saleSort === 'date_asc') return dateA.localeCompare(dateB)
+
+      return dateB.localeCompare(dateA)
+    })
+
+    return list
+  }, [sales, search, channelFilter, saleSort])
 
   return (
     <div className="min-h-screen bg-[#f6f5fb] p-4 md:p-5">
@@ -1130,7 +1167,7 @@ export default function SalesPage() {
           </div>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[1fr_180px]">
+        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
           <input
             className={inputClass}
             placeholder="상품명 / 메모 / 판매일 검색"
@@ -1146,6 +1183,20 @@ export default function SalesPage() {
             <option value="전체">전체</option>
             <option value="온라인">온라인</option>
             <option value="오프라인">오프라인</option>
+          </select>
+
+          <select
+            className={inputClass}
+            value={saleSort}
+            onChange={(e) =>
+              setSaleSort(e.target.value as (typeof SALE_SORT_OPTIONS)[number]['value'])
+            }
+          >
+            {SALE_SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
 
