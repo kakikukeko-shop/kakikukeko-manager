@@ -19,6 +19,8 @@ type ItemRow = {
   is_preorder: boolean | null
   online_price: number | null
   online_shipping: number | null
+  online_shipping_general: number | null
+  online_shipping_convenience: number | null
   offline_price: number | null
   created_at: string
 }
@@ -94,6 +96,16 @@ function fmtNum(v: number) {
   return Number.isFinite(v) ? v.toLocaleString('ko-KR') : '0'
 }
 
+function getGeneralShipping(item: Pick<ItemRow, 'online_shipping' | 'online_shipping_general'>) {
+  const explicit = n(item.online_shipping_general)
+  if (explicit > 0) return explicit
+  return n(item.online_shipping)
+}
+
+function getConvenienceShipping(item: Pick<ItemRow, 'online_shipping_convenience'>) {
+  return n(item.online_shipping_convenience)
+}
+
 function normalizeDate(value: string | null | undefined) {
   if (!value) return ''
   const raw = String(value).trim()
@@ -166,7 +178,8 @@ export default function ProductsPage() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<ItemRow | null>(null)
   const [eOnlinePrice, setEOnlinePrice] = useState('')
-  const [eOnlineShipping, setEOnlineShipping] = useState('')
+  const [eOnlineShippingGeneral, setEOnlineShippingGeneral] = useState('')
+  const [eOnlineShippingConvenience, setEOnlineShippingConvenience] = useState('')
   const [eOfflinePrice, setEOfflinePrice] = useState('')
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
@@ -275,7 +288,7 @@ export default function ProductsPage() {
           supabase
             .from('purchase_items')
             .select(
-              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,offline_price,created_at'
+              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,online_shipping_general,online_shipping_convenience,offline_price,created_at'
             )
             .order('created_at', { ascending: false }),
 
@@ -849,7 +862,16 @@ export default function ProductsPage() {
   function openEditModal(item: ItemRow) {
     setEditTarget(item)
     setEOnlinePrice(String(item.online_price ?? ''))
-    setEOnlineShipping(String(item.online_shipping ?? ''))
+    setEOnlineShippingGeneral(
+      item.online_shipping_general != null
+        ? String(item.online_shipping_general)
+        : item.online_shipping != null
+        ? String(item.online_shipping)
+        : ''
+    )
+    setEOnlineShippingConvenience(
+      item.online_shipping_convenience != null ? String(item.online_shipping_convenience) : ''
+    )
     setEOfflinePrice(String(item.offline_price ?? ''))
     setEditModalOpen(true)
   }
@@ -862,11 +884,17 @@ export default function ProductsPage() {
       setErr(null)
       setMsg(null)
 
+      const generalShipping = eOnlineShippingGeneral === '' ? null : n(eOnlineShippingGeneral)
+      const convenienceShipping =
+        eOnlineShippingConvenience === '' ? null : n(eOnlineShippingConvenience)
+
       const upd = await supabase
         .from('purchase_items')
         .update({
           online_price: eOnlinePrice === '' ? null : n(eOnlinePrice),
-          online_shipping: eOnlineShipping === '' ? null : n(eOnlineShipping),
+          online_shipping: generalShipping,
+          online_shipping_general: generalShipping,
+          online_shipping_convenience: convenienceShipping,
           offline_price: eOfflinePrice === '' ? null : n(eOfflinePrice),
         })
         .eq('id', editTarget.id)
@@ -1350,7 +1378,7 @@ export default function ProductsPage() {
                 <th style={styles.th}>현재재고</th>
                 <th style={styles.th}>미도착</th>
                 <th style={styles.th}>온라인판매가</th>
-                <th style={styles.th}>배송비</th>
+                <th style={styles.th}>온라인배송비</th>
                 <th style={styles.th}>온라인이익</th>
                 <th style={styles.th}>오프라인판매가</th>
                 <th style={styles.th}>오프라인이익</th>
@@ -1361,8 +1389,12 @@ export default function ProductsPage() {
             </thead>
             <tbody>
               {rows.map((row) => {
-                const onlineProfit =
-                  n(row.item.online_price) - n(row.item.online_shipping) - row.finalUnitCost
+                const generalShipping = getGeneralShipping(row.item)
+                const convenienceShipping = getConvenienceShipping(row.item)
+                const generalOnlineProfit =
+                  n(row.item.online_price) - generalShipping - row.finalUnitCost
+                const convenienceOnlineProfit =
+                  n(row.item.online_price) - convenienceShipping - row.finalUnitCost
                 const offlineProfit = n(row.item.offline_price) - row.finalUnitCost
                 const isChecked = selectedItemIds.includes(row.item.id)
 
@@ -1432,13 +1464,29 @@ export default function ProductsPage() {
                         : '미입력'}
                     </td>
                     <td style={styles.td}>
-                      {n(row.item.online_shipping) > 0
-                        ? fmtKRW(n(row.item.online_shipping))
-                        : '미입력'}
+                      {generalShipping > 0 || convenienceShipping > 0 ? (
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div>
+                            일반 {generalShipping > 0 ? fmtKRW(generalShipping) : '미입력'}
+                          </div>
+                          <div>
+                            편의점 {convenienceShipping > 0 ? fmtKRW(convenienceShipping) : '미입력'}
+                          </div>
+                        </div>
+                      ) : (
+                        '미입력'
+                      )}
                     </td>
                     <td style={styles.td}>
                       {n(row.item.online_price) > 0 ? (
-                        <b>{fmtKRW(onlineProfit)}</b>
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          <div>
+                            <b>일반 {fmtKRW(generalOnlineProfit)}</b>
+                          </div>
+                          <div>
+                            <b>편의점 {fmtKRW(convenienceOnlineProfit)}</b>
+                          </div>
+                        </div>
                       ) : (
                         '미입력'
                       )}
@@ -1728,21 +1776,31 @@ export default function ProductsPage() {
               </div>
 
               <div style={styles.field}>
-                <div style={styles.label}>온라인배송비</div>
-                <input
-                  style={styles.input}
-                  value={eOnlineShipping}
-                  onChange={(e) => setEOnlineShipping(e.target.value)}
-                  placeholder="숫자만"
-                />
-              </div>
-
-              <div style={styles.field}>
                 <div style={styles.label}>오프라인판매가</div>
                 <input
                   style={styles.input}
                   value={eOfflinePrice}
                   onChange={(e) => setEOfflinePrice(e.target.value)}
+                  placeholder="숫자만"
+                />
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.label}>온라인배송비(일반택배)</div>
+                <input
+                  style={styles.input}
+                  value={eOnlineShippingGeneral}
+                  onChange={(e) => setEOnlineShippingGeneral(e.target.value)}
+                  placeholder="숫자만"
+                />
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.label}>온라인배송비(편의점택배)</div>
+                <input
+                  style={styles.input}
+                  value={eOnlineShippingConvenience}
+                  onChange={(e) => setEOnlineShippingConvenience(e.target.value)}
                   placeholder="숫자만"
                 />
               </div>

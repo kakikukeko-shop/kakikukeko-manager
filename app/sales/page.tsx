@@ -18,6 +18,8 @@ type PurchaseItemRow = {
   attachment_url: string | null
   online_price: number | null
   online_shipping: number | null
+  online_shipping_general: number | null
+  online_shipping_convenience: number | null
   offline_price: number | null
   product_note?: string | null
   created_at?: string | null
@@ -69,6 +71,7 @@ type SaleRow = {
   actual_shipping_fee: number
   discount_amount: number
   prepaid_shipping_fee: number
+  prepaid_shipping_type?: 'general' | 'convenience' | 'direct' | null
   selling_fee: number
   total_product_amount: number
   final_amount: number
@@ -112,7 +115,8 @@ type ProductOption = {
   attachment_url: string
   online_price: number
   offline_price: number
-  online_shipping: number
+  online_shipping_general: number
+  online_shipping_convenience: number
   purchase_unit_price: number
   stock_qty: number
 }
@@ -136,7 +140,8 @@ type LinePreview = {
   purchase_unit_price: number
   line_total: number
   purchase_amount: number
-  online_shipping: number
+  online_shipping_general: number
+  online_shipping_convenience: number
 }
 
 type AllocatedLine = {
@@ -169,6 +174,12 @@ const SALE_SORT_OPTIONS = [
   { value: 'profit_asc', label: '이익금액 낮은순' },
   { value: 'qty_desc', label: '수량 많은순' },
   { value: 'qty_asc', label: '수량 작은순' },
+] as const
+
+const PREPAID_SHIPPING_TYPE_OPTIONS = [
+  { value: 'general', label: '일반택배' },
+  { value: 'convenience', label: '편의점택배' },
+  { value: 'direct', label: '직접입력' },
 ] as const
 
 const purpleBtn =
@@ -217,6 +228,35 @@ function publicUrl(path: string | null | undefined) {
 
 function formatMoney(value: number | null | undefined) {
   return `${Number(value || 0).toLocaleString()}원`
+}
+
+function getGeneralShipping(item: {
+  online_shipping?: number | null
+  online_shipping_general?: number | null
+}) {
+  const explicit = Number(item.online_shipping_general || 0)
+  if (explicit > 0) return explicit
+  return Number(item.online_shipping || 0)
+}
+
+function getConvenienceShipping(item: { online_shipping_convenience?: number | null }) {
+  return Number(item.online_shipping_convenience || 0)
+}
+
+function getShippingTypeLabel(value: string | null | undefined) {
+  if (value === 'general') return '일반택배'
+  if (value === 'convenience') return '편의점택배'
+  return '직접입력'
+}
+
+function getAutoPrepaidShippingByType(
+  preview: Pick<LinePreview, 'online_shipping_general' | 'online_shipping_convenience'> | null | undefined,
+  shippingType: 'general' | 'convenience' | 'direct'
+) {
+  if (!preview) return 0
+  if (shippingType === 'general') return Number(preview.online_shipping_general || 0)
+  if (shippingType === 'convenience') return Number(preview.online_shipping_convenience || 0)
+  return 0
 }
 
 function getSaleChannelLabel(row: SaleRow) {
@@ -410,6 +450,7 @@ export default function SalesPage() {
     { rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' },
   ])
   const [discountAmount, setDiscountAmount] = useState('')
+  const [prepaidShippingType, setPrepaidShippingType] = useState<'general' | 'convenience' | 'direct'>('general')
   const [prepaidShippingFee, setPrepaidShippingFee] = useState('')
   const [actualShippingFee, setActualShippingFee] = useState('')
   const [sellingFee, setSellingFee] = useState('')
@@ -498,7 +539,8 @@ export default function SalesPage() {
           attachment_url: itemPhotoMap.get(item.id) || String(item.attachment_url || ''),
           online_price: Number(item.online_price || 0),
           offline_price: Number(item.offline_price || 0),
-          online_shipping: Number(item.online_shipping || 0),
+          online_shipping_general: getGeneralShipping(item),
+          online_shipping_convenience: getConvenienceShipping(item),
           purchase_unit_price: finalUnitPrice,
           stock_qty: stockQty,
           isBlockedPreorder,
@@ -586,7 +628,8 @@ export default function SalesPage() {
         purchase_unit_price: purchaseUnitPrice,
         line_total: lineTotal,
         purchase_amount: purchaseAmount,
-        online_shipping: Number(product?.online_shipping || 0),
+        online_shipping_general: Number(product?.online_shipping_general || 0),
+        online_shipping_convenience: Number(product?.online_shipping_convenience || 0),
       }
     })
   }, [saleLines, selectedProductMap, channel])
@@ -614,6 +657,7 @@ export default function SalesPage() {
     const validLines = linePreview.filter((line) => line.purchase_item_id && line.qty > 0)
 
     if (channel === '오프라인') {
+      if (prepaidShippingType !== 'direct') setPrepaidShippingType('direct')
       if (prepaidShippingFee !== '0') setPrepaidShippingFee('0')
       if (actualShippingFee !== '0') setActualShippingFee('0')
       return
@@ -621,13 +665,20 @@ export default function SalesPage() {
 
     if (editingSaleId) return
 
-    if (validLines.length === 1) {
-      const autoShip = Number(validLines[0].online_shipping || 0)
+    if (validLines.length === 1 && prepaidShippingType !== 'direct') {
+      const autoShip = getAutoPrepaidShippingByType(validLines[0], prepaidShippingType)
       if (String(autoShip) !== prepaidShippingFee) {
         setPrepaidShippingFee(String(autoShip))
       }
     }
-  }, [linePreview, channel, editingSaleId, prepaidShippingFee, actualShippingFee])
+  }, [
+    linePreview,
+    channel,
+    editingSaleId,
+    prepaidShippingType,
+    prepaidShippingFee,
+    actualShippingFee,
+  ])
 
   const totalProductAmount = useMemo(
     () => linePreview.reduce((sum, line) => sum + line.line_total, 0),
@@ -735,6 +786,7 @@ export default function SalesPage() {
     setSaleDate(getTodayString())
     setSaleLines([{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' }])
     setDiscountAmount('')
+    setPrepaidShippingType('general')
     setPrepaidShippingFee('')
     setActualShippingFee('')
     setSellingFee('')
@@ -751,7 +803,7 @@ export default function SalesPage() {
       supabase
         .from('purchase_items')
         .select(
-          'id,purchase_id,item_name,qty,unit_price,line_total,memo,foreign_total,foreign_unit_price,is_preorder,attachment_url,online_price,online_shipping,offline_price,product_note,created_at'
+          'id,purchase_id,item_name,qty,unit_price,line_total,memo,foreign_total,foreign_unit_price,is_preorder,attachment_url,online_price,online_shipping,online_shipping_general,online_shipping_convenience,offline_price,product_note,created_at'
         )
         .order('id', { ascending: false }),
 
@@ -843,6 +895,11 @@ export default function SalesPage() {
     setSaleDate(row.sale_date || getTodayString())
     setSaleLines(nextLines)
     setDiscountAmount(String(row.discount_amount ?? 0))
+    setPrepaidShippingType(
+      row.prepaid_shipping_type === 'general' || row.prepaid_shipping_type === 'convenience'
+        ? row.prepaid_shipping_type
+        : 'direct'
+    )
     setPrepaidShippingFee(String(row.prepaid_shipping_fee ?? 0))
     setActualShippingFee(String(row.actual_shipping_fee ?? 0))
     setSellingFee(String(row.selling_fee ?? 0))
@@ -974,6 +1031,7 @@ export default function SalesPage() {
           channel,
           discount_amount: Math.round(discountNumber),
           prepaid_shipping_fee: Math.round(prepaidShippingNumber),
+          prepaid_shipping_type: channel === '온라인' ? prepaidShippingType : 'direct',
           actual_shipping_fee: Math.round(actualShippingNumber),
           selling_fee: Math.round(sellingFeeNumber),
           total_product_amount: Math.round(totalProductAmount),
@@ -1032,6 +1090,7 @@ export default function SalesPage() {
           channel,
           discount_amount: Math.round(discountNumber),
           prepaid_shipping_fee: Math.round(prepaidShippingNumber),
+          prepaid_shipping_type: channel === '온라인' ? prepaidShippingType : 'direct',
           actual_shipping_fee: Math.round(actualShippingNumber),
           selling_fee: Math.round(sellingFeeNumber),
           total_product_amount: Math.round(totalProductAmount),
@@ -1271,7 +1330,14 @@ export default function SalesPage() {
                           <td className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.purchase_amount)}</td>
                           <td className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.total_product_amount)}</td>
                           <td className="px-2 py-3 align-top text-right font-bold text-rose-600">- {formatMoney(row.discount_amount)}</td>
-                          <td className="px-2 py-3 align-top text-right font-bold text-slate-800">+ {formatMoney(row.prepaid_shipping_fee)}</td>
+                          <td className="px-2 py-3 align-top text-right font-bold text-slate-800">
+                            + {formatMoney(row.prepaid_shipping_fee)}
+                            <div className="mt-1 text-[11px] font-medium text-slate-500">
+                              {getSaleChannelLabel(row) === '온라인'
+                                ? getShippingTypeLabel(row.prepaid_shipping_type)
+                                : '-'}
+                            </div>
+                          </td>
                           <td className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.actual_shipping_fee)}</td>
                           <td className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.selling_fee)}</td>
                           <td className="px-2 py-3 align-top text-right font-extrabold text-slate-900">{formatMoney(row.final_amount)}</td>
@@ -1374,7 +1440,12 @@ export default function SalesPage() {
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.purchase_amount)}</td>
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-900">{formatMoney(row.total_product_amount)}</td>
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-rose-600">- {formatMoney(row.discount_amount)}</td>
-                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-800">+ {formatMoney(row.prepaid_shipping_fee)}</td>
+                              <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-slate-800">
+                                + {formatMoney(row.prepaid_shipping_fee)}
+                                <div className="mt-1 text-[11px] font-medium text-slate-500">
+                                  {rowChannel === '온라인' ? getShippingTypeLabel(row.prepaid_shipping_type) : '-'}
+                                </div>
+                              </td>
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.actual_shipping_fee)}</td>
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-bold text-amber-600">- {formatMoney(row.selling_fee)}</td>
                               <td rowSpan={items.length} className="px-2 py-3 align-top text-right font-extrabold text-slate-900">{formatMoney(row.final_amount)}</td>
@@ -1462,6 +1533,7 @@ export default function SalesPage() {
                     const next = e.target.value as '온라인' | '오프라인'
                     setChannel(next)
                     if (next === '오프라인') {
+                      setPrepaidShippingType('direct')
                       setPrepaidShippingFee('0')
                       setActualShippingFee('0')
                     }
@@ -1650,22 +1722,53 @@ export default function SalesPage() {
                 <label className="mb-2 block text-sm font-extrabold text-slate-800">
                   미리받은배송비
                 </label>
-                <input
-                  className={inputClass}
-                  type="number"
-                  min={0}
-                  disabled={channel === '오프라인'}
-                  placeholder={
-                    channel === '오프라인'
-                      ? '오프라인은 0'
-                      : '상품 1개면 상품/재고 배송비 자동 불러옴'
-                  }
-                  value={channel === '오프라인' ? '0' : prepaidShippingFee}
-                  onChange={(e) => {
-                    setPrepaidShippingFee(e.target.value)
-                    onDirty()
-                  }}
-                />
+                <div className="grid gap-2">
+                  <select
+                    className={inputClass}
+                    disabled={channel === '오프라인'}
+                    value={channel === '오프라인' ? 'direct' : prepaidShippingType}
+                    onChange={(e) => {
+                      const nextType = e.target.value as 'general' | 'convenience' | 'direct'
+                      setPrepaidShippingType(nextType)
+                      if (channel === '온라인') {
+                        const validLines = linePreview.filter(
+                          (line) => line.purchase_item_id && line.qty > 0
+                        )
+                        if (validLines.length === 1 && nextType !== 'direct') {
+                          setPrepaidShippingFee(
+                            String(getAutoPrepaidShippingByType(validLines[0], nextType))
+                          )
+                        }
+                      }
+                      onDirty()
+                    }}
+                  >
+                    {PREPAID_SHIPPING_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={0}
+                    disabled={channel === '오프라인'}
+                    placeholder={
+                      channel === '오프라인'
+                        ? '오프라인은 0'
+                        : prepaidShippingType === 'direct'
+                        ? '직접 입력'
+                        : '상품 1개면 선택한 배송방식 금액 자동 불러옴'
+                    }
+                    value={channel === '오프라인' ? '0' : prepaidShippingFee}
+                    onChange={(e) => {
+                      setPrepaidShippingFee(e.target.value)
+                      onDirty()
+                    }}
+                  />
+                </div>
               </div>
 
               <div>
@@ -1891,7 +1994,7 @@ export default function SalesPage() {
                 <span>- {discountNumber.toLocaleString()}원</span>
               </div>
               <div className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-800">
-                <span>미리받은배송비</span>
+                <span>미리받은배송비 ({channel === '온라인' ? getShippingTypeLabel(prepaidShippingType) : '-'})</span>
                 <span>+ {prepaidShippingNumber.toLocaleString()}원</span>
               </div>
               <div className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-800">
