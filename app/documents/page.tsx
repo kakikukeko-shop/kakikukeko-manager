@@ -496,6 +496,42 @@ function resolveDraftForeignTotals(
   }
 }
 
+function forceExactForeignTotalOnLargest<T extends { foreign_total: number }>(rows: T[], totalForeign: number) {
+  const total = ceil4(totalForeign)
+  if (rows.length === 0) return rows
+
+  const result = rows.map((row) => ({ ...row, foreign_total: ceil4(row.foreign_total) }))
+  const currentSum = round4(result.reduce((acc, row) => acc + row.foreign_total, 0))
+  const diff = round4(total - currentSum)
+
+  if (Math.abs(diff) <= 0.0001) return result
+
+  let targetIdx = 0
+  let maxValue = -1
+  result.forEach((row, idx) => {
+    if (row.foreign_total > maxValue) {
+      maxValue = row.foreign_total
+      targetIdx = idx
+    }
+  })
+
+  result[targetIdx] = {
+    ...result[targetIdx],
+    foreign_total: ceil4(Math.max(0, result[targetIdx].foreign_total + diff)),
+  }
+
+  const fixedSum = round4(result.reduce((acc, row) => acc + row.foreign_total, 0))
+  const remain = round4(total - fixedSum)
+  if (Math.abs(remain) > 0.0001) {
+    result[targetIdx] = {
+      ...result[targetIdx],
+      foreign_total: ceil4(Math.max(0, result[targetIdx].foreign_total + remain)),
+    }
+  }
+
+  return result
+}
+
 function computeDraftForeignTotals(
   rawDraftItems: DraftItem[],
   totalForeign: number
@@ -520,7 +556,9 @@ function computeDraftForeignTotals(
     }
   }
 
-  const result = resolved.rows.map((r) => ({
+  const adjusted = forceExactForeignTotalOnLargest(resolved.rows, totalForeign)
+
+  const result = adjusted.map((r) => ({
     id: r.id,
     key: r.key,
     item_name: r.item_name,
@@ -531,17 +569,6 @@ function computeDraftForeignTotals(
     photoFile: r.photoFile,
     existingPhotoPath: r.existingPhotoPath,
   }))
-
-  const finalSum = round4(result.reduce((acc, x) => acc + x.foreign_total, 0))
-  const total = ceil4(totalForeign)
-
-  if (Math.abs(finalSum - total) > 0.0001) {
-    return {
-      ok: false as const,
-      message: `자동 계산 후 상품 외화총합(${fmtNum(finalSum)})이 외화 총액(${fmtNum(total)})과 같아야 해.`,
-      rows: [],
-    }
-  }
 
   return { ok: true as const, message: '', rows: result }
 }
@@ -689,7 +716,9 @@ function computeSelectedCostPreviewRows(
     }
   }
 
-  const rows: CostAllocationPreviewRow[] = resolved.rows.map((r) => {
+  const adjustedRows = forceExactForeignTotalOnLargest(resolved.rows, totalForeign)
+
+  const rows: CostAllocationPreviewRow[] = adjustedRows.map((r) => {
     const foreignTotal = ceil4(r.foreign_total)
     const foreignUnit = r.qty > 0 ? ceil4(foreignTotal / r.qty) : 0
     const krwTotal = ceil4(foreignTotal * fx)
@@ -2124,9 +2153,10 @@ export default function DocumentsPage() {
     setEcReceiptFile(null)
     setEcImportDocFile(null)
 
-    setEcDutyAmount('')
-    setEcVatAmount('')
-    setEcCustomsFeeAmount('')
+    const parsedCustoms = parseCustomsMemo(cost.memo)
+    setEcDutyAmount(parsedCustoms.duty)
+    setEcVatAmount(parsedCustoms.vat)
+    setEcCustomsFeeAmount(parsedCustoms.customsFee)
     setEcAmount(String(cost.amount ?? ''))
     setEcTotalForeign(String(cost.amount ?? ''))
     setEcTotalKRW(
@@ -2158,10 +2188,16 @@ export default function DocumentsPage() {
     if (!editingCost) return
 
     const cur = currencyValue(ecCurrency, ecCurrencyCustom)
-    const totalForeign = n(ecTotalForeign)
+    const customsBreakdownTotal = customsTotal(ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
+    const totalForeign = ecType === '관부과세'
+      ? (n(ecTotalForeign) > 0 ? n(ecTotalForeign) : customsBreakdownTotal)
+      : n(ecTotalForeign)
     const totalKRW = n(ecTotalKRW)
     const fx = normalizeCurrencyCode(cur) === 'KRW' ? 1 : calcFxRate(totalKRW, totalForeign)
-    const finalMemo = ecMemo || null
+    const finalMemo =
+      ecType === '관부과세'
+        ? buildCustomsMemo(ecMemo, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
+        : ecMemo || null
     const chosen = items.filter((it) => ecSelectedItemIds.includes(it.id))
 
     if (!ecType.trim()) {
@@ -2173,7 +2209,7 @@ export default function DocumentsPage() {
       return
     }
     if (totalForeign <= 0) {
-      setErr('외화 총액을 입력해줘.')
+      setErr(ecType === '관부과세' ? '관부과세 총액이나 관세/부가세/통관수수료를 입력해줘.' : '외화 총액을 입력해줘.')
       return
     }
     if (totalKRW <= 0) {
@@ -2332,10 +2368,16 @@ export default function DocumentsPage() {
     setMsg(null)
 
     const cur = currencyValue(cCurrency, cCurrencyCustom)
-    const totalForeign = n(cTotalForeign)
+    const customsBreakdownTotal = customsTotal(cDutyAmount, cVatAmount, cCustomsFeeAmount)
+    const totalForeign = cType === '관부과세'
+      ? (n(cTotalForeign) > 0 ? n(cTotalForeign) : customsBreakdownTotal)
+      : n(cTotalForeign)
     const totalKRW = n(cTotalKRW)
     const fx = normalizeCurrencyCode(cur) === 'KRW' ? 1 : calcFxRate(totalKRW, totalForeign)
-    const finalMemo = cMemo || null
+    const finalMemo =
+      cType === '관부과세'
+        ? buildCustomsMemo(cMemo, cDutyAmount, cVatAmount, cCustomsFeeAmount)
+        : cMemo || null
 
     if (!cType.trim()) {
       setErr('추가비용 종류를 선택해줘.')
@@ -2346,7 +2388,7 @@ export default function DocumentsPage() {
       return
     }
     if (totalForeign <= 0) {
-      setErr('외화 총액을 입력해줘.')
+      setErr(cType === '관부과세' ? '관부과세 총액이나 관세/부가세/통관수수료를 입력해줘.' : '외화 총액을 입력해줘.')
       return
     }
     if (totalKRW <= 0) {
@@ -2914,7 +2956,7 @@ export default function DocumentsPage() {
                 <div style={styles.small}>
                   {selectedPurchase ? (
                     <>
-                      {itemSearch.trim() ? <>검색 중: <b>전체 매입 상품 기준</b></> : <>현재 매입: <b>{selectedPurchase.supplier?.trim() || '(거래처 없음)'}</b></>}
+                      {itemSearch.trim() ? <>검색 중: <b>전체 매입 상품 기준</b></> : <>선택 매입: <b>{selectedPurchase.supplier?.trim() || '(거래처 없음)'}</b></>}
                     </>
                   ) : (
                     '왼쪽에서 매입을 선택해줘.'
@@ -2924,7 +2966,7 @@ export default function DocumentsPage() {
             </div>
 
             <div style={{ ...styles.small, marginBottom: 10 }}>
-              ✅ 체크는 매입을 바꿔도 유지돼. 검색해도 체크 유지됨.
+              ✅ 체크는 매입을 바꿔도 유지돼. 검색하면 전체 매입 상품까지 포함해서 찾아줘.
             </div>
 
             <div
@@ -3353,7 +3395,7 @@ export default function DocumentsPage() {
                 style={styles.input}
                 value={fTotalForeign}
                 onChange={(e) => setFTotalForeign(e.target.value)}
-                placeholder="숫자만"
+                placeholder={cType === '관부과세' ? '비워도 관세/부가세/통관수수료로 저장 가능' : '숫자만'}
               />
             </div>
 
@@ -3694,6 +3736,23 @@ export default function DocumentsPage() {
               />
             </div>
 
+            {cType === '관부과세' ? (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>관세</div>
+                  <input style={styles.input} value={cDutyAmount} onChange={(e) => setCDutyAmount(e.target.value)} placeholder="예: 3000" />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>부가세</div>
+                  <input style={styles.input} value={cVatAmount} onChange={(e) => setCVatAmount(e.target.value)} placeholder="예: 1500" />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>통관수수료</div>
+                  <input style={styles.input} value={cCustomsFeeAmount} onChange={(e) => setCCustomsFeeAmount(e.target.value)} placeholder="예: 5500" />
+                </div>
+              </>
+            ) : null}
+
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
               <select style={styles.select} value={cCurrency} onChange={(e) => setCCurrency(e.target.value)}>
@@ -3949,7 +4008,7 @@ export default function DocumentsPage() {
                 style={styles.input}
                 value={ecTotalForeign}
                 onChange={(e) => setEcTotalForeign(e.target.value)}
-                placeholder="숫자만"
+                placeholder={ecType === '관부과세' ? '비워도 관세/부가세/통관수수료로 저장 가능' : '숫자만'}
               />
             </div>
 
@@ -3962,6 +4021,23 @@ export default function DocumentsPage() {
                 placeholder="숫자만"
               />
             </div>
+
+            {ecType === '관부과세' ? (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>관세</div>
+                  <input style={styles.input} value={ecDutyAmount} onChange={(e) => setEcDutyAmount(e.target.value)} placeholder="예: 3000" />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>부가세</div>
+                  <input style={styles.input} value={ecVatAmount} onChange={(e) => setEcVatAmount(e.target.value)} placeholder="예: 1500" />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>통관수수료</div>
+                  <input style={styles.input} value={ecCustomsFeeAmount} onChange={(e) => setEcCustomsFeeAmount(e.target.value)} placeholder="예: 5500" />
+                </div>
+              </>
+            ) : null}
 
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
