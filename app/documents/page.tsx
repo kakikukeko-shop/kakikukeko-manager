@@ -3921,7 +3921,7 @@ export default function DocumentsPage() {
                     <th style={styles.th}>같이 배분된 상품</th>
                     <th style={styles.th}>거래처</th>
                     <th style={styles.th}>메모</th>
-                    <th style={{ ...styles.th, width: 90 }}>수정</th>
+                    <th style={{ ...styles.th, width: 150 }}>액션</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3939,12 +3939,24 @@ export default function DocumentsPage() {
                       <td style={{ ...styles.td, whiteSpace: 'pre-line' }}>{a.memo ?? ''}</td>
                       <td style={styles.td}>
                         {a.cost_id ? (
-                          <button
-                            style={styles.smallBtn}
-                            onClick={() => openCostEditorById(a.cost_id as string, true)}
-                          >
-                            수정
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            <button
+                              style={styles.smallBtn}
+                              onClick={() => openCostEditorById(a.cost_id as string, true)}
+                            >
+                              수정
+                            </button>
+                            <button
+                              style={styles.dangerSmallBtn}
+                              onClick={() => {
+                                if (!confirm('이 추가비용을 삭제할까?')) return
+                                setItemDetailOpen(false)
+                                deleteCost(a.cost_id as string)
+                              }}
+                            >
+                              삭제
+                            </button>
+                          </div>
                         ) : null}
                       </td>
                     </tr>
