@@ -3491,6 +3491,26 @@ export default function DocumentsPage() {
             {cType === '관부과세' ? (
               <>
                 <div style={styles.field}>
+                  <div style={styles.label}>외화 총액</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalForeign}
+                    onChange={(e) => setCTotalForeign(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalKRW}
+                    onChange={(e) => setCTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
                   <div style={styles.label}>관세</div>
                   <input
                     style={styles.input}
@@ -3513,20 +3533,10 @@ export default function DocumentsPage() {
                 <div style={styles.field}>
                   <div style={styles.label}>통관수수료(자동)</div>
                   <input
-                    style={{ ...styles.input, background: '#f3f4f6' }}
-                    readOnly
-                    value={cCustomsFeeAmount}
-                    placeholder="관세/부가세 입력 시 자동 계산"
-                  />
-                </div>
-
-                <div style={styles.field}>
-                  <div style={styles.label}>원화 총액(실결제)</div>
-                  <input
                     style={styles.input}
-                    value={cTotalKRW}
-                    onChange={(e) => setCTotalKRW(e.target.value)}
-                    placeholder="숫자만"
+                    value={cCustomsFeeAmount}
+                    onChange={(e) => setCCustomsFeeAmount(e.target.value)}
+                    placeholder="관세/부가세 입력 시 자동 계산"
                   />
                 </div>
               </>
@@ -3705,6 +3715,26 @@ export default function DocumentsPage() {
             {ecType === '관부과세' ? (
               <>
                 <div style={styles.field}>
+                  <div style={styles.label}>외화 총액</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalForeign}
+                    onChange={(e) => setEcTotalForeign(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalKRW}
+                    onChange={(e) => setEcTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
                   <div style={styles.label}>관세</div>
                   <input style={styles.input} value={ecDutyAmount} onChange={(e) => setEcDutyAmount(e.target.value)} />
                 </div>
@@ -3717,20 +3747,10 @@ export default function DocumentsPage() {
                 <div style={styles.field}>
                   <div style={styles.label}>통관수수료(자동)</div>
                   <input
-                    style={{ ...styles.input, background: '#f3f4f6' }}
-                    readOnly
-                    value={ecCustomsFeeAmount}
-                    placeholder="관세/부가세 입력 시 자동 계산"
-                  />
-                </div>
-
-                <div style={styles.field}>
-                  <div style={styles.label}>원화 총액(실결제)</div>
-                  <input
                     style={styles.input}
-                    value={ecTotalKRW}
-                    onChange={(e) => setEcTotalKRW(e.target.value)}
-                    placeholder="숫자만"
+                    value={ecCustomsFeeAmount}
+                    onChange={(e) => setEcCustomsFeeAmount(e.target.value)}
+                    placeholder="관세/부가세 입력 시 자동 계산"
                   />
                 </div>
               </>
