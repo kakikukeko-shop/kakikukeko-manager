@@ -85,6 +85,7 @@ type DraftItem = {
 }
 
 type ItemAllocationView = {
+  cost_id?: string | null
   cost_type: string | null
   amount_krw: number
   created_at: string
@@ -96,18 +97,6 @@ type ItemAllocationView = {
 
 type DraftPreviewRow = {
   key: string
-  qty: number
-  isBlank: boolean
-  enteredForeign: number
-  previewForeignTotal: number
-  previewForeignUnit: number
-  previewKRWTotal: number
-  previewKRWUnit: number
-}
-
-type CostAllocationPreviewRow = {
-  itemId: string
-  itemName: string
   qty: number
   isBlank: boolean
   enteredForeign: number
@@ -496,42 +485,6 @@ function resolveDraftForeignTotals(
   }
 }
 
-function forceExactForeignTotalOnLargest<T extends { foreign_total: number }>(rows: T[], totalForeign: number) {
-  const total = ceil4(totalForeign)
-  if (rows.length === 0) return rows
-
-  const result = rows.map((row) => ({ ...row, foreign_total: ceil4(row.foreign_total) }))
-  const currentSum = round4(result.reduce((acc, row) => acc + row.foreign_total, 0))
-  const diff = round4(total - currentSum)
-
-  if (Math.abs(diff) <= 0.0001) return result
-
-  let targetIdx = 0
-  let maxValue = -1
-  result.forEach((row, idx) => {
-    if (row.foreign_total > maxValue) {
-      maxValue = row.foreign_total
-      targetIdx = idx
-    }
-  })
-
-  result[targetIdx] = {
-    ...result[targetIdx],
-    foreign_total: ceil4(Math.max(0, result[targetIdx].foreign_total + diff)),
-  }
-
-  const fixedSum = round4(result.reduce((acc, row) => acc + row.foreign_total, 0))
-  const remain = round4(total - fixedSum)
-  if (Math.abs(remain) > 0.0001) {
-    result[targetIdx] = {
-      ...result[targetIdx],
-      foreign_total: ceil4(Math.max(0, result[targetIdx].foreign_total + remain)),
-    }
-  }
-
-  return result
-}
-
 function computeDraftForeignTotals(
   rawDraftItems: DraftItem[],
   totalForeign: number
@@ -556,9 +509,7 @@ function computeDraftForeignTotals(
     }
   }
 
-  const adjusted = forceExactForeignTotalOnLargest(resolved.rows, totalForeign)
-
-  const result = adjusted.map((r) => ({
+  const result = resolved.rows.map((r) => ({
     id: r.id,
     key: r.key,
     item_name: r.item_name,
@@ -569,6 +520,17 @@ function computeDraftForeignTotals(
     photoFile: r.photoFile,
     existingPhotoPath: r.existingPhotoPath,
   }))
+
+  const finalSum = round4(result.reduce((acc, x) => acc + x.foreign_total, 0))
+  const total = ceil4(totalForeign)
+
+  if (Math.abs(finalSum - total) > 0.0001) {
+    return {
+      ok: false as const,
+      message: `자동 계산 후 상품 외화총합(${fmtNum(finalSum)})이 외화 총액(${fmtNum(total)})과 같아야 해.`,
+      rows: [],
+    }
+  }
 
   return { ok: true as const, message: '', rows: result }
 }
@@ -619,169 +581,6 @@ function computeDraftPreviewRows(
     fx,
     hasNamedItems: rows.length > 0,
   }
-}
-
-
-function resolveSelectedCostForeignTotals(
-  sourceItems: PurchaseItemRow[],
-  inputMap: Record<string, string>,
-  totalForeign: number
-) {
-  const rows = sourceItems.map((it) => {
-    const raw = String(inputMap[it.id] ?? '').trim()
-    const qty = Math.max(1, n(it.qty))
-    return {
-      itemId: it.id,
-      itemName: it.item_name ?? '(이름 없음)',
-      qty,
-      was_blank: raw === '',
-      entered_foreign_total: ceil4(Math.max(0, n(raw))),
-      foreign_total: ceil4(Math.max(0, n(raw))),
-    }
-  })
-
-  if (rows.length === 0) {
-    return { ok: false as const, message: '상품을 1개 이상 선택해줘.', rows: [] as typeof rows }
-  }
-
-  const total = ceil4(totalForeign)
-  if (total <= 0) {
-    return { ok: false as const, message: '외화 총액을 입력해줘.', rows: [] as typeof rows }
-  }
-
-  const blankIdx = rows.map((row, idx) => (row.was_blank ? idx : -1)).filter((idx) => idx >= 0)
-  const filledIdx = rows.map((row, idx) => (!row.was_blank ? idx : -1)).filter((idx) => idx >= 0)
-
-  if (filledIdx.length === 0) {
-    const weights = rows.map((r) => Math.max(1, r.qty))
-    const distributed = distributeByWeightsCeil(total, weights)
-    distributed.forEach((value, idx) => {
-      rows[idx].foreign_total = value
-    })
-    return { ok: true as const, message: '', rows }
-  }
-
-  if (blankIdx.length > 0) {
-    const filledSum = round4(filledIdx.reduce((acc, idx) => acc + rows[idx].foreign_total, 0))
-    const remain = round4(total - filledSum)
-
-    if (remain < -0.0001) {
-      return {
-        ok: false as const,
-        message: `입력한 상품 외화합계가 외화 총액보다 커. 외화 총액(${fmtNum(total)}) 안에서 맞춰줘.`,
-        rows: [] as typeof rows,
-      }
-    }
-
-    const weights = blankIdx.map((idx) => Math.max(1, rows[idx].qty))
-    const distributed = distributeByWeightsCeil(remain, weights)
-    blankIdx.forEach((idx, order) => {
-      rows[idx].foreign_total = distributed[order]
-    })
-    return { ok: true as const, message: '', rows }
-  }
-
-  const enteredSum = round4(rows.reduce((acc, row) => acc + row.foreign_total, 0))
-  if (Math.abs(enteredSum - total) <= 0.0001) {
-    return { ok: true as const, message: '', rows }
-  }
-
-  const weights = rows.map((r) => Math.max(0, r.entered_foreign_total))
-  const distributed = distributeByWeightsCeil(total, weights)
-  distributed.forEach((value, idx) => {
-    rows[idx].foreign_total = value
-  })
-
-  return { ok: true as const, message: '', rows }
-}
-
-function computeSelectedCostPreviewRows(
-  sourceItems: PurchaseItemRow[],
-  inputMap: Record<string, string>,
-  totalForeign: number,
-  totalKRW: number
-) {
-  const fx = calcFxRate(totalKRW, totalForeign)
-  const resolved = resolveSelectedCostForeignTotals(sourceItems, inputMap, totalForeign)
-
-  if (!resolved.ok) {
-    return {
-      rows: [] as CostAllocationPreviewRow[],
-      previewForeignSum: 0,
-      diff: ceil4(totalForeign),
-      fx,
-      hasItems: sourceItems.length > 0,
-      ok: false as const,
-      message: resolved.message,
-    }
-  }
-
-  const adjustedRows = forceExactForeignTotalOnLargest(resolved.rows, totalForeign)
-
-  const rows: CostAllocationPreviewRow[] = adjustedRows.map((r) => {
-    const foreignTotal = ceil4(r.foreign_total)
-    const foreignUnit = r.qty > 0 ? ceil4(foreignTotal / r.qty) : 0
-    const krwTotal = ceil4(foreignTotal * fx)
-    const krwUnit = r.qty > 0 ? ceil4(krwTotal / r.qty) : 0
-
-    return {
-      itemId: r.itemId,
-      itemName: r.itemName,
-      qty: r.qty,
-      isBlank: r.was_blank,
-      enteredForeign: ceil4(r.entered_foreign_total),
-      previewForeignTotal: foreignTotal,
-      previewForeignUnit: foreignUnit,
-      previewKRWTotal: krwTotal,
-      previewKRWUnit: krwUnit,
-    }
-  })
-
-  const previewForeignSum = round4(rows.reduce((acc, r) => acc + r.previewForeignTotal, 0))
-  const diff = round4(ceil4(totalForeign) - previewForeignSum)
-
-  return {
-    rows,
-    previewForeignSum,
-    diff,
-    fx,
-    hasItems: sourceItems.length > 0,
-    ok: true as const,
-    message: '',
-  }
-}
-
-function buildKRWAllocationsFromResolvedRows(
-  resolvedRows: { itemId: string; foreign_total: number }[],
-  totalKRW: number,
-  fx: number
-) {
-  const targetTotal = Math.round(totalKRW)
-  const sorted = [...resolvedRows].sort((a, b) => b.foreign_total - a.foreign_total)
-  const maxItem = sorted[0]
-
-  const alloc = resolvedRows.map((row) => ({
-    item_id: row.itemId,
-    amt: ceilInt(row.foreign_total * fx),
-  }))
-
-  const allocSum = alloc.reduce((acc, row) => acc + row.amt, 0)
-  const diff = allocSum - targetTotal
-
-  if (maxItem) {
-    const idx = alloc.findIndex((row) => row.item_id === maxItem.itemId)
-    if (idx >= 0) {
-      alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
-    }
-  }
-
-  const fixedSum = alloc.reduce((acc, row) => acc + row.amt, 0)
-  const remain = targetTotal - fixedSum
-  if (remain !== 0 && alloc.length > 0) {
-    alloc[0].amt = Math.max(0, alloc[0].amt + remain)
-  }
-
-  return alloc
 }
 
 function ItemSelectionManager({
@@ -1122,6 +921,29 @@ export default function DocumentsPage() {
   
   const productTableWrapRef = useRef<HTMLDivElement | null>(null)
 
+  useEffect(() => {
+    if (cType !== '관부과세') return
+    if (n(cDutyAmount) <= 0 && n(cVatAmount) <= 0) {
+      if (cCustomsFeeAmount !== '') setCCustomsFeeAmount('')
+      return
+    }
+    const autoFee = Math.max(0, Math.round(n(cTotalKRW) - n(cDutyAmount) - n(cVatAmount)))
+    const next = String(autoFee)
+    if (cCustomsFeeAmount !== next) setCCustomsFeeAmount(next)
+  }, [cType, cDutyAmount, cVatAmount, cTotalKRW, cCustomsFeeAmount])
+
+  useEffect(() => {
+    if (ecType !== '관부과세') return
+    if (n(ecDutyAmount) <= 0 && n(ecVatAmount) <= 0) {
+      if (ecCustomsFeeAmount !== '') setEcCustomsFeeAmount('')
+      return
+    }
+    const autoFee = Math.max(0, Math.round(n(ecTotalKRW) - n(ecDutyAmount) - n(ecVatAmount)))
+    const next = String(autoFee)
+    if (ecCustomsFeeAmount !== next) setEcCustomsFeeAmount(next)
+  }, [ecType, ecDutyAmount, ecVatAmount, ecTotalKRW, ecCustomsFeeAmount])
+
+
   const purchaseMap = useMemo(() => {
     const map = new Map<string, PurchaseRow>()
     for (const p of purchases) map.set(p.id, p)
@@ -1194,7 +1016,7 @@ export default function DocumentsPage() {
 
   const visibleItems = useMemo(() => {
     const q = itemSearch.trim().toLowerCase()
-    const base = q ? items : selectedPurchaseItems
+    const base = selectedPurchaseItems
 
     if (!q) return base
 
@@ -1206,7 +1028,7 @@ export default function DocumentsPage() {
 
       return name.includes(q) || memo.includes(q) || supplier.includes(q)
     })
-  }, [itemSearch, items, selectedPurchaseItems, purchaseMap])
+  }, [itemSearch, selectedPurchaseItems, purchaseMap])
 
   const visibleItemKinds = useMemo(() => visibleItems.length, [visibleItems])
 
@@ -1279,28 +1101,6 @@ export default function DocumentsPage() {
     return selectedItems.reduce((acc, it) => acc + n(it.line_total), 0)
   }, [selectedItems])
 
-  const costPreview = useMemo(
-    () => computeSelectedCostPreviewRows(selectedItems, costItemForeignMap, n(cTotalForeign), n(cTotalKRW)),
-    [selectedItems, costItemForeignMap, cTotalForeign, cTotalKRW]
-  )
-
-  const costPreviewMap = useMemo(() => {
-    const map = new Map<string, CostAllocationPreviewRow>()
-    costPreview.rows.forEach((row) => map.set(row.itemId, row))
-    return map
-  }, [costPreview])
-
-  const editCostPreview = useMemo(
-    () => computeSelectedCostPreviewRows(editSelectedItems, editCostItemForeignMap, n(ecTotalForeign), n(ecTotalKRW)),
-    [editSelectedItems, editCostItemForeignMap, ecTotalForeign, ecTotalKRW]
-  )
-
-  const editCostPreviewMap = useMemo(() => {
-    const map = new Map<string, CostAllocationPreviewRow>()
-    editCostPreview.rows.forEach((row) => map.set(row.itemId, row))
-    return map
-  }, [editCostPreview])
-
   const allocationSumByItem = useMemo(() => {
     const map = new Map<string, number>()
     for (const a of allocations) {
@@ -1335,56 +1135,29 @@ export default function DocumentsPage() {
     return list
   }, [visibleItems, itemSort, allocationSumByItem])
 
-  const selectedPurchaseRelatedCosts = useMemo(() => {
-    if (!selectedPurchaseId) return []
-
-    const relatedCostIds = new Set<string>()
-
-    for (const c of costs) {
-      if (c.purchase_id === selectedPurchaseId) relatedCostIds.add(c.id)
-    }
-
-    for (const a of allocations) {
-      if (selectedPurchaseItemIds.has(a.purchase_item_id)) {
-        relatedCostIds.add(a.purchase_cost_id)
-      }
-    }
-
-    const list = costs.filter((c) => relatedCostIds.has(c.id))
-
-    list.sort((a, b) => {
-      const dateA = a.cost_date ?? ''
-      const dateB = b.cost_date ?? ''
-
-      if (relatedCostSort === 'date_desc') {
-        if (dateA && dateB) return dateB.localeCompare(dateA)
-        if (dateA && !dateB) return -1
-        if (!dateA && dateB) return 1
-        return String(b.created_at).localeCompare(String(a.created_at))
-      }
-
-      if (relatedCostSort === 'date_asc') {
-        if (dateA && dateB) return dateA.localeCompare(dateB)
-        if (dateA && !dateB) return -1
-        if (!dateA && dateB) return 1
-        return String(a.created_at).localeCompare(String(b.created_at))
-      }
-
-      if (relatedCostSort === 'amount_desc') return n(b.amount) - n(a.amount)
-      if (relatedCostSort === 'amount_asc') return n(a.amount) - n(b.amount)
-      if (relatedCostSort === 'name') return (a.cost_type ?? '').localeCompare(b.cost_type ?? '', 'ko-KR')
-
-      return 0
-    })
-
-    return list
-  }, [costs, allocations, selectedPurchaseId, selectedPurchaseItemIds, relatedCostSort])
 
   const costTypeMap = useMemo(() => {
     const map = new Map<string, string | null>()
     for (const c of costs) map.set(c.id, c.cost_type ?? null)
     return map
   }, [costs])
+
+  const itemCostBadgeMap = useMemo(() => {
+    const map = new Map<string, { costId: string; label: string }[]>()
+
+    for (const a of allocations) {
+      const normalized = normalizeCostType(costTypeMap.get(a.purchase_cost_id))
+      if (!normalized) continue
+
+      const prev = map.get(a.purchase_item_id) ?? []
+      if (!prev.some((x) => x.label == normalized)) {
+        prev.push({ costId: a.purchase_cost_id, label: normalized })
+        map.set(a.purchase_item_id, prev)
+      }
+    }
+
+    return map
+  }, [allocations, costTypeMap])
 
   const hasBalanceByItem = useMemo(() => {
     const map = new Map<string, boolean>()
@@ -1722,12 +1495,6 @@ export default function DocumentsPage() {
     setSelectedItemIds([])
   }
 
-  function addEditCostSelectedItem(id: string) {
-    setEcSelectedItemIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
-    setCostEditDirty(true)
-  }
-
-
   function resetCostForm() {
     setCType('배송비(거래처)')
     setCTotalForeign('')
@@ -1741,6 +1508,9 @@ export default function DocumentsPage() {
     setCostReceiptFile(null)
     setCostImportDocFile(null)
     setCostItemForeignMap({})
+    setCDutyAmount('')
+    setCVatAmount('')
+    setCCustomsFeeAmount('')
     setCostDirty(false)
   }
 
@@ -1771,6 +1541,9 @@ export default function DocumentsPage() {
     setEcExistingReceiptPath(null)
     setEcExistingImportDocPath(null)
     setEditCostItemForeignMap({})
+    setEcDutyAmount('')
+    setEcVatAmount('')
+    setEcCustomsFeeAmount('')
     setCostEditDirty(false)
   }
 
@@ -1789,7 +1562,6 @@ export default function DocumentsPage() {
     })
     setCostDirty(true)
   }
-
 
   function addEditCostAllocationItem(id: string) {
     setEcSelectedItemIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
@@ -1825,6 +1597,16 @@ export default function DocumentsPage() {
       })
       return next
     })
+  }
+
+  function addEditCostSelectedItem(id: string) {
+    setEcSelectedItemIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+    setCostEditDirty(true)
+  }
+
+  function removeEditCostSelectedItem(id: string) {
+    setEcSelectedItemIds((prev) => prev.filter((x) => x !== id))
+    setCostEditDirty(true)
   }
 
   function resetBuyForm() {
@@ -1929,7 +1711,7 @@ export default function DocumentsPage() {
       if (!ok) return
     }
     setCostModalOpen(false)
-    resetCostForm()
+    setCostDirty(false)
   }
 
   function requestCloseCostEditModal() {
@@ -1938,7 +1720,7 @@ export default function DocumentsPage() {
       if (!ok) return
     }
     setCostEditModalOpen(false)
-    resetCostEditForm()
+    setCostEditDirty(false)
   }
 
   async function savePurchaseWithItems() {
@@ -2144,41 +1926,41 @@ export default function DocumentsPage() {
     setEcMemo(stripCustomsMemoDetail(cost.memo))
     setEcVendorName(cost.vendor_name ?? '')
     setEcDate(cost.cost_date ?? '')
-    const nextSelectedIds = allocations
-      .filter((a) => a.purchase_cost_id === cost.id)
-      .map((a) => a.purchase_item_id)
-    setEcSelectedItemIds(nextSelectedIds)
+    setEcSelectedItemIds(
+      allocations.filter((a) => a.purchase_cost_id === cost.id).map((a) => a.purchase_item_id)
+    )
     setEcExistingReceiptPath(getCostReceiptPath(cost.id, cost.cost_type))
     setEcExistingImportDocPath(getCostImportDocPath(cost.id))
     setEcReceiptFile(null)
     setEcImportDocFile(null)
 
-    const parsedCustoms = parseCustomsMemo(cost.memo)
-    setEcDutyAmount(parsedCustoms.duty)
-    setEcVatAmount(parsedCustoms.vat)
-    setEcCustomsFeeAmount(parsedCustoms.customsFee)
-    setEcAmount(String(cost.amount ?? ''))
-    setEcTotalForeign(String(cost.amount ?? ''))
-    setEcTotalKRW(
-      String(
+    if (normalizeCostType(cost.cost_type) === '관부과세') {
+      const parsed = parseCustomsMemo(cost.memo)
+      const storedAmount = n(cost.amount)
+      const storedKRW =
         normalizeCurrencyCode(cost.currency) === 'KRW'
-          ? n(cost.amount)
-          : ceil4(n(cost.amount) * n(cost.fx_rate))
+          ? storedAmount
+          : ceil4(storedAmount * n(cost.fx_rate))
+      setEcDutyAmount(parsed.duty)
+      setEcVatAmount(parsed.vat)
+      setEcCustomsFeeAmount(parsed.customsFee)
+      setEcAmount(String(cost.amount ?? ''))
+      setEcTotalForeign(String(cost.amount ?? ''))
+      setEcTotalKRW(String(storedKRW))
+    } else {
+      setEcDutyAmount('')
+      setEcVatAmount('')
+      setEcCustomsFeeAmount('')
+      setEcAmount(String(cost.amount ?? ''))
+      setEcTotalForeign(String(cost.amount ?? ''))
+      setEcTotalKRW(
+        String(
+          normalizeCurrencyCode(cost.currency) === 'KRW'
+            ? n(cost.amount)
+            : ceil4(n(cost.amount) * n(cost.fx_rate))
+        )
       )
-    )
-
-    const nextForeignMap: Record<string, string> = {}
-    allocations
-      .filter((a) => a.purchase_cost_id === cost.id)
-      .forEach((a) => {
-        const allocationKRW = n(a.allocated_amount)
-        const foreignValue =
-          normalizeCurrencyCode(cost.currency) === 'KRW' || n(cost.fx_rate) <= 0
-            ? allocationKRW
-            : ceil4(allocationKRW / n(cost.fx_rate))
-        nextForeignMap[a.purchase_item_id] = String(foreignValue)
-      })
-    setEditCostItemForeignMap(nextForeignMap)
+    }
 
     setCostEditDirty(false)
     setCostEditModalOpen(true)
@@ -2188,17 +1970,34 @@ export default function DocumentsPage() {
     if (!editingCost) return
 
     const cur = currencyValue(ecCurrency, ecCurrencyCustom)
-    const customsBreakdownTotal = customsTotal(ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
-    const totalForeign = ecType === '관부과세'
-      ? (n(ecTotalForeign) > 0 ? n(ecTotalForeign) : customsBreakdownTotal)
-      : n(ecTotalForeign)
-    const totalKRW = n(ecTotalKRW)
-    const fx = normalizeCurrencyCode(cur) === 'KRW' ? 1 : calcFxRate(totalKRW, totalForeign)
+
+    const customsAmount = customsTotal(ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
+    const amount =
+      ecType === '관부과세'
+        ? (customsAmount > 0 ? customsAmount : n(ecTotalForeign || ecTotalKRW))
+        : n(ecTotalForeign)
+
+    const fx =
+      ecType === '관부과세'
+        ? 1
+        : normalizeCurrencyCode(cur) === 'KRW'
+        ? 1
+        : calcFxRate(n(ecTotalKRW), n(ecTotalForeign))
+
+    const costKRW =
+      ecType === '관부과세'
+        ? n(ecTotalKRW || amount)
+        : normalizeCurrencyCode(cur) === 'KRW'
+        ? n(ecTotalKRW || ecTotalForeign)
+        : n(ecTotalKRW)
+
     const finalMemo =
       ecType === '관부과세'
         ? buildCustomsMemo(ecMemo, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
         : ecMemo || null
+
     const chosen = items.filter((it) => ecSelectedItemIds.includes(it.id))
+    const baseSum = chosen.reduce((acc, it) => acc + n(it.line_total), 0)
 
     if (!ecType.trim()) {
       setErr('추가비용 종류를 선택해줘.')
@@ -2208,17 +2007,24 @@ export default function DocumentsPage() {
       setErr('통화를 선택하거나 직접 입력해줘.')
       return
     }
-    if (totalForeign <= 0) {
-      setErr(ecType === '관부과세' ? '관부과세 총액이나 관세/부가세/통관수수료를 입력해줘.' : '외화 총액을 입력해줘.')
-      return
-    }
-    if (totalKRW <= 0) {
-      setErr('원화 총액을 입력해줘.')
-      return
-    }
-    if (normalizeCurrencyCode(cur) !== 'KRW' && fx <= 0) {
-      setErr('외화 총액과 원화 총액을 입력하면 환율이 자동 계산돼.')
-      return
+    if (ecType === '관부과세') {
+      if (amount <= 0 && n(ecTotalKRW) <= 0) {
+        setErr('원화 총액이나 관세/부가세를 입력해줘.')
+        return
+      }
+    } else {
+      if (n(ecTotalForeign) <= 0) {
+        setErr('외화 총액을 입력해줘.')
+        return
+      }
+      if (n(ecTotalKRW) <= 0) {
+        setErr('원화 총액을 입력해줘.')
+        return
+      }
+      if (normalizeCurrencyCode(cur) !== 'KRW' && fx <= 0) {
+        setErr('외화 총액과 원화 총액을 입력하면 환율이 자동 계산돼.')
+        return
+      }
     }
     if (!ecDate || ecDate.length !== 10) {
       setErr('날짜를 YYYY-MM-DD 형식으로 입력해줘.')
@@ -2228,14 +2034,10 @@ export default function DocumentsPage() {
       setErr('배분할 상품을 1개 이상 선택해줘.')
       return
     }
-
-    const resolved = resolveSelectedCostForeignTotals(chosen, editCostItemForeignMap, totalForeign)
-    if (!resolved.ok) {
-      setErr(resolved.message)
+    if (baseSum <= 0) {
+      setErr('선택된 상품의 원화합계가 0이야.')
       return
     }
-
-    const alloc = buildKRWAllocationsFromResolvedRows(resolved.rows, totalKRW, normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx)
 
     try {
       setLoading(true)
@@ -2246,7 +2048,7 @@ export default function DocumentsPage() {
         .from('purchase_costs')
         .update({
           cost_type: ecType,
-          amount: totalForeign,
+          amount,
           currency: cur,
           fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
           memo: finalMemo,
@@ -2261,6 +2063,21 @@ export default function DocumentsPage() {
         .delete()
         .eq('purchase_cost_id', editingCost.id)
       if (delAlloc.error) throw delAlloc.error
+
+      const sorted = [...chosen].sort((a, b) => n(b.line_total) - n(a.line_total))
+      const maxItem = sorted[0]
+      const raw = sorted.map((it) => ({
+        item_id: it.id,
+        raw: (n(it.line_total) / baseSum) * costKRW,
+      }))
+      const alloc = raw.map((r) => ({ item_id: r.item_id, amt: ceilInt(r.raw) }))
+      const allocSum = alloc.reduce((acc, a) => acc + a.amt, 0)
+      const diff = allocSum - Math.round(costKRW)
+
+      if (maxItem) {
+        const idx = alloc.findIndex((a) => a.item_id === maxItem.id)
+        if (idx >= 0) alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
+      }
 
       const insAlloc = await supabase.from('cost_allocations').insert(
         alloc.map((a) => ({
@@ -2291,7 +2108,8 @@ export default function DocumentsPage() {
 
       setMsg('추가비용 수정 완료')
       setCostEditModalOpen(false)
-      resetCostEditForm()
+      setEditingCost(null)
+      setCostEditDirty(false)
       await refreshAll()
     } catch (e: any) {
       setErr(e?.message ?? String(e))
@@ -2346,6 +2164,7 @@ export default function DocumentsPage() {
             .map((x) => itemMap.get(x.purchase_item_id)?.item_name ?? '(이름 없음)')
 
           return {
+            cost_id: a.purchase_cost_id,
             cost_type: c?.cost_type ?? null,
             amount_krw: n(a.allocated_amount),
             created_at: c?.created_at ?? '',
@@ -2363,17 +2182,45 @@ export default function DocumentsPage() {
     }
   }
 
+
+  function openCostEditorById(costId: string, closeDetail = false) {
+    const target = costs.find((c) => c.id === costId)
+    if (!target) return
+    if (closeDetail) {
+      setItemDetailOpen(false)
+      setTimeout(() => openCostEditModal(target), 0)
+      return
+    }
+    openCostEditModal(target)
+  }
+
   async function saveCostAndAllocate() {
     setErr(null)
     setMsg(null)
 
     const cur = currencyValue(cCurrency, cCurrencyCustom)
-    const customsBreakdownTotal = customsTotal(cDutyAmount, cVatAmount, cCustomsFeeAmount)
-    const totalForeign = cType === '관부과세'
-      ? (n(cTotalForeign) > 0 ? n(cTotalForeign) : customsBreakdownTotal)
-      : n(cTotalForeign)
-    const totalKRW = n(cTotalKRW)
-    const fx = normalizeCurrencyCode(cur) === 'KRW' ? 1 : calcFxRate(totalKRW, totalForeign)
+
+    const customsAmount = customsTotal(cDutyAmount, cVatAmount, cCustomsFeeAmount)
+    const amount =
+      cType === '관부과세'
+        ? (customsAmount > 0 ? customsAmount : n(cTotalForeign || cTotalKRW))
+        : n(cTotalForeign)
+
+    const fx =
+      normalizeCurrencyCode(cur) === 'KRW'
+        ? 1
+        : calcFxRate(
+            n(cTotalKRW),
+            cType === '관부과세' ? amount : n(cTotalForeign)
+          )
+
+    const costKRW =
+      cType === '관부과세'
+        ? n(cTotalKRW || amount)
+        : normalizeCurrencyCode(cur) === 'KRW'
+        ? n(cTotalKRW || cTotalForeign)
+        : n(cTotalKRW)
+
     const finalMemo =
       cType === '관부과세'
         ? buildCustomsMemo(cMemo, cDutyAmount, cVatAmount, cCustomsFeeAmount)
@@ -2387,17 +2234,32 @@ export default function DocumentsPage() {
       setErr('통화를 선택하거나 직접 입력해줘.')
       return
     }
-    if (totalForeign <= 0) {
-      setErr(cType === '관부과세' ? '관부과세 총액이나 관세/부가세/통관수수료를 입력해줘.' : '외화 총액을 입력해줘.')
-      return
-    }
-    if (totalKRW <= 0) {
-      setErr('원화 총액을 입력해줘.')
-      return
-    }
-    if (normalizeCurrencyCode(cur) !== 'KRW' && fx <= 0) {
-      setErr('외화 총액과 원화 총액을 입력하면 환율이 자동 계산돼.')
-      return
+    if (cType === '관부과세') {
+      if (amount <= 0 && n(cTotalKRW) <= 0) {
+        setErr('원화 총액이나 관세/부가세를 입력해줘.')
+        return
+      }
+      if (n(cTotalKRW) <= 0) {
+        setErr('원화 총액을 입력해줘.')
+        return
+      }
+      if (normalizeCurrencyCode(cur) !== 'KRW' && fx <= 0) {
+        setErr('관부과세 합계와 원화 총액을 입력하면 환율이 자동 계산돼.')
+        return
+      }
+    } else {
+      if (n(cTotalForeign) <= 0) {
+        setErr('외화 총액을 입력해줘.')
+        return
+      }
+      if (n(cTotalKRW) <= 0) {
+        setErr('원화 총액을 입력해줘.')
+        return
+      }
+      if (normalizeCurrencyCode(cur) !== 'KRW' && fx <= 0) {
+        setErr('외화 총액과 원화 총액을 입력하면 환율이 자동 계산돼.')
+        return
+      }
     }
     if (!cDate || cDate.length !== 10) {
       setErr('날짜를 YYYY-MM-DD 형식으로 입력해줘.')
@@ -2407,19 +2269,17 @@ export default function DocumentsPage() {
       setErr('자동분배하려면 상품을 1개 이상 체크해야 해.')
       return
     }
-
-    const chosen = selectedItems
-    const resolved = resolveSelectedCostForeignTotals(chosen, costItemForeignMap, totalForeign)
-    if (!resolved.ok) {
-      setErr(resolved.message)
+    if (costKRW <= 0) {
+      setErr('원화 환산 금액이 0이야.')
       return
     }
 
-    const alloc = buildKRWAllocationsFromResolvedRows(
-      resolved.rows,
-      totalKRW,
-      normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx
-    )
+    const chosen = selectedItems
+    const baseSum = chosen.reduce((acc, it) => acc + n(it.line_total), 0)
+    if (baseSum <= 0) {
+      setErr('선택된 상품의 원화합계가 0이야.')
+      return
+    }
 
     setLoading(true)
     try {
@@ -2431,7 +2291,7 @@ export default function DocumentsPage() {
         .insert({
           purchase_id: linkedPurchaseId,
           cost_type: cType,
-          amount: totalForeign,
+          amount,
           currency: cur,
           fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
           memo: finalMemo,
@@ -2443,6 +2303,22 @@ export default function DocumentsPage() {
 
       if (insCost.error) throw insCost.error
       const costId = insCost.data.id as string
+
+      const sorted = [...chosen].sort((a, b) => n(b.line_total) - n(a.line_total))
+      const maxItem = sorted[0]
+      const raw = sorted.map((it) => ({
+        item_id: it.id,
+        raw: (n(it.line_total) / baseSum) * costKRW,
+      }))
+
+      const alloc = raw.map((r) => ({ item_id: r.item_id, amt: ceilInt(r.raw) }))
+      const allocSum = alloc.reduce((acc, a) => acc + a.amt, 0)
+      const diff = allocSum - Math.round(costKRW)
+
+      if (maxItem) {
+        const idx = alloc.findIndex((a) => a.item_id === maxItem.id)
+        if (idx >= 0) alloc[idx].amt = Math.max(0, alloc[idx].amt - diff)
+      }
 
       const insAlloc = await supabase.from('cost_allocations').insert(
         alloc.map((a) => ({
@@ -2469,9 +2345,25 @@ export default function DocumentsPage() {
         })
       }
 
-      setMsg(`추가비용 저장 완료 (${fmtKRW(Math.round(totalKRW))})`)
+      setMsg(`추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`)
       setCostModalOpen(false)
-      resetCostForm()
+      setCostDirty(false)
+      setCType('배송비(거래처)')
+      setCAmount('')
+      setCTotalForeign('')
+      setCTotalKRW('')
+      setCCurrency('KRW')
+      setCCurrencyCustom('')
+      setCFxRate('1')
+      setCMemo('')
+      setCVendorName('')
+      setCDate('')
+      setCShippingAmount('')
+      setCDutyAmount('')
+      setCVatAmount('')
+      setCCustomsFeeAmount('')
+      setCostReceiptFile(null)
+      setCostImportDocFile(null)
       await refreshAll()
     } catch (e: any) {
       setErr(e?.message ?? String(e))
@@ -2938,7 +2830,7 @@ export default function DocumentsPage() {
                   style={{ ...styles.input, width: 280 }}
                   value={itemSearch}
                   onChange={(e) => setItemSearch(e.target.value)}
-                  placeholder="매입 전체 상품 검색 (상품명/메모/거래처)"
+                  placeholder="현재 매입 상품 검색 (상품명/메모/거래처)"
                 />
                 <select
                   style={{ ...styles.select, width: 220 }}
@@ -2956,7 +2848,7 @@ export default function DocumentsPage() {
                 <div style={styles.small}>
                   {selectedPurchase ? (
                     <>
-                      {itemSearch.trim() ? <>검색 중: <b>전체 매입 상품 기준</b></> : <>선택 매입: <b>{selectedPurchase.supplier?.trim() || '(거래처 없음)'}</b></>}
+                      현재 매입: <b>{selectedPurchase.supplier?.trim() || '(거래처 없음)'}</b>
                     </>
                   ) : (
                     '왼쪽에서 매입을 선택해줘.'
@@ -2966,7 +2858,7 @@ export default function DocumentsPage() {
             </div>
 
             <div style={{ ...styles.small, marginBottom: 10 }}>
-              ✅ 체크는 매입을 바꿔도 유지돼. 검색하면 전체 매입 상품까지 포함해서 찾아줘.
+              ✅ 체크는 매입을 바꿔도 유지돼. 검색해도 체크 유지됨.
             </div>
 
             <div
@@ -2988,13 +2880,12 @@ export default function DocumentsPage() {
                     <th style={{ ...styles.th, width: 130 }}>원화합계</th>
                     <th style={{ ...styles.th, width: 100 }}>배분</th>
                     <th style={{ ...styles.th, width: 120 }}>최종단가</th>
-                    <th style={{ ...styles.th, width: 100 }}>액션</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedVisibleItems.length === 0 ? (
                     <tr>
-                      <td style={styles.td} colSpan={8}>
+                      <td style={styles.td} colSpan={7}>
                         <span style={styles.small}>조건에 맞는 상품이 없어.</span>
                       </td>
                     </tr>
@@ -3053,12 +2944,34 @@ export default function DocumentsPage() {
                                 </div>
                               )}
 
-                              <div>
-                                <div style={{ fontWeight: 900 }}>
-                                  {it.item_name ?? '(이름 없음)'}{' '}
-                                  {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
-                                    <span style={styles.badge('orange')}>예약</span>
-                                  ) : null}
+                              <div style={{ minWidth: 0 }}>
+                                <div
+                                  onClick={() => openItemDetail(it)}
+                                  style={{
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    color: '#111',
+                                  }}
+                                >
+                                  <div style={{ fontWeight: 900, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    <span>{it.item_name ?? '(이름 없음)'}</span>
+                                    {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
+                                      <span style={styles.badge('orange')}>예약</span>
+                                    ) : null}
+                                    {(itemCostBadgeMap.get(it.id) ?? []).map((badge) => (
+                                      <button
+                                        key={badge.costId}
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          openCostEditorById(badge.costId)
+                                        }}
+                                        style={{ ...styles.badge('purple'), border: 'none', cursor: 'pointer' }}
+                                      >
+                                        {badge.label}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
                                 <div style={styles.small}>
                                   거래처: {parentPurchase?.supplier ?? '(거래처 없음)'}
@@ -3086,12 +2999,6 @@ export default function DocumentsPage() {
                             <div style={{ fontWeight: 900 }}>{fmtKRW(finalUnit)}</div>
                             <div style={styles.small}>(배분 포함)</div>
                           </td>
-
-                          <td style={styles.td}>
-                            <button style={styles.smallBtn} onClick={() => openItemDetail(it)}>
-                              상세
-                            </button>
-                          </td>
                         </tr>
                       )
                     })
@@ -3107,206 +3014,79 @@ export default function DocumentsPage() {
             </div>
           </div>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
-              gap: 14,
-              alignItems: 'start',
-            }}
-          >
+          {selectedItems.length > 0 ? (
             <div style={styles.card}>
               <div style={styles.h2}>선택된상품</div>
-              {selectedItems.length === 0 ? (
-                <div style={styles.small}>선택된 상품이 없어.</div>
-              ) : (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 10,
-                    maxHeight: 240,
-                    overflowY: 'auto',
-                  }}
-                >
-                  {selectedItems.map((it) => {
-                    const allocSum = allocationSumByItem.get(it.id) ?? 0
-                    return (
-                      <div
-                        key={it.id}
-                        style={{
-                          ...styles.card,
-                          padding: 10,
-                          background: '#fcfcff',
-                          width: '100%',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr auto',
-                            gap: 8,
-                            alignItems: 'start',
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 900 }}>{it.item_name ?? '(이름 없음)'}</div>
-                            <div style={styles.small}>
-                              매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'}
-                            </div>
-                            <div style={styles.small}>
-                              수량 {fmtNum(n(it.qty))} / 상품 원화합계 {fmtKRW(n(it.line_total))} / 현재 배분{' '}
-                              {fmtKRW(allocSum)}
-                            </div>
-                          </div>
-                          <button
-                            style={{
-                              ...styles.dangerSmallBtn,
-                              padding: '6px 8px',
-                              minWidth: 0,
-                              width: 'fit-content',
-                              flexShrink: 0,
-                            }}
-                            onClick={() => removeSelectedItem(it.id)}
-                          >
-                            제거
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div style={styles.card}>
               <div
                 style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                  flexWrap: 'wrap',
+                  display: 'grid',
+                  gap: 10,
+                  maxHeight: 240,
+                  overflowY: 'auto',
                 }}
               >
-                <div style={styles.h2}>{selectedPurchase ? '선택 매입 관련 추가비용' : '추가비용'}</div>
-                <select
-                  style={{ ...styles.select, width: 200 }}
-                  value={relatedCostSort}
-                  onChange={(e) =>
-                    setRelatedCostSort(
-                      e.target.value as (typeof RELATED_COST_SORT_OPTIONS)[number]['value']
-                    )
-                  }
-                >
-                  {RELATED_COST_SORT_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'grid', gap: 10, maxHeight: 240, overflowY: 'auto' }}>
-                {selectedPurchaseRelatedCosts.length === 0 && (
-                  <div style={styles.small}>추가비용이 없어.</div>
-                )}
-
-                {selectedPurchaseRelatedCosts.map((cost) => {
-                  const krw =
-                    normalizeCurrencyCode(cost.currency) === 'KRW'
-                      ? n(cost.amount)
-                      : n(cost.amount) * n(cost.fx_rate)
-
-                  const allocItemCount = allocations.filter((a) => a.purchase_cost_id === cost.id).length
-                  const receiptPath = getCostReceiptPath(cost.id, cost.cost_type)
-                  const importDocPath = getCostImportDocPath(cost.id)
-                  const costTypeLabel = normalizeCostType(cost.cost_type)
-                  const customsInline =
-                    costTypeLabel === '관부과세' ? formatCustomsDetailInline(cost.memo) : ''
-
+                {selectedItems.map((it) => {
+                  const allocSum = allocationSumByItem.get(it.id) ?? 0
                   return (
-                    <div key={cost.id} style={{ ...styles.card, padding: 10, background: '#fcfcff' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start' }}>
+                    <div
+                      key={it.id}
+                      style={{
+                        ...styles.card,
+                        padding: 10,
+                        background: '#fcfcff',
+                        width: '100%',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr auto',
+                          gap: 8,
+                          alignItems: 'start',
+                        }}
+                      >
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 900, marginBottom: 6 }}>
-                            {cost.cost_type ?? '추가비용'}{' '}
-                            {allocItemCount > 0 ? <span style={styles.badge('purple')}>배분 {allocItemCount}건</span> : null}
+                          <div style={{ fontWeight: 900, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span>{it.item_name ?? '(이름 없음)'}</span>
+                            {(itemCostBadgeMap.get(it.id) ?? []).map((badge) => (
+                              <button
+                                key={badge.costId}
+                                type="button"
+                                onClick={() => openCostEditorById(badge.costId)}
+                                style={{ ...styles.badge('purple'), border: 'none', cursor: 'pointer' }}
+                              >
+                                {badge.label}
+                              </button>
+                            ))}
                           </div>
                           <div style={styles.small}>
-                            날짜: <b>{fmtDate(cost.cost_date)}</b> / 금액: <b>{fmtNum(n(cost.amount))}</b>{' '}
-                            {currencyLabel(cost.currency)} / 환율: <b>{fmtNum(n(cost.fx_rate))}</b> / 환산:{' '}
-                            <b>{fmtKRW(krw)}</b>
+                            매입: {purchaseMap.get(it.purchase_id)?.supplier ?? '(거래처 없음)'}
                           </div>
-                          {cost.vendor_name ? (
-                            <div style={styles.small}>
-                              거래처: <b>{cost.vendor_name}</b>
-                            </div>
-                          ) : null}
-                          <div style={styles.small}>등록: {fmtDateTime(cost.created_at)}</div>
-                          <div style={{ ...styles.small, marginTop: 4 }}>
-                            영수증:{' '}
-                            {receiptPath ? (
-                              <a href={getPublicUrl(receiptPath)} target="_blank" rel="noreferrer">
-                                보기
-                              </a>
-                            ) : (
-                              '미업로드'
-                            )}
-                            {isImportDocCostType(cost.cost_type) ? (
-                              <>
-                                {' '}
-                                / 수입신고필증:{' '}
-                                {importDocPath ? (
-                                  <a href={getPublicUrl(importDocPath)} target="_blank" rel="noreferrer">
-                                    보기
-                                  </a>
-                                ) : (
-                                  '미업로드'
-                                )}
-                              </>
-                            ) : null}
+                          <div style={styles.small}>
+                            수량 {fmtNum(n(it.qty))} / 상품 원화합계 {fmtKRW(n(it.line_total))} / 현재 배분{' '}
+                            {fmtKRW(allocSum)}
                           </div>
-
-                          {customsInline ? (
-                            <div style={{ ...styles.small, marginTop: 6 }}>
-                              [관부과세 상세] {customsInline}
-                            </div>
-                          ) : null}
-
-                          {cost.memo && costTypeLabel !== '관부과세' ? (
-                            <div style={{ marginTop: 6, whiteSpace: 'pre-line' }}>{cost.memo}</div>
-                          ) : null}
                         </div>
-
-                        <div
+                        <button
                           style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 4,
+                            ...styles.dangerSmallBtn,
+                            padding: '6px 8px',
+                            minWidth: 0,
                             width: 'fit-content',
                             flexShrink: 0,
                           }}
+                          onClick={() => removeSelectedItem(it.id)}
                         >
-                          <button
-                            style={{ ...styles.smallBtn, padding: '6px 8px', minWidth: 0 }}
-                            onClick={() => openCostEditModal(cost)}
-                          >
-                            수정
-                          </button>
-                          <button
-                            style={{ ...styles.dangerSmallBtn, padding: '6px 8px', minWidth: 0 }}
-                            onClick={() => deleteCost(cost.id)}
-                          >
-                            삭제
-                          </button>
-                        </div>
+                          제거
+                        </button>
                       </div>
                     </div>
                   )
                 })}
               </div>
             </div>
-          </div>
+          ) : null}
+
         </div>
       </div>
 
@@ -3395,7 +3175,7 @@ export default function DocumentsPage() {
                 style={styles.input}
                 value={fTotalForeign}
                 onChange={(e) => setFTotalForeign(e.target.value)}
-                placeholder={cType === '관부과세' ? '비워도 관세/부가세/통관수수료로 저장 가능' : '숫자만'}
+                placeholder="숫자만"
               />
             </div>
 
@@ -3673,7 +3453,6 @@ export default function DocumentsPage() {
         </div>
       </SafeModal>
 
-
       <SafeModal open={costModalOpen} title="추가비용 저장 + 선택 상품 자동분배" onClose={requestCloseCostModal}>
         <div onInputCapture={() => setCostDirty(true)} onChangeCapture={() => setCostDirty(true)}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 14 }}>
@@ -3688,14 +3467,7 @@ export default function DocumentsPage() {
           <div style={styles.grid2}>
             <div style={styles.field}>
               <div style={styles.label}>추가비용 종류</div>
-              <select
-                style={styles.select}
-                value={cType}
-                onChange={(e) => {
-                  setCType(e.target.value)
-                  setCostDirty(true)
-                }}
-              >
+              <select style={styles.select} value={cType} onChange={(e) => setCType(e.target.value)}>
                 {COST_TYPE_OPTIONS.map((t) => (
                   <option key={t} value={t}>
                     {t}
@@ -3716,42 +3488,71 @@ export default function DocumentsPage() {
               />
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>외화 총액</div>
-              <input
-                style={styles.input}
-                value={cTotalForeign}
-                onChange={(e) => setCTotalForeign(e.target.value)}
-                placeholder="숫자만"
-              />
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>원화 총액(실결제)</div>
-              <input
-                style={styles.input}
-                value={cTotalKRW}
-                onChange={(e) => setCTotalKRW(e.target.value)}
-                placeholder="숫자만"
-              />
-            </div>
-
             {cType === '관부과세' ? (
               <>
                 <div style={styles.field}>
                   <div style={styles.label}>관세</div>
-                  <input style={styles.input} value={cDutyAmount} onChange={(e) => setCDutyAmount(e.target.value)} placeholder="예: 3000" />
+                  <input
+                    style={styles.input}
+                    value={cDutyAmount}
+                    onChange={(e) => setCDutyAmount(e.target.value)}
+                    placeholder="예: 3000"
+                  />
                 </div>
+
                 <div style={styles.field}>
                   <div style={styles.label}>부가세</div>
-                  <input style={styles.input} value={cVatAmount} onChange={(e) => setCVatAmount(e.target.value)} placeholder="예: 1500" />
+                  <input
+                    style={styles.input}
+                    value={cVatAmount}
+                    onChange={(e) => setCVatAmount(e.target.value)}
+                    placeholder="예: 1500"
+                  />
                 </div>
+
                 <div style={styles.field}>
-                  <div style={styles.label}>통관수수료</div>
-                  <input style={styles.input} value={cCustomsFeeAmount} onChange={(e) => setCCustomsFeeAmount(e.target.value)} placeholder="예: 5500" />
+                  <div style={styles.label}>통관수수료(자동)</div>
+                  <input
+                    style={{ ...styles.input, background: '#f3f4f6' }}
+                    readOnly
+                    value={cCustomsFeeAmount}
+                    placeholder="관세/부가세 입력 시 자동 계산"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalKRW}
+                    onChange={(e) => setCTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
                 </div>
               </>
-            ) : null}
+            ) : (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>외화 총액</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalForeign}
+                    onChange={(e) => setCTotalForeign(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalKRW}
+                    onChange={(e) => setCTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+              </>
+            )}
 
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
@@ -3780,8 +3581,18 @@ export default function DocumentsPage() {
                 value={
                   normalizeCurrencyCode(currencyValue(cCurrency, cCurrencyCustom)) === 'KRW'
                     ? '1.0000'
-                    : calcFxRate(n(cTotalKRW), n(cTotalForeign)) > 0
-                    ? calcFxRate(n(cTotalKRW), n(cTotalForeign)).toFixed(4)
+                    : calcFxRate(
+                        n(cTotalKRW),
+                        cType === '관부과세'
+                          ? customsTotal(cDutyAmount, cVatAmount, cCustomsFeeAmount)
+                          : n(cTotalForeign)
+                      ) > 0
+                    ? calcFxRate(
+                        n(cTotalKRW),
+                        cType === '관부과세'
+                          ? customsTotal(cDutyAmount, cVatAmount, cCustomsFeeAmount)
+                          : n(cTotalForeign)
+                      ).toFixed(4)
                     : ''
                 }
                 placeholder="자동 계산"
@@ -3801,15 +3612,7 @@ export default function DocumentsPage() {
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>
-                {cType === '관부과세'
-                  ? '관부과세영수증'
-                  : cType === '잔금'
-                  ? '잔금비용영수증'
-                  : cType === '기타'
-                  ? '기타비용영수증'
-                  : '배송비영수증'}
-              </div>
+              <div style={styles.label}>{ecType === '관부과세' ? '관부과세영수증' : ecType === '잔금' ? '잔금비용영수증' : ecType === '기타' ? '기타비용영수증' : '배송비영수증'}</div>
               <div style={styles.fileBox}>
                 <input
                   type="file"
@@ -3840,21 +3643,16 @@ export default function DocumentsPage() {
                 style={styles.input}
                 value={cMemo}
                 onChange={(e) => setCMemo(e.target.value)}
-                placeholder="예: DHL / 일반 메모"
+                placeholder={cType === '관부과세' ? '예: 고지서 메모 / 특이사항' : '예: DHL / 일반 메모'}
               />
             </div>
           </div>
 
           <div style={styles.hr} />
 
-          <div style={{ ...styles.small, marginBottom: 8, whiteSpace: 'pre-line' }}>
-            ① 상품 외화금액이 전부 비어 있으면 <b>수량대비 자동배분</b>
-            {'\\n'}
-            ② 일부만 입력하면 <b>남은 금액만 빈 칸에 수량대비 자동배분</b>
-            {'\\n'}
-            ③ 전부 입력했는데 외화 총액과 안 맞으면 <b>입력한 금액대비로 전체 자동보정</b>
-            {'\\n'}
-            소수점은 <b>무조건 올림</b> 처리돼.
+          <div style={{ ...styles.small, marginBottom: 8 }}>
+            배분 기준: <b>상품 원화합계</b> 비율 / 소수점은 <b>무조건 올림</b> / 오차는{' '}
+            <b>상품 원화합계가 가장 큰 상품</b>에 몰아줌
           </div>
 
           <ItemSelectionManager
@@ -3863,109 +3661,11 @@ export default function DocumentsPage() {
             allItems={items}
             purchaseMap={purchaseMap}
             selectedIds={selectedItemIds}
-            onRemove={removeSelectedCostItem}
-            onAdd={addSelectedCostItem}
+            onRemove={removeSelectedItem}
+            onAdd={addSelectedItem}
           />
-
-          <div
-            style={{
-              ...styles.card,
-              marginTop: 10,
-              background: '#fafafa',
-              borderColor:
-                costPreview.hasItems && Math.abs(costPreview.diff) > 0.0001
-                  ? '#fecaca'
-                  : '#e6e6ef',
-              padding: 10,
-            }}
-          >
-            <div style={{ ...styles.small, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-              <span>
-                미리보기 외화합계: <b>{fmtNum(costPreview.previewForeignSum)}</b>
-              </span>
-              <span>
-                외화 총액: <b>{fmtNum(n(cTotalForeign))}</b>
-              </span>
-              <span>
-                차이:{' '}
-                <b style={{ color: Math.abs(costPreview.diff) > 0.0001 ? '#dc2626' : '#166534' }}>
-                  {fmtNum(costPreview.diff)}
-                </b>
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gap: 10, marginTop: 10, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
-            {selectedItems.length === 0 ? (
-              <div style={styles.small}>선택된 상품이 없어.</div>
-            ) : (
-              selectedItems.map((it, idx) => {
-                const preview = costPreviewMap.get(it.id)
-                const q = preview?.qty ?? Math.max(1, n(it.qty))
-                const ft = preview?.previewForeignTotal ?? Math.max(0, n(costItemForeignMap[it.id]))
-                const foreignUnit = preview?.previewForeignUnit ?? (q > 0 ? ceil4(ft / q) : 0)
-                const lineKRW = preview?.previewKRWTotal ?? ceil4(ft * costPreview.fx)
-                const unitKRW = preview?.previewKRWUnit ?? (q > 0 ? ceil4(lineKRW / q) : 0)
-                const isAutoPreview = !!preview?.isBlank
-
-                return (
-                  <div key={it.id} style={{ ...styles.card, background: '#fafafa' }}>
-                    <div style={{ fontWeight: 900, marginBottom: 10 }}>
-                      상품 {idx + 1} · {it.item_name ?? '(이름 없음)'}
-                    </div>
-
-                    <div style={styles.grid2}>
-                      <div style={styles.field}>
-                        <div style={styles.label}>상품 추가비용 외화 총액</div>
-                        <input
-                          style={styles.input}
-                          value={costItemForeignMap[it.id] ?? ''}
-                          onChange={(e) =>
-                            setCostItemForeignMap((prev) => ({
-                              ...prev,
-                              [it.id]: e.target.value,
-                            }))
-                          }
-                          placeholder="비우면 자동배분 / 전부 입력 후 합계 안 맞으면 비례보정"
-                        />
-                      </div>
-
-                      <div style={styles.field}>
-                        <div style={styles.label}>수량</div>
-                        <input
-                          style={{ ...styles.input, background: '#f3f4f6' }}
-                          readOnly
-                          value={String(q)}
-                        />
-                      </div>
-
-                      <div style={{ gridColumn: '1 / -1' }}>
-                        <div style={styles.small}>
-                          {isAutoPreview ? (
-                            <>
-                              자동계산 외화총액: <b>{ft > 0 ? fmtNum(ft) : '0'}</b> / 외화단가:{' '}
-                              <b>{foreignUnit > 0 ? foreignUnit.toFixed(4) : '0'}</b> / 원화단가:{' '}
-                              <b>{unitKRW > 0 ? fmtKRW(unitKRW) : '0원'}</b> / 상품 원화합계:{' '}
-                              <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b>
-                            </>
-                          ) : (
-                            <>
-                              외화단가: <b>{foreignUnit > 0 ? foreignUnit.toFixed(4) : '0'}</b> / 원화단가:{' '}
-                              <b>{unitKRW > 0 ? fmtKRW(unitKRW) : '0원'}</b> / 상품 원화합계:{' '}
-                              <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
         </div>
       </SafeModal>
-
 
       <SafeModal open={costEditModalOpen} title="추가비용 수정" onClose={requestCloseCostEditModal}>
         <div onInputCapture={() => setCostEditDirty(true)} onChangeCapture={() => setCostEditDirty(true)}>
@@ -4002,42 +3702,61 @@ export default function DocumentsPage() {
               />
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>외화 총액</div>
-              <input
-                style={styles.input}
-                value={ecTotalForeign}
-                onChange={(e) => setEcTotalForeign(e.target.value)}
-                placeholder={ecType === '관부과세' ? '비워도 관세/부가세/통관수수료로 저장 가능' : '숫자만'}
-              />
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>원화 총액(실결제)</div>
-              <input
-                style={styles.input}
-                value={ecTotalKRW}
-                onChange={(e) => setEcTotalKRW(e.target.value)}
-                placeholder="숫자만"
-              />
-            </div>
-
             {ecType === '관부과세' ? (
               <>
                 <div style={styles.field}>
                   <div style={styles.label}>관세</div>
-                  <input style={styles.input} value={ecDutyAmount} onChange={(e) => setEcDutyAmount(e.target.value)} placeholder="예: 3000" />
+                  <input style={styles.input} value={ecDutyAmount} onChange={(e) => setEcDutyAmount(e.target.value)} />
                 </div>
+
                 <div style={styles.field}>
                   <div style={styles.label}>부가세</div>
-                  <input style={styles.input} value={ecVatAmount} onChange={(e) => setEcVatAmount(e.target.value)} placeholder="예: 1500" />
+                  <input style={styles.input} value={ecVatAmount} onChange={(e) => setEcVatAmount(e.target.value)} />
                 </div>
+
                 <div style={styles.field}>
-                  <div style={styles.label}>통관수수료</div>
-                  <input style={styles.input} value={ecCustomsFeeAmount} onChange={(e) => setEcCustomsFeeAmount(e.target.value)} placeholder="예: 5500" />
+                  <div style={styles.label}>통관수수료(자동)</div>
+                  <input
+                    style={{ ...styles.input, background: '#f3f4f6' }}
+                    readOnly
+                    value={ecCustomsFeeAmount}
+                    placeholder="관세/부가세 입력 시 자동 계산"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalKRW}
+                    onChange={(e) => setEcTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
                 </div>
               </>
-            ) : null}
+            ) : (
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>외화 총액</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalForeign}
+                    onChange={(e) => setEcTotalForeign(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+
+                <div style={styles.field}>
+                  <div style={styles.label}>원화 총액(실결제)</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalKRW}
+                    onChange={(e) => setEcTotalKRW(e.target.value)}
+                    placeholder="숫자만"
+                  />
+                </div>
+              </>
+            )}
 
             <div style={styles.field}>
               <div style={styles.label}>통화</div>
@@ -4049,12 +3768,7 @@ export default function DocumentsPage() {
                 ))}
               </select>
               {ecCurrency === '직접입력' && (
-                <input
-                  style={styles.input}
-                  value={ecCurrencyCustom}
-                  onChange={(e) => setEcCurrencyCustom(e.target.value)}
-                  placeholder="예: THB"
-                />
+                <input style={styles.input} value={ecCurrencyCustom} onChange={(e) => setEcCurrencyCustom(e.target.value)} />
               )}
             </div>
 
@@ -4064,7 +3778,9 @@ export default function DocumentsPage() {
                 style={{ ...styles.input, background: '#f3f4f6' }}
                 readOnly
                 value={
-                  normalizeCurrencyCode(currencyValue(ecCurrency, ecCurrencyCustom)) === 'KRW'
+                  ecType === '관부과세'
+                    ? '1'
+                    : normalizeCurrencyCode(currencyValue(ecCurrency, ecCurrencyCustom)) === 'KRW'
                     ? '1.0000'
                     : calcFxRate(n(ecTotalKRW), n(ecTotalForeign)) > 0
                     ? calcFxRate(n(ecTotalKRW), n(ecTotalForeign)).toFixed(4)
@@ -4087,15 +3803,7 @@ export default function DocumentsPage() {
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>
-                {ecType === '관부과세'
-                  ? '관부과세영수증'
-                  : ecType === '잔금'
-                  ? '잔금비용영수증'
-                  : ecType === '기타'
-                  ? '기타비용영수증'
-                  : '배송비영수증'}
-              </div>
+              <div style={styles.label}>{cType === '관부과세' ? '관부과세영수증' : cType === '잔금' ? '잔금비용영수증' : cType === '기타' ? '기타비용영수증' : '배송비영수증'}</div>
               <div style={styles.fileBox}>
                 {ecExistingReceiptPath ? (
                   <div style={styles.fileInfo}>
@@ -4144,123 +3852,16 @@ export default function DocumentsPage() {
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
-              <div style={{ ...styles.small, marginBottom: 8, whiteSpace: 'pre-line' }}>
-                ① 상품 외화금액이 전부 비어 있으면 <b>수량대비 자동배분</b>
-                {'\\n'}
-                ② 일부만 입력하면 <b>남은 금액만 빈 칸에 수량대비 자동배분</b>
-                {'\\n'}
-                ③ 전부 입력했는데 외화 총액과 안 맞으면 <b>입력한 금액대비로 전체 자동보정</b>
-                {'\\n'}
-                소수점은 <b>무조건 올림</b> 처리돼.
-              </div>
-
               <ItemSelectionManager
                 title="배분할 상품"
                 selectedItems={editSelectedItems}
                 allItems={items}
                 purchaseMap={purchaseMap}
                 selectedIds={ecSelectedItemIds}
-                onRemove={removeEditCostAllocationItem}
-                onAdd={addEditCostAllocationItem}
+                onRemove={removeEditCostSelectedItem}
+                onAdd={addEditCostSelectedItem}
               />
             </div>
-          </div>
-
-          <div
-            style={{
-              ...styles.card,
-              marginTop: 10,
-              background: '#fafafa',
-              borderColor:
-                editCostPreview.hasItems && Math.abs(editCostPreview.diff) > 0.0001
-                  ? '#fecaca'
-                  : '#e6e6ef',
-              padding: 10,
-            }}
-          >
-            <div style={{ ...styles.small, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-              <span>
-                미리보기 외화합계: <b>{fmtNum(editCostPreview.previewForeignSum)}</b>
-              </span>
-              <span>
-                외화 총액: <b>{fmtNum(n(ecTotalForeign))}</b>
-              </span>
-              <span>
-                차이:{' '}
-                <b style={{ color: Math.abs(editCostPreview.diff) > 0.0001 ? '#dc2626' : '#166534' }}>
-                  {fmtNum(editCostPreview.diff)}
-                </b>
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gap: 10, marginTop: 10, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
-            {editSelectedItems.length === 0 ? (
-              <div style={styles.small}>선택된 상품이 없어.</div>
-            ) : (
-              editSelectedItems.map((it, idx) => {
-                const preview = editCostPreviewMap.get(it.id)
-                const q = preview?.qty ?? Math.max(1, n(it.qty))
-                const ft = preview?.previewForeignTotal ?? Math.max(0, n(editCostItemForeignMap[it.id]))
-                const foreignUnit = preview?.previewForeignUnit ?? (q > 0 ? ceil4(ft / q) : 0)
-                const lineKRW = preview?.previewKRWTotal ?? ceil4(ft * editCostPreview.fx)
-                const unitKRW = preview?.previewKRWUnit ?? (q > 0 ? ceil4(lineKRW / q) : 0)
-                const isAutoPreview = !!preview?.isBlank
-
-                return (
-                  <div key={it.id} style={{ ...styles.card, background: '#fafafa' }}>
-                    <div style={{ fontWeight: 900, marginBottom: 10 }}>
-                      상품 {idx + 1} · {it.item_name ?? '(이름 없음)'}
-                    </div>
-
-                    <div style={styles.grid2}>
-                      <div style={styles.field}>
-                        <div style={styles.label}>상품 추가비용 외화 총액</div>
-                        <input
-                          style={styles.input}
-                          value={editCostItemForeignMap[it.id] ?? ''}
-                          onChange={(e) =>
-                            setEditCostItemForeignMap((prev) => ({
-                              ...prev,
-                              [it.id]: e.target.value,
-                            }))
-                          }
-                          placeholder="비우면 자동배분 / 전부 입력 후 합계 안 맞으면 비례보정"
-                        />
-                      </div>
-
-                      <div style={styles.field}>
-                        <div style={styles.label}>수량</div>
-                        <input
-                          style={{ ...styles.input, background: '#f3f4f6' }}
-                          readOnly
-                          value={String(q)}
-                        />
-                      </div>
-
-                      <div style={{ gridColumn: '1 / -1' }}>
-                        <div style={styles.small}>
-                          {isAutoPreview ? (
-                            <>
-                              자동계산 외화총액: <b>{ft > 0 ? fmtNum(ft) : '0'}</b> / 외화단가:{' '}
-                              <b>{foreignUnit > 0 ? foreignUnit.toFixed(4) : '0'}</b> / 원화단가:{' '}
-                              <b>{unitKRW > 0 ? fmtKRW(unitKRW) : '0원'}</b> / 상품 원화합계:{' '}
-                              <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b>
-                            </>
-                          ) : (
-                            <>
-                              외화단가: <b>{foreignUnit > 0 ? foreignUnit.toFixed(4) : '0'}</b> / 원화단가:{' '}
-                              <b>{unitKRW > 0 ? fmtKRW(unitKRW) : '0원'}</b> / 상품 원화합계:{' '}
-                              <b>{lineKRW > 0 ? fmtKRW(lineKRW) : '0원'}</b>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })
-            )}
           </div>
         </div>
       </SafeModal>
@@ -4300,6 +3901,7 @@ export default function DocumentsPage() {
                     <th style={styles.th}>같이 배분된 상품</th>
                     <th style={styles.th}>거래처</th>
                     <th style={styles.th}>메모</th>
+                    <th style={{ ...styles.th, width: 90 }}>수정</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4315,6 +3917,16 @@ export default function DocumentsPage() {
                       </td>
                       <td style={styles.td}>{a.vendor_name ?? '-'}</td>
                       <td style={{ ...styles.td, whiteSpace: 'pre-line' }}>{a.memo ?? ''}</td>
+                      <td style={styles.td}>
+                        {a.cost_id ? (
+                          <button
+                            style={styles.smallBtn}
+                            onClick={() => openCostEditorById(a.cost_id as string, true)}
+                          >
+                            수정
+                          </button>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
