@@ -43,8 +43,25 @@ type PurchaseSummaryRow = {
   purchase_items: PurchaseItemSummary[] | null
 }
 
+
+type PurchaseCostSummaryRow = {
+  id: string
+  cost_date: string | null
+  cost_type: string | null
+  vendor_name: string | null
+  amount: number | null
+  currency: string | null
+  fx_rate: number | null
+  memo: string | null
+}
+
 type NormalizedSaleRow = SaleSummaryRow & {
   normalizedDate: string
+}
+
+type NormalizedPurchaseCostRow = PurchaseCostSummaryRow & {
+  normalizedDate: string
+  amountKrw: number
 }
 
 type NormalizedPurchaseRow = PurchaseSummaryRow & {
@@ -140,6 +157,21 @@ function getSaleItemName(first: SaleItemSummary | undefined) {
   return first.purchase_items.item_name || '(상품명 없음)'
 }
 
+
+function purchaseCostToKrw(row: {
+  amount: number | null
+  currency: string | null
+  fx_rate: number | null
+}) {
+  const amount = Number(row.amount || 0)
+  const currency = String(row.currency || 'KRW').toUpperCase()
+  const fxRate = Number(row.fx_rate || 0)
+
+  if (currency === 'KRW' || !currency) return amount
+  if (fxRate > 0) return amount * fxRate
+  return amount
+}
+
 const navCards = [
   {
     href: '/documents',
@@ -171,6 +203,7 @@ const navCards = [
 export default function DashboardPage() {
   const [sales, setSales] = useState<SaleSummaryRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseSummaryRow[]>([])
+  const [purchaseCosts, setPurchaseCosts] = useState<PurchaseCostSummaryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
@@ -183,7 +216,7 @@ export default function DashboardPage() {
       setErr(null)
 
       try {
-        const [salesRes, purchaseRes] = await Promise.all([
+        const [salesRes, purchaseRes, purchaseCostRes] = await Promise.all([
           supabase
             .from('sales')
             .select(`
@@ -217,13 +250,29 @@ export default function DashboardPage() {
               )
             `)
             .order('purchase_date', { ascending: true }),
+
+          supabase
+            .from('purchase_costs')
+            .select(`
+              id,
+              cost_date,
+              cost_type,
+              vendor_name,
+              amount,
+              currency,
+              fx_rate,
+              memo
+            `)
+            .order('cost_date', { ascending: true }),
         ])
 
         if (salesRes.error) throw salesRes.error
         if (purchaseRes.error) throw purchaseRes.error
+        if (purchaseCostRes.error) throw purchaseCostRes.error
 
         setSales((salesRes.data ?? []) as unknown as SaleSummaryRow[])
         setPurchases((purchaseRes.data ?? []) as unknown as PurchaseSummaryRow[])
+        setPurchaseCosts((purchaseCostRes.data ?? []) as unknown as PurchaseCostSummaryRow[])
       } catch (e: any) {
         setErr(e?.message ?? String(e))
       } finally {
@@ -272,6 +321,14 @@ export default function DashboardPage() {
     }))
   }, [purchases])
 
+  const normalizedPurchaseCosts = useMemo<NormalizedPurchaseCostRow[]>(() => {
+    return purchaseCosts.map((row) => ({
+      ...row,
+      normalizedDate: normalizeDate(row.cost_date),
+      amountKrw: purchaseCostToKrw(row),
+    }))
+  }, [purchaseCosts])
+
   const daySales = useMemo(
     () => sortSalesAsc(normalizedSales.filter((x) => x.normalizedDate && isInToday(x.normalizedDate))),
     [normalizedSales]
@@ -301,6 +358,25 @@ export default function DashboardPage() {
   )
   const totalPurchaseRows = useMemo(() => sortPurchasesAsc(normalizedPurchases), [normalizedPurchases])
 
+  const dayPurchaseCosts = useMemo(
+    () => normalizedPurchaseCosts.filter((x) => x.normalizedDate && isInToday(x.normalizedDate)),
+    [normalizedPurchaseCosts]
+  )
+  const monthPurchaseCosts = useMemo(
+    () => normalizedPurchaseCosts.filter((x) => x.normalizedDate && isInMonth(x.normalizedDate)),
+    [normalizedPurchaseCosts]
+  )
+  const yearPurchaseCosts = useMemo(
+    () => normalizedPurchaseCosts.filter((x) => x.normalizedDate && isInYear(x.normalizedDate)),
+    [normalizedPurchaseCosts]
+  )
+  const totalPurchaseCostRows = useMemo(() => [...normalizedPurchaseCosts].sort((a, b) => {
+    if (a.normalizedDate && b.normalizedDate) {
+      if (a.normalizedDate !== b.normalizedDate) return a.normalizedDate.localeCompare(b.normalizedDate)
+    }
+    return a.id.localeCompare(b.id)
+  }), [normalizedPurchaseCosts])
+
   const summary = useMemo(() => {
     const dayProfit = daySales.reduce((sum, row) => sum + Number(row.profit_amount || 0), 0)
     const monthProfit = monthSales.reduce((sum, row) => sum + Number(row.profit_amount || 0), 0)
@@ -308,10 +384,18 @@ export default function DashboardPage() {
     const totalSales = totalSalesRows.reduce((sum, row) => sum + Number(row.final_amount || 0), 0)
     const totalSalesProfit = totalSalesRows.reduce((sum, row) => sum + Number(row.profit_amount || 0), 0)
 
-    const dayPurchase = dayPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)
-    const monthPurchase = monthPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)
-    const yearPurchase = yearPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)
-    const totalPurchase = totalPurchaseRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)
+    const dayPurchase =
+      dayPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0) +
+      dayPurchaseCosts.reduce((sum, row) => sum + Number(row.amountKrw || 0), 0)
+    const monthPurchase =
+      monthPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0) +
+      monthPurchaseCosts.reduce((sum, row) => sum + Number(row.amountKrw || 0), 0)
+    const yearPurchase =
+      yearPurchases.reduce((sum, row) => sum + Number(row.total_amount || 0), 0) +
+      yearPurchaseCosts.reduce((sum, row) => sum + Number(row.amountKrw || 0), 0)
+    const totalPurchase =
+      totalPurchaseRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0) +
+      totalPurchaseCostRows.reduce((sum, row) => sum + Number(row.amountKrw || 0), 0)
 
     return {
       dayProfit,
@@ -324,7 +408,7 @@ export default function DashboardPage() {
       yearPurchase,
       totalPurchase,
     }
-  }, [daySales, monthSales, yearSales, totalSalesRows, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows])
+  }, [daySales, monthSales, yearSales, totalSalesRows, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows])
 
   const salesCards = [
     {
@@ -451,6 +535,21 @@ export default function DashboardPage() {
         return []
     }
   }, [selectedMetric, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows])
+
+  const selectedPurchaseCostRows = useMemo(() => {
+    switch (selectedMetric) {
+      case 'day_purchase':
+        return dayPurchaseCosts
+      case 'month_purchase':
+        return monthPurchaseCosts
+      case 'year_purchase':
+        return yearPurchaseCosts
+      case 'total_purchase':
+        return totalPurchaseCostRows
+      default:
+        return []
+    }
+  }, [selectedMetric, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows])
 
   const isSalesModal =
     selectedMetric === 'day_sales_profit' ||
@@ -815,15 +914,61 @@ export default function DashboardPage() {
                 )
               })
             )
-          ) : selectedPurchaseRows.length === 0 ? (
+          ) : selectedPurchaseRows.length === 0 && selectedPurchaseCostRows.length === 0 ? (
             <div style={{ color: '#6b7280', fontWeight: 700 }}>해당 기간 매입 내역이 없어.</div>
           ) : (
-            selectedPurchaseRows.map((row) => {
-              const first = row.purchase_items?.[0]
-              const itemName = first?.item_name || '(상품명 없음)'
-              return (
+            <>
+              {selectedPurchaseRows.map((row) => {
+                const first = row.purchase_items?.[0]
+                const itemName = first?.item_name || '(상품명 없음)'
+                return (
+                  <div
+                    key={`purchase-${row.id}`}
+                    style={{
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 16,
+                      padding: 14,
+                      background: '#fff',
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, fontSize: 15 }}>{itemName}</div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: 13,
+                        color: '#6b7280',
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      거래처 {row.supplier || '미입력'} / 매입일 {row.purchase_date || '미입력'} / 수량 {first?.qty || 0}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
+                      상품매입 {fmtKRW(Number(row.total_amount || 0))}
+                    </div>
+                    {row.memo ? (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 13,
+                          color: '#4b5563',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        메모: {row.memo}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+
+              {selectedPurchaseCostRows.map((row) => (
                 <div
-                  key={row.id}
+                  key={`cost-${row.id}`}
                   style={{
                     border: '1px solid #e5e7eb',
                     borderRadius: 16,
@@ -831,7 +976,9 @@ export default function DashboardPage() {
                     background: '#fff',
                   }}
                 >
-                  <div style={{ fontWeight: 900, fontSize: 15 }}>{itemName}</div>
+                  <div style={{ fontWeight: 900, fontSize: 15 }}>
+                    추가비용 · {row.cost_type || '미입력'}
+                  </div>
                   <div
                     style={{
                       marginTop: 4,
@@ -843,10 +990,10 @@ export default function DashboardPage() {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    거래처 {row.supplier || '미입력'} / 매입일 {row.purchase_date || '미입력'} / 수량 {first?.qty || 0}
+                    거래처 {row.vendor_name || '미입력'} / 비용일 {row.cost_date || '미입력'}
                   </div>
                   <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
-                    매입합계 {fmtKRW(Number(row.total_amount || 0))}
+                    추가비용 {fmtKRW(Number(row.amountKrw || 0))}
                   </div>
                   {row.memo ? (
                     <div
@@ -863,8 +1010,8 @@ export default function DashboardPage() {
                     </div>
                   ) : null}
                 </div>
-              )
-            })
+              ))}
+            </>
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
