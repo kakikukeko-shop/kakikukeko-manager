@@ -21,6 +21,10 @@ type ItemRow = {
   online_shipping: number | null
   online_shipping_general: number | null
   online_shipping_convenience: number | null
+  online_received_shipping_general: number | null
+  online_expected_shipping_general: number | null
+  online_received_shipping_convenience: number | null
+  online_expected_shipping_convenience: number | null
   offline_price: number | null
   created_at: string
 }
@@ -96,13 +100,42 @@ function fmtNum(v: number) {
   return Number.isFinite(v) ? v.toLocaleString('ko-KR') : '0'
 }
 
-function getGeneralShipping(item: Pick<ItemRow, 'online_shipping' | 'online_shipping_general'>) {
-  const explicit = n(item.online_shipping_general)
+function getReceivedGeneralShipping(
+  item: Pick<
+    ItemRow,
+    'online_shipping' | 'online_shipping_general' | 'online_received_shipping_general'
+  >
+) {
+  const explicit = n(item.online_received_shipping_general)
   if (explicit > 0) return explicit
+  const legacyGeneral = n(item.online_shipping_general)
+  if (legacyGeneral > 0) return legacyGeneral
   return n(item.online_shipping)
 }
 
-function getConvenienceShipping(item: Pick<ItemRow, 'online_shipping_convenience'>) {
+function getExpectedGeneralShipping(
+  item: Pick<ItemRow, 'online_expected_shipping_general' | 'online_shipping_general' | 'online_shipping'>
+) {
+  const explicit = n(item.online_expected_shipping_general)
+  if (explicit > 0) return explicit
+  const legacyGeneral = n(item.online_shipping_general)
+  if (legacyGeneral > 0) return legacyGeneral
+  return n(item.online_shipping)
+}
+
+function getReceivedConvenienceShipping(
+  item: Pick<ItemRow, 'online_received_shipping_convenience' | 'online_shipping_convenience'>
+) {
+  const explicit = n(item.online_received_shipping_convenience)
+  if (explicit > 0) return explicit
+  return n(item.online_shipping_convenience)
+}
+
+function getExpectedConvenienceShipping(
+  item: Pick<ItemRow, 'online_expected_shipping_convenience' | 'online_shipping_convenience'>
+) {
+  const explicit = n(item.online_expected_shipping_convenience)
+  if (explicit > 0) return explicit
   return n(item.online_shipping_convenience)
 }
 
@@ -178,8 +211,10 @@ export default function ProductsPage() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<ItemRow | null>(null)
   const [eOnlinePrice, setEOnlinePrice] = useState('')
-  const [eOnlineShippingGeneral, setEOnlineShippingGeneral] = useState('')
-  const [eOnlineShippingConvenience, setEOnlineShippingConvenience] = useState('')
+  const [eOnlineReceivedShippingGeneral, setEOnlineReceivedShippingGeneral] = useState('')
+  const [eOnlineExpectedShippingGeneral, setEOnlineExpectedShippingGeneral] = useState('')
+  const [eOnlineReceivedShippingConvenience, setEOnlineReceivedShippingConvenience] = useState('')
+  const [eOnlineExpectedShippingConvenience, setEOnlineExpectedShippingConvenience] = useState('')
   const [eOfflinePrice, setEOfflinePrice] = useState('')
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
@@ -288,7 +323,7 @@ export default function ProductsPage() {
           supabase
             .from('purchase_items')
             .select(
-              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,online_shipping_general,online_shipping_convenience,offline_price,created_at'
+              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,online_shipping_general,online_shipping_convenience,online_received_shipping_general,online_expected_shipping_general,online_received_shipping_convenience,online_expected_shipping_convenience,offline_price,created_at'
             )
             .order('created_at', { ascending: false }),
 
@@ -862,15 +897,37 @@ export default function ProductsPage() {
   function openEditModal(item: ItemRow) {
     setEditTarget(item)
     setEOnlinePrice(String(item.online_price ?? ''))
-    setEOnlineShippingGeneral(
-      item.online_shipping_general != null
+    setEOnlineReceivedShippingGeneral(
+      item.online_received_shipping_general != null
+        ? String(item.online_received_shipping_general)
+        : item.online_shipping_general != null
         ? String(item.online_shipping_general)
         : item.online_shipping != null
         ? String(item.online_shipping)
         : ''
     )
-    setEOnlineShippingConvenience(
-      item.online_shipping_convenience != null ? String(item.online_shipping_convenience) : ''
+    setEOnlineExpectedShippingGeneral(
+      item.online_expected_shipping_general != null
+        ? String(item.online_expected_shipping_general)
+        : item.online_shipping_general != null
+        ? String(item.online_shipping_general)
+        : item.online_shipping != null
+        ? String(item.online_shipping)
+        : ''
+    )
+    setEOnlineReceivedShippingConvenience(
+      item.online_received_shipping_convenience != null
+        ? String(item.online_received_shipping_convenience)
+        : item.online_shipping_convenience != null
+        ? String(item.online_shipping_convenience)
+        : ''
+    )
+    setEOnlineExpectedShippingConvenience(
+      item.online_expected_shipping_convenience != null
+        ? String(item.online_expected_shipping_convenience)
+        : item.online_shipping_convenience != null
+        ? String(item.online_shipping_convenience)
+        : ''
     )
     setEOfflinePrice(String(item.offline_price ?? ''))
     setEditModalOpen(true)
@@ -884,17 +941,26 @@ export default function ProductsPage() {
       setErr(null)
       setMsg(null)
 
-      const generalShipping = eOnlineShippingGeneral === '' ? null : n(eOnlineShippingGeneral)
-      const convenienceShipping =
-        eOnlineShippingConvenience === '' ? null : n(eOnlineShippingConvenience)
+      const receivedGeneral =
+        eOnlineReceivedShippingGeneral === '' ? null : n(eOnlineReceivedShippingGeneral)
+      const expectedGeneral =
+        eOnlineExpectedShippingGeneral === '' ? null : n(eOnlineExpectedShippingGeneral)
+      const receivedConvenience =
+        eOnlineReceivedShippingConvenience === '' ? null : n(eOnlineReceivedShippingConvenience)
+      const expectedConvenience =
+        eOnlineExpectedShippingConvenience === '' ? null : n(eOnlineExpectedShippingConvenience)
 
       const upd = await supabase
         .from('purchase_items')
         .update({
           online_price: eOnlinePrice === '' ? null : n(eOnlinePrice),
-          online_shipping: generalShipping,
-          online_shipping_general: generalShipping,
-          online_shipping_convenience: convenienceShipping,
+          online_shipping: receivedGeneral,
+          online_shipping_general: receivedGeneral,
+          online_shipping_convenience: receivedConvenience,
+          online_received_shipping_general: receivedGeneral,
+          online_expected_shipping_general: expectedGeneral,
+          online_received_shipping_convenience: receivedConvenience,
+          online_expected_shipping_convenience: expectedConvenience,
           offline_price: eOfflinePrice === '' ? null : n(eOfflinePrice),
         })
         .eq('id', editTarget.id)
@@ -1045,7 +1111,7 @@ export default function ProductsPage() {
       width: '100%',
       maxHeight: 'calc(100vh - 270px)',
       overflowY: 'auto',
-      overflowX: 'auto',
+      overflowX: 'hidden',
       borderRadius: 18,
       border: '1px solid #e6e6ef',
       background: '#fff',
@@ -1054,7 +1120,8 @@ export default function ProductsPage() {
 
     table: {
       width: '100%',
-      minWidth: 1640,
+      minWidth: 0,
+      tableLayout: 'fixed',
       borderCollapse: 'separate',
       borderSpacing: 0,
       background: '#fff',
@@ -1153,8 +1220,8 @@ export default function ProductsPage() {
     thumbCell: {
       display: 'flex',
       alignItems: 'center',
-      gap: 10,
-      minWidth: 220,
+      gap: 8,
+      minWidth: 0,
     } as React.CSSProperties,
 
     thumb: {
@@ -1358,7 +1425,7 @@ export default function ProductsPage() {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={{ ...styles.th, ...styles.checkCell }}>
+                <th style={{ ...styles.th, ...styles.checkCell, width: 42 }}>
                   <input
                     type="checkbox"
                     checked={
@@ -1368,33 +1435,36 @@ export default function ProductsPage() {
                     onChange={toggleSelectAllVisible}
                   />
                 </th>
-                <th style={styles.th}>상품</th>
-                <th style={styles.th}>매입일</th>
-                <th style={styles.th}>거래처</th>
-                <th style={styles.th}>원가</th>
-                <th style={styles.th}>총수량</th>
-                <th style={styles.th}>입고수량</th>
-                <th style={styles.th}>판매수량</th>
-                <th style={styles.th}>현재재고</th>
-                <th style={styles.th}>미도착</th>
-                <th style={styles.th}>온라인판매가</th>
-                <th style={styles.th}>온라인배송비</th>
-                <th style={styles.th}>온라인이익</th>
-                <th style={styles.th}>오프라인판매가</th>
-                <th style={styles.th}>오프라인이익</th>
-                <th style={styles.th}>마지막입고일</th>
-                <th style={styles.th}>상태</th>
-                <th style={styles.th}>액션</th>
+                <th style={{ ...styles.th, width: 190 }}>상품</th>
+                <th style={{ ...styles.th, width: 76 }}>매입일</th>
+                <th style={{ ...styles.th, width: 78 }}>거래처</th>
+                <th style={{ ...styles.th, width: 72 }}>원가</th>
+                <th style={{ ...styles.th, width: 44 }}>총수량</th>
+                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>입고<br />수량</th>
+                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>판매<br />수량</th>
+                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>현재<br />재고</th>
+                <th style={{ ...styles.th, width: 44 }}>미도착</th>
+                <th style={{ ...styles.th, width: 74, lineHeight: 1.2 }}>온라인<br />판매가</th>
+                <th style={{ ...styles.th, width: 96, lineHeight: 1.2 }}>온라인<br />배송비</th>
+                <th style={{ ...styles.th, width: 96, lineHeight: 1.2 }}>예상<br />배송비</th>
+                <th style={{ ...styles.th, width: 92, lineHeight: 1.2 }}>온라인<br />이익</th>
+                <th style={{ ...styles.th, width: 74, lineHeight: 1.2 }}>오프라인<br />판매가</th>
+                <th style={{ ...styles.th, width: 72, lineHeight: 1.2 }}>오프라인<br />이익</th>
+                <th style={{ ...styles.th, width: 78, lineHeight: 1.2 }}>마지막<br />입고일</th>
+                <th style={{ ...styles.th, width: 68 }}>상태</th>
+                <th style={{ ...styles.th, width: 118 }}>액션</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => {
-                const generalShipping = getGeneralShipping(row.item)
-                const convenienceShipping = getConvenienceShipping(row.item)
+                const receivedGeneralShipping = getReceivedGeneralShipping(row.item)
+                const expectedGeneralShipping = getExpectedGeneralShipping(row.item)
+                const receivedConvenienceShipping = getReceivedConvenienceShipping(row.item)
+                const expectedConvenienceShipping = getExpectedConvenienceShipping(row.item)
                 const generalOnlineProfit =
-                  n(row.item.online_price) - generalShipping - row.finalUnitCost
+                  n(row.item.online_price) - row.finalUnitCost - expectedGeneralShipping + receivedGeneralShipping
                 const convenienceOnlineProfit =
-                  n(row.item.online_price) - convenienceShipping - row.finalUnitCost
+                  n(row.item.online_price) - row.finalUnitCost - expectedConvenienceShipping + receivedConvenienceShipping
                 const offlineProfit = n(row.item.offline_price) - row.finalUnitCost
                 const isChecked = selectedItemIds.includes(row.item.id)
 
@@ -1408,7 +1478,7 @@ export default function ProductsPage() {
                       />
                     </td>
 
-                    <td style={styles.td}>
+                    <td style={{ ...styles.td, overflow: 'hidden' }}>
                       <div style={styles.thumbCell}>
                         {row.photoUrl ? (
                           <img
@@ -1430,8 +1500,16 @@ export default function ProductsPage() {
                             없음
                           </div>
                         )}
-                        <div>
-                          <div style={{ fontWeight: 900 }}>
+                        <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                          <div
+                            title={row.item.item_name ?? '(이름 없음)'}
+                            style={{
+                              fontWeight: 900,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
                             {row.item.item_name ?? '(이름 없음)'}
                           </div>
                           {row.isReservationOpen ? (
@@ -1464,14 +1542,20 @@ export default function ProductsPage() {
                         : '미입력'}
                     </td>
                     <td style={styles.td}>
-                      {generalShipping > 0 || convenienceShipping > 0 ? (
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <div>
-                            일반 {generalShipping > 0 ? fmtKRW(generalShipping) : '미입력'}
-                          </div>
-                          <div>
-                            편의점 {convenienceShipping > 0 ? fmtKRW(convenienceShipping) : '미입력'}
-                          </div>
+                      {receivedGeneralShipping > 0 || receivedConvenienceShipping > 0 ? (
+                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
+                          <div>일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '미입력'}</div>
+                          <div>편의점 {receivedConvenienceShipping > 0 ? fmtKRW(receivedConvenienceShipping) : '미입력'}</div>
+                        </div>
+                      ) : (
+                        '미입력'
+                      )}
+                    </td>
+                    <td style={styles.td}>
+                      {expectedGeneralShipping > 0 || expectedConvenienceShipping > 0 ? (
+                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
+                          <div>일반 {expectedGeneralShipping > 0 ? fmtKRW(expectedGeneralShipping) : '미입력'}</div>
+                          <div>편의점 {expectedConvenienceShipping > 0 ? fmtKRW(expectedConvenienceShipping) : '미입력'}</div>
                         </div>
                       ) : (
                         '미입력'
@@ -1479,13 +1563,9 @@ export default function ProductsPage() {
                     </td>
                     <td style={styles.td}>
                       {n(row.item.online_price) > 0 ? (
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <div>
-                            <b>일반 {fmtKRW(generalOnlineProfit)}</b>
-                          </div>
-                          <div>
-                            <b>편의점 {fmtKRW(convenienceOnlineProfit)}</b>
-                          </div>
+                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
+                          <div><b>일반 {fmtKRW(generalOnlineProfit)}</b></div>
+                          <div><b>편의점 {fmtKRW(convenienceOnlineProfit)}</b></div>
                         </div>
                       ) : (
                         '미입력'
@@ -1514,7 +1594,7 @@ export default function ProductsPage() {
                       )}
                     </td>
                     <td style={styles.td}>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
                         {!row.isComplete ? (
                           <>
                             <button
@@ -1789,9 +1869,19 @@ export default function ProductsPage() {
                 <div style={styles.label}>온라인배송비(일반택배)</div>
                 <input
                   style={styles.input}
-                  value={eOnlineShippingGeneral}
-                  onChange={(e) => setEOnlineShippingGeneral(e.target.value)}
-                  placeholder="숫자만"
+                  value={eOnlineReceivedShippingGeneral}
+                  onChange={(e) => setEOnlineReceivedShippingGeneral(e.target.value)}
+                  placeholder="고객에게 받는 배송비"
+                />
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.label}>예상배송비(일반택배)</div>
+                <input
+                  style={styles.input}
+                  value={eOnlineExpectedShippingGeneral}
+                  onChange={(e) => setEOnlineExpectedShippingGeneral(e.target.value)}
+                  placeholder="내가 예상하는 실제 배송비"
                 />
               </div>
 
@@ -1799,9 +1889,19 @@ export default function ProductsPage() {
                 <div style={styles.label}>온라인배송비(편의점택배)</div>
                 <input
                   style={styles.input}
-                  value={eOnlineShippingConvenience}
-                  onChange={(e) => setEOnlineShippingConvenience(e.target.value)}
-                  placeholder="숫자만"
+                  value={eOnlineReceivedShippingConvenience}
+                  onChange={(e) => setEOnlineReceivedShippingConvenience(e.target.value)}
+                  placeholder="고객에게 받는 배송비"
+                />
+              </div>
+
+              <div style={styles.field}>
+                <div style={styles.label}>예상배송비(편의점택배)</div>
+                <input
+                  style={styles.input}
+                  value={eOnlineExpectedShippingConvenience}
+                  onChange={(e) => setEOnlineExpectedShippingConvenience(e.target.value)}
+                  placeholder="내가 예상하는 실제 배송비"
                 />
               </div>
             </div>
@@ -1883,7 +1983,7 @@ export default function ProductsPage() {
                         {new Date(a.created_at).toLocaleString('ko-KR')}
                       </td>
                       <td style={{ ...styles.td, fontSize: 14 }}>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
                           <button style={styles.smallBtn} onClick={() => openEditArrivalModal(a)}>
                             수정
                           </button>
