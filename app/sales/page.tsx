@@ -126,6 +126,7 @@ type SaleLineForm = {
   purchase_item_id: string
   qty: string
   sale_price: string
+  manual_total: string
 }
 
 type LinePreview = {
@@ -142,6 +143,8 @@ type LinePreview = {
   purchase_amount: number
   online_shipping_general: number
   online_shipping_convenience: number
+  manual_total: number
+  reference_unit_price: number
 }
 
 type AllocatedLine = {
@@ -447,7 +450,7 @@ export default function SalesPage() {
   const [channel, setChannel] = useState<'온라인' | '오프라인'>('온라인')
   const [saleDate, setSaleDate] = useState(getTodayString())
   const [saleLines, setSaleLines] = useState<SaleLineForm[]>([
-    { rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' },
+    { rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '', manual_total: '' },
   ])
   const [discountAmount, setDiscountAmount] = useState('')
   const [prepaidShippingType, setPrepaidShippingType] = useState<'general' | 'convenience' | 'direct'>('general')
@@ -613,8 +616,11 @@ export default function SalesPage() {
       )
 
       const purchaseUnitPrice = product ? Number(product.purchase_unit_price || 0) : 0
-      const lineTotal = Math.round(saleUnitPrice * qtyNumber)
+      const manualTotal = Math.max(0, Number(line.manual_total || 0))
+      const lineTotal =
+        manualTotal > 0 ? Math.round(manualTotal) : Math.round(saleUnitPrice * qtyNumber)
       const purchaseAmount = Math.round(purchaseUnitPrice * qtyNumber)
+      const referenceUnitPrice = qtyNumber > 0 ? Math.round(lineTotal / qtyNumber) : 0
 
       return {
         rowId: line.rowId,
@@ -630,6 +636,8 @@ export default function SalesPage() {
         purchase_amount: purchaseAmount,
         online_shipping_general: Number(product?.online_shipping_general || 0),
         online_shipping_convenience: Number(product?.online_shipping_convenience || 0),
+        manual_total: manualTotal,
+        reference_unit_price: referenceUnitPrice,
       }
     })
   }, [saleLines, selectedProductMap, channel])
@@ -764,7 +772,7 @@ export default function SalesPage() {
   function addSaleLine() {
     setSaleLines((prev) => [
       ...prev,
-      { rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' },
+      { rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '', manual_total: '' },
     ])
     onDirty()
   }
@@ -772,7 +780,7 @@ export default function SalesPage() {
   function removeSaleLine(rowId: string) {
     setSaleLines((prev) => {
       if (prev.length === 1) {
-        return [{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' }]
+        return [{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '', manual_total: '' }]
       }
       return prev.filter((line) => line.rowId !== rowId)
     })
@@ -784,7 +792,7 @@ export default function SalesPage() {
     setOriginalSale(null)
     setChannel('온라인')
     setSaleDate(getTodayString())
-    setSaleLines([{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' }])
+    setSaleLines([{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '', manual_total: '' }])
     setDiscountAmount('')
     setPrepaidShippingType('general')
     setPrepaidShippingFee('')
@@ -881,13 +889,25 @@ export default function SalesPage() {
 
     const nextLines: SaleLineForm[] =
       saleItemsJoined.length > 0
-        ? saleItemsJoined.map((item) => ({
-            rowId: makeRowId(),
-            purchase_item_id: String(item.purchase_item_id || ''),
-            qty: String(item.qty ?? 1),
-            sale_price: String(item.sale_price ?? 0),
-          }))
-        : [{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '' }]
+        ? saleItemsJoined.map((item) => {
+            const qty = Number(item.qty ?? 0)
+            const salePrice = Number(item.sale_price ?? 0)
+            const storedLineTotal = Number(item.line_total ?? 0)
+            const autoLineTotal = Math.round(salePrice * qty)
+            const manualTotal =
+              storedLineTotal > 0 && storedLineTotal !== autoLineTotal
+                ? String(storedLineTotal)
+                : ''
+
+            return {
+              rowId: makeRowId(),
+              purchase_item_id: String(item.purchase_item_id || ''),
+              qty: String(item.qty ?? 1),
+              sale_price: String(item.sale_price ?? 0),
+              manual_total: manualTotal,
+            }
+          })
+        : [{ rowId: makeRowId(), purchase_item_id: '', qty: '1', sale_price: '', manual_total: '' }]
 
     setEditingSaleId(row.id)
     setOriginalSale(row)
@@ -1568,7 +1588,7 @@ export default function SalesPage() {
                 <div>
                   <div className="text-sm font-extrabold text-slate-900">상품</div>
                   <div className="mt-1 text-xs font-medium text-slate-500">
-                    판매가 직접 수정 가능 / 상품금액 = 판매가 × 수량
+                    판매가 자동 불러오기 + 수정 가능 / 상품금액은 직접 수정 가능
                   </div>
                 </div>
 
@@ -1636,6 +1656,7 @@ export default function SalesPage() {
                               setLineValue(line.rowId, {
                                 purchase_item_id: id,
                                 sale_price: String(autoPrice),
+                                manual_total: '',
                               })
                             }}
                             excludeIds={excludeIds}
@@ -1675,12 +1696,16 @@ export default function SalesPage() {
 
                         <div>
                           <label className="mb-2 block text-xs font-extrabold text-slate-700">
-                            상품금액(자동)
+                            상품금액(직접 수정 가능)
                           </label>
                           <input
-                            className={`${inputClass} bg-slate-50`}
-                            readOnly
-                            value={preview?.line_total || 0}
+                            className={inputClass}
+                            type="number"
+                            min={0}
+                            value={line.manual_total !== '' ? line.manual_total : String(preview?.line_total || 0)}
+                            onChange={(e) =>
+                              setLineValue(line.rowId, { manual_total: e.target.value })
+                            }
                           />
                         </div>
                       </div>
@@ -1689,6 +1714,12 @@ export default function SalesPage() {
                         <div>재고: {preview?.stock_qty || 0}</div>
                         <div>매입단가: {(preview?.purchase_unit_price || 0).toLocaleString()}원</div>
                         <div>매입금액: {(preview?.purchase_amount || 0).toLocaleString()}원</div>
+                      </div>
+
+                      <div className="mt-2 text-xs font-medium text-slate-500">
+                        {preview?.manual_total && preview.manual_total > 0
+                          ? `묶음 총액 기준 / 개당 참고가 ${preview.reference_unit_price.toLocaleString()}원`
+                          : '상품금액 자동계산 중 (판매가 × 수량)'}
                       </div>
                     </div>
                   )
