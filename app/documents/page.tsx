@@ -123,6 +123,108 @@ type RefundMetaItem = {
   override_qty: number
 }
 
+
+const REFUND_META_HEADER = '[환불 상세]'
+
+function stripRefundMetaDetail(raw: string | null | undefined) {
+  const text = (raw ?? '').trim()
+  if (!text) return ''
+  if (!text.startsWith(REFUND_META_HEADER)) return text
+
+  const parts = text.split('\n\n')
+  if (parts.length <= 1) return ''
+  return parts.slice(1).join('\n\n').trim()
+}
+
+function parseRefundMeta(memo: string | null | undefined): { items: RefundMetaItem[] } {
+  const text = (memo ?? '').trim()
+  if (!text.startsWith(REFUND_META_HEADER)) return { items: [] as RefundMetaItem[] }
+
+  const payload = text.split('\n\n')[0].replace(REFUND_META_HEADER, '').trim()
+  if (!payload) return { items: [] as RefundMetaItem[] }
+
+  try {
+    const parsed = JSON.parse(payload)
+    const items = Array.isArray(parsed?.items) ? parsed.items : []
+    return {
+      items: items.map((item: any) => ({
+        item_id: String(item?.item_id ?? ''),
+        original_name: String(item?.original_name ?? ''),
+        original_qty: Math.max(1, Math.floor(n(item?.original_qty))),
+        original_foreign_total: ceil4(n(item?.original_foreign_total)),
+        original_line_total: ceil4(n(item?.original_line_total)),
+        original_foreign_unit_price: ceil4(n(item?.original_foreign_unit_price)),
+        original_unit_price: ceil4(n(item?.original_unit_price)),
+        override_name: String(item?.override_name ?? ''),
+        override_qty: Math.max(1, Math.floor(n(item?.override_qty))),
+      })).filter((item: RefundMetaItem) => item.item_id),
+    }
+  } catch {
+    return { items: [] as RefundMetaItem[] }
+  }
+}
+
+function buildRefundMetaItems(
+  selectedItems: PurchaseItemRow[],
+  refundMap: Record<string, RefundItemEdit>,
+  existingMemo?: string | null
+): RefundMetaItem[] {
+  const existing = new Map<string, RefundMetaItem>(
+    parseRefundMeta(existingMemo).items.map((item: RefundMetaItem): [string, RefundMetaItem] => [item.item_id, item])
+  )
+
+  return selectedItems.map((it) => {
+    const edit = refundMap[it.id]
+    const prev = existing.get(it.id)
+    const originalQty = prev?.original_qty ?? Math.max(1, Math.floor(n(it.qty)))
+    const originalForeignUnit = prev?.original_foreign_unit_price ?? (n(it.foreign_unit_price) > 0
+      ? n(it.foreign_unit_price)
+      : ceil4(n(it.foreign_total) / Math.max(1, Math.floor(n(it.qty)))))
+    const originalUnitPrice = prev?.original_unit_price ?? (n(it.unit_price) > 0
+      ? n(it.unit_price)
+      : ceil4(n(it.line_total) / Math.max(1, Math.floor(n(it.qty)))))
+
+    return {
+      item_id: it.id,
+      original_name: prev?.original_name ?? String(it.item_name ?? ''),
+      original_qty: originalQty,
+      original_foreign_total: prev?.original_foreign_total ?? ceil4(originalForeignUnit * originalQty),
+      original_line_total: prev?.original_line_total ?? ceil4(originalUnitPrice * originalQty),
+      original_foreign_unit_price: ceil4(originalForeignUnit),
+      original_unit_price: ceil4(originalUnitPrice),
+      override_name: edit?.item_name?.trim() || String(it.item_name ?? ''),
+      override_qty: Math.max(1, Math.floor(n(edit?.next_qty ?? it.qty))),
+    } as RefundMetaItem
+  })
+}
+
+function buildRefundMemo(baseMemo: string, items: RefundMetaItem[]) {
+  const detail = `${REFUND_META_HEADER}
+${JSON.stringify({ items }, null, 2)}`
+  const cleanedBase = stripRefundMetaDetail(baseMemo)
+  return cleanedBase ? `${detail}
+
+${cleanedBase}` : detail
+}
+
+async function restoreRefundAdjustedItemsFromMemo(memo: string | null | undefined) {
+  const parsed = parseRefundMeta(memo)
+  for (const item of parsed.items) {
+    const upd = await supabase
+      .from('purchase_items')
+      .update({
+        item_name: item.original_name || null,
+        qty: item.original_qty,
+        foreign_total: item.original_foreign_total,
+        line_total: item.original_line_total,
+        foreign_unit_price: item.original_foreign_unit_price,
+        unit_price: item.original_unit_price,
+      })
+      .eq('id', item.item_id)
+    if (upd.error) throw upd.error
+  }
+}
+
 const STORAGE_BUCKET = 'purchase-files'
 
 const CURRENCY_OPTIONS = [
@@ -2418,7 +2520,6 @@ export default function DocumentsPage() {
   
 async function openItemDetail(it: PurchaseItemRow) {
     setDetailItem(it)
-    setDetailQtyInput(String(Math.max(1, n(it.qty))))
     setDetailAlloc([])
     setItemDetailOpen(true)
     setErr(null)
@@ -4478,63 +4579,55 @@ async function openItemDetail(it: PurchaseItemRow) {
         {detailItem ? (
           <>
             <div style={styles.card}>
-              <div style={{ fontSize: 16, fontWeight: 900 }}>
-                {detailItem.item_name ?? '(이름 없음)'}{' '}
-                {detailItem.is_preorder && !hasBalanceByItem.get(detailItem.id) ? (
-                  <span style={styles.badge('orange')}>예약</span>
-                ) : null}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start', flexWrap: 'wrap' }}>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const purchase = purchaseMap.get(detailItem.purchase_id)
+                      if (!purchase) return
+                      setItemDetailOpen(false)
+                      openPurchaseEditModal(purchase)
+                    }}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      padding: 0,
+                      margin: 0,
+                      fontSize: 16,
+                      fontWeight: 900,
+                      color: '#111',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {detailItem.item_name ?? '(이름 없음)'}
+                  </button>{' '}
+                  {detailItem.is_preorder && !hasBalanceByItem.get(detailItem.id) ? (
+                    <span style={styles.badge('orange')}>예약</span>
+                  ) : null}
+                  <div style={styles.small}>상품명을 누르면 해당 매입등록 수정창으로 이동</div>
+                </div>
+                <button
+                  type="button"
+                  style={styles.btn('ghost')}
+                  onClick={() => {
+                    const purchase = purchaseMap.get(detailItem.purchase_id)
+                    if (!purchase) return
+                    setItemDetailOpen(false)
+                    openPurchaseEditModal(purchase)
+                  }}
+                >
+                  매입등록으로 이동
+                </button>
               </div>
-              <div style={styles.small}>
+              <div style={{ ...styles.small, marginTop: 8 }}>
                 현재 수량: <b>{fmtNum(n(detailItem.qty))}</b> / 상품 원화합계: <b>{fmtKRW(n(detailItem.line_total))}</b>
               </div>
               <div style={styles.small}>
                 외화총액: <b>{fmtNum(n(detailItem.foreign_total))}</b> / 외화단가:{' '}
                 <b>{n(detailItem.foreign_unit_price).toFixed(4)}</b>
               </div>
-
-              <div
-                style={{
-                  marginTop: 12,
-                  display: 'grid',
-                  gridTemplateColumns: '120px 1fr auto auto',
-                  gap: 8,
-                  alignItems: 'end',
-                }}
-              >
-                <div style={styles.field}>
-                  <div style={styles.label}>변경 수량</div>
-                  <input
-                    style={styles.input}
-                    inputMode="numeric"
-                    value={detailQtyInput}
-                    onChange={(e) => setDetailQtyInput(e.target.value)}
-                    placeholder="예: 4"
-                  />
-                </div>
-
-                <div style={{ ...styles.small, alignSelf: 'center' }}>
-                  차감/수정하면 <b>외화총액·원화합계가 수량에 맞춰 자동 재계산</b>돼.
-                </div>
-
-                <button
-                  type="button"
-                  style={styles.smallBtn}
-                  onClick={() => setDetailQtyInput(String(Math.max(1, n(detailItem.qty) - 1)))}
-                  disabled={Math.max(1, n(detailItem.qty)) <= 1 || detailQtySaving}
-                >
-                  -1 차감
-                </button>
-
-                <button
-                  type="button"
-                  style={styles.btn('primary')}
-                  onClick={saveDetailQtyChange}
-                  disabled={detailQtySaving}
-                >
-                  {detailQtySaving ? '저장 중...' : '수량 저장'}
-                </button>
-              </div>
-
               {detailItem.memo ? <div style={{ marginTop: 8 }}>{detailItem.memo}</div> : null}
             </div>
 
