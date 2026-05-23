@@ -46,6 +46,7 @@ type PurchaseSummaryRow = {
 
 type PurchaseCostSummaryRow = {
   id: string
+  purchase_id: string | null
   cost_date: string | null
   cost_type: string | null
   vendor_name: string | null
@@ -78,6 +79,8 @@ type MetricKind =
   | 'month_purchase'
   | 'year_purchase'
   | 'total_purchase'
+  | 'month_refund_loss'
+  | 'total_refund_loss'
 
 function normalizeDate(value: string | null | undefined) {
   if (!value) return ''
@@ -172,6 +175,128 @@ function purchaseCostToKrw(row: {
   return amount
 }
 
+
+function normalizeCostType(raw: string | null | undefined) {
+  const v = String(raw ?? '').trim()
+  if (v === '배송비') return '배송비(거래처)'
+  if (v === '관부과세및 배송비') return '관부과세'
+  return v
+}
+
+function stripRefundMetaDetail(raw: string | null | undefined) {
+  const text = (raw ?? '').trim()
+  if (!text) return ''
+  if (!text.startsWith('[환불 상세]')) return text
+
+  const parts = text.split('\n\n')
+  if (parts.length <= 1) return ''
+  return parts.slice(1).join('\n\n').trim()
+}
+
+type RefundMetaItem = {
+  item_id: string
+  original_name: string
+  original_qty: number
+  original_line_total: number
+  original_unit_price: number
+  override_name: string
+  override_qty: number
+}
+
+function parseRefundMetaItems(raw: string | null | undefined): RefundMetaItem[] {
+  const text = (raw ?? '').trim()
+  if (!text.startsWith('[환불 상세]')) return []
+
+  const payload = text.split('\n\n')[0].replace('[환불 상세]', '').trim()
+  if (!payload) return []
+
+  try {
+    const parsed = JSON.parse(payload)
+    const items = Array.isArray(parsed?.items) ? parsed.items : []
+    return items
+      .map((item: any) => ({
+        item_id: String(item?.item_id ?? ''),
+        original_name: String(item?.original_name ?? ''),
+        original_qty: Math.max(0, Math.floor(Number(item?.original_qty ?? 0))),
+        original_line_total: Number(item?.original_line_total ?? 0),
+        original_unit_price: Number(item?.original_unit_price ?? 0),
+        override_name: String(item?.override_name ?? ''),
+        override_qty: Math.max(0, Math.floor(Number(item?.override_qty ?? 0))),
+      }))
+      .filter((item: RefundMetaItem) => item.item_id)
+  } catch {
+    return []
+  }
+}
+
+function getRefundItemLines(memo: string | null | undefined) {
+  return parseRefundMetaItems(memo).map((item) => {
+    const name = item.original_name || item.override_name || '(상품명 없음)'
+    const refundedQty = Math.max(0, item.original_qty - item.override_qty)
+    const target = Math.max(0, item.original_unit_price * refundedQty)
+
+    return {
+      name,
+      originalQty: item.original_qty,
+      nextQty: item.override_qty,
+      refundedQty,
+      targetKRW: target,
+    }
+  })
+}
+
+function getRefundUserMemo(memo: string | null | undefined) {
+  const text = stripRefundMetaDetail(memo)
+  if (!text) return ''
+
+  return text
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return false
+      return !(
+        trimmed.startsWith('환불 대상 원가:') ||
+        trimmed.startsWith('실제 환불금액:') ||
+        trimmed.startsWith('환불 차손:') ||
+        trimmed.startsWith('초과 환불:')
+      )
+    })
+    .join(' / ')
+    .trim()
+}
+
+function parseRefundSummaryMemo(memo: string | null | undefined) {
+  const raw = stripRefundMetaDetail(memo)
+
+  const getNum = (label: string) => {
+    const m = raw.match(new RegExp(`${label}:\\s*([0-9.,-]+)`))
+    if (!m) return 0
+    const value = Number(String(m[1]).replace(/,/g, ''))
+    return Number.isFinite(value) ? value : 0
+  }
+
+  return {
+    targetKRW: getNum('환불 대상 원가'),
+    actualKRW: getNum('실제 환불금액'),
+    lossKRW: getNum('환불 차손'),
+    overRefundKRW: getNum('초과 환불'),
+  }
+}
+
+function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
+  const parsed = parseRefundSummaryMemo(row.memo)
+  const actualKRW = parsed.actualKRW > 0 ? parsed.actualKRW : Math.abs(Number(row.amountKrw || 0))
+  const lossKRW = Math.max(0, parsed.lossKRW)
+  const targetKRW = parsed.targetKRW > 0 ? parsed.targetKRW : actualKRW + lossKRW
+
+  return {
+    targetKRW,
+    actualKRW,
+    lossKRW,
+    overRefundKRW: Math.max(0, parsed.overRefundKRW),
+  }
+}
+
 const navCards = [
   {
     href: '/documents',
@@ -255,6 +380,7 @@ export default function DashboardPage() {
             .from('purchase_costs')
             .select(`
               id,
+              purchase_id,
               cost_date,
               cost_type,
               vendor_name,
@@ -321,6 +447,14 @@ export default function DashboardPage() {
     }))
   }, [purchases])
 
+  const purchaseDateById = useMemo(() => {
+    const map = new Map<string, string>()
+    normalizedPurchases.forEach((row) => {
+      map.set(row.id, row.purchase_date || '미입력')
+    })
+    return map
+  }, [normalizedPurchases])
+
   const normalizedPurchaseCosts = useMemo<NormalizedPurchaseCostRow[]>(() => {
     return purchaseCosts.map((row) => ({
       ...row,
@@ -377,6 +511,16 @@ export default function DashboardPage() {
     return a.id.localeCompare(b.id)
   }), [normalizedPurchaseCosts])
 
+  const monthRefundCostRows = useMemo(
+    () => monthPurchaseCosts.filter((x) => normalizeCostType(x.cost_type) === '환불'),
+    [monthPurchaseCosts]
+  )
+
+  const totalRefundCostRows = useMemo(
+    () => totalPurchaseCostRows.filter((x) => normalizeCostType(x.cost_type) === '환불'),
+    [totalPurchaseCostRows]
+  )
+
   const summary = useMemo(() => {
     const dayProfit = daySales.reduce((sum, row) => sum + Number(row.profit_amount || 0), 0)
     const monthProfit = monthSales.reduce((sum, row) => sum + Number(row.profit_amount || 0), 0)
@@ -397,6 +541,23 @@ export default function DashboardPage() {
       totalPurchaseRows.reduce((sum, row) => sum + Number(row.total_amount || 0), 0) +
       totalPurchaseCostRows.reduce((sum, row) => sum + Number(row.amountKrw || 0), 0)
 
+    const monthRefundActual = monthRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).actualKRW,
+      0
+    )
+    const monthRefundLoss = monthRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).lossKRW,
+      0
+    )
+    const totalRefundActual = totalRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).actualKRW,
+      0
+    )
+    const totalRefundLoss = totalRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).lossKRW,
+      0
+    )
+
     return {
       dayProfit,
       monthProfit,
@@ -407,8 +568,12 @@ export default function DashboardPage() {
       monthPurchase,
       yearPurchase,
       totalPurchase,
+      monthRefundActual,
+      monthRefundLoss,
+      totalRefundActual,
+      totalRefundLoss,
     }
-  }, [daySales, monthSales, yearSales, totalSalesRows, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows])
+  }, [daySales, monthSales, yearSales, totalSalesRows, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows, monthRefundCostRows, totalRefundCostRows])
 
   const salesCards = [
     {
@@ -477,6 +642,22 @@ export default function DashboardPage() {
       bg: '#bbf7d0',
       color: '#166534',
     },
+    {
+      key: 'month_refund_loss' as const,
+      title: '월 매입 환불/차손',
+      value: `차손 ${fmtKRW(summary.monthRefundLoss)}`,
+      subValue: `환불금액 ${fmtKRW(summary.monthRefundActual)}`,
+      bg: '#fee2e2',
+      color: '#991b1b',
+    },
+    {
+      key: 'total_refund_loss' as const,
+      title: '총 매입 환불/차손',
+      value: `차손 ${fmtKRW(summary.totalRefundLoss)}`,
+      subValue: `환불금액 ${fmtKRW(summary.totalRefundActual)}`,
+      bg: '#ffedd5',
+      color: '#9a3412',
+    },
   ]
 
   const modalTitle = useMemo(() => {
@@ -499,6 +680,10 @@ export default function DashboardPage() {
         return '올해 매입 내역'
       case 'total_purchase':
         return '전체 매입 내역'
+      case 'month_refund_loss':
+        return '이번 달 매입 환불/차손 내역'
+      case 'total_refund_loss':
+        return '전체 매입 환불/차손 내역'
       default:
         return ''
     }
@@ -531,6 +716,9 @@ export default function DashboardPage() {
         return yearPurchases
       case 'total_purchase':
         return totalPurchaseRows
+      case 'month_refund_loss':
+      case 'total_refund_loss':
+        return []
       default:
         return []
     }
@@ -546,10 +734,14 @@ export default function DashboardPage() {
         return yearPurchaseCosts
       case 'total_purchase':
         return totalPurchaseCostRows
+      case 'month_refund_loss':
+        return monthRefundCostRows
+      case 'total_refund_loss':
+        return totalRefundCostRows
       default:
         return []
     }
-  }, [selectedMetric, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows])
+  }, [selectedMetric, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows, monthRefundCostRows, totalRefundCostRows])
 
   const isSalesModal =
     selectedMetric === 'day_sales_profit' ||
@@ -721,7 +913,7 @@ export default function DashboardPage() {
       <section
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
           gap: 14,
         }}
       >
@@ -768,6 +960,19 @@ export default function DashboardPage() {
             >
               {loading ? '불러오는 중...' : card.value}
             </div>
+
+            {'subValue' in card && card.subValue ? (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 13,
+                  fontWeight: 900,
+                  color: card.color,
+                }}
+              >
+                {loading ? '' : card.subValue}
+              </div>
+            ) : null}
 
             <div
               style={{
@@ -896,7 +1101,7 @@ export default function DashboardPage() {
                     <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
                       실입금 {fmtKRW(Number(row.final_amount || 0))} / 순수익 {fmtKRW(Number(row.profit_amount || 0))}
                     </div>
-                    {row.memo ? (
+                    {stripRefundMetaDetail(row.memo) ? (
                       <div
                         style={{
                           marginTop: 6,
@@ -907,7 +1112,7 @@ export default function DashboardPage() {
                           textOverflow: 'ellipsis',
                         }}
                       >
-                        메모: {row.memo}
+                        메모: {stripRefundMetaDetail(row.memo)}
                       </div>
                     ) : null}
                   </div>
@@ -948,7 +1153,7 @@ export default function DashboardPage() {
                     <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
                       상품매입 {fmtKRW(Number(row.total_amount || 0))}
                     </div>
-                    {row.memo ? (
+                    {stripRefundMetaDetail(row.memo) ? (
                       <div
                         style={{
                           marginTop: 6,
@@ -959,7 +1164,7 @@ export default function DashboardPage() {
                           textOverflow: 'ellipsis',
                         }}
                       >
-                        메모: {row.memo}
+                        메모: {stripRefundMetaDetail(row.memo)}
                       </div>
                     ) : null}
                   </div>
@@ -990,12 +1195,41 @@ export default function DashboardPage() {
                       textOverflow: 'ellipsis',
                     }}
                   >
-                    거래처 {row.vendor_name || '미입력'} / 비용일 {row.cost_date || '미입력'}
+                    {normalizeCostType(row.cost_type) === '환불' ? (
+                      <>
+                        거래처 {row.vendor_name || '미입력'} / 결제일 {purchaseDateById.get(row.purchase_id || '') || '미입력'} / 환불일 {row.cost_date || '미입력'}
+                      </>
+                    ) : (
+                      <>거래처 {row.vendor_name || '미입력'} / 비용일 {row.cost_date || '미입력'}</>
+                    )}
                   </div>
-                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
-                    추가비용 {fmtKRW(Number(row.amountKrw || 0))}
-                  </div>
-                  {row.memo ? (
+                  {normalizeCostType(row.cost_type) === '환불' ? (
+                    <>
+                      {getRefundItemLines(row.memo).length > 0 ? (
+                        <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
+                          {getRefundItemLines(row.memo).map((item, idx) => (
+                            <div key={`${row.id}-refund-item-${idx}`} style={{ fontSize: 13, color: '#374151', fontWeight: 800 }}>
+                              {item.name} / 환불수량 {item.refundedQty}개 ({item.originalQty} → {item.nextQty})
+                              {item.targetKRW > 0 ? ` / 대상원가 ${fmtKRW(item.targetKRW)}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280', fontWeight: 800 }}>
+                          상품명 기록 없음
+                        </div>
+                      )}
+                      <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900 }}>
+                        실제 환불 {fmtKRW(getRefundSummaryFromCost(row).actualKRW)} / 차손{' '}
+                        {fmtKRW(getRefundSummaryFromCost(row).lossKRW)}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800 }}>
+                      추가비용 {fmtKRW(Number(row.amountKrw || 0))}
+                    </div>
+                  )}
+                  {getRefundUserMemo(row.memo) ? (
                     <div
                       style={{
                         marginTop: 6,
@@ -1006,7 +1240,7 @@ export default function DashboardPage() {
                         textOverflow: 'ellipsis',
                       }}
                     >
-                      메모: {row.memo}
+                      메모: {getRefundUserMemo(row.memo)}
                     </div>
                   ) : null}
                 </div>

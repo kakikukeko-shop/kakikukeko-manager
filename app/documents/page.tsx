@@ -156,7 +156,7 @@ function parseRefundMeta(memo: string | null | undefined): { items: RefundMetaIt
         original_foreign_unit_price: ceil4(n(item?.original_foreign_unit_price)),
         original_unit_price: ceil4(n(item?.original_unit_price)),
         override_name: String(item?.override_name ?? ''),
-        override_qty: Math.max(1, Math.floor(n(item?.override_qty))),
+        override_qty: Math.max(0, Math.floor(n(item?.override_qty))),
       })).filter((item: RefundMetaItem) => item.item_id),
     }
   } catch {
@@ -193,7 +193,7 @@ function buildRefundMetaItems(
       original_foreign_unit_price: ceil4(originalForeignUnit),
       original_unit_price: ceil4(originalUnitPrice),
       override_name: edit?.item_name?.trim() || String(it.item_name ?? ''),
-      override_qty: Math.max(1, Math.floor(n(edit?.next_qty ?? it.qty))),
+      override_qty: Math.max(0, Math.floor(n(edit?.next_qty ?? it.qty))),
     } as RefundMetaItem
   })
 }
@@ -205,6 +205,71 @@ ${JSON.stringify({ items }, null, 2)}`
   return cleanedBase ? `${detail}
 
 ${cleanedBase}` : detail
+}
+
+
+function getRefundLossInfo(
+  selectedItems: PurchaseItemRow[],
+  refundMap: Record<string, RefundItemEdit>,
+  actualRefundKRW: number,
+  existingMemo?: string | null
+) {
+  const existing = new Map<string, RefundMetaItem>(
+    parseRefundMeta(existingMemo).items.map((item): [string, RefundMetaItem] => [item.item_id, item])
+  )
+
+  const rows = selectedItems.map((it) => {
+    const prev = existing.get(it.id)
+    const currentQty = Math.max(0, Math.floor(n(it.qty)))
+    const originalQty = prev?.original_qty ?? currentQty
+    const originalUnitKRW = prev?.original_unit_price ?? (n(it.unit_price) > 0
+      ? n(it.unit_price)
+      : (currentQty > 0 ? ceil4(n(it.line_total) / currentQty) : 0))
+    const edit = refundMap[it.id]
+    const nextQty = Math.max(0, Math.floor(n(edit?.next_qty ?? currentQty)))
+    const refundQty = Math.max(0, originalQty - nextQty)
+    const targetKRW = ceil4(originalUnitKRW * refundQty)
+
+    return {
+      item_id: it.id,
+      refund_qty: refundQty,
+      target_krw: targetKRW,
+    }
+  })
+
+  const targetKRW = ceil4(rows.reduce((acc, row) => acc + row.target_krw, 0))
+  const actualKRW = ceil4(Math.max(0, actualRefundKRW))
+  const lossKRW = ceilInt(Math.max(0, targetKRW - actualKRW))
+  const overRefundKRW = ceilInt(Math.max(0, actualKRW - targetKRW))
+
+  return { rows, targetKRW, actualKRW, lossKRW, overRefundKRW }
+}
+
+function buildRefundSummaryMemo(baseMemo: string, items: RefundMetaItem[], info: ReturnType<typeof getRefundLossInfo>) {
+  const summary = [
+    `환불 대상 원가:${Math.round(info.targetKRW)}`,
+    `실제 환불금액:${Math.round(info.actualKRW)}`,
+    `환불 차손:${Math.round(info.lossKRW)}`,
+    info.overRefundKRW > 0 ? `초과 환불:${Math.round(info.overRefundKRW)}` : '',
+  ].filter(Boolean).join('\n')
+
+  const memo = baseMemo?.trim() ? `${summary}\n\n${baseMemo.trim()}` : summary
+  return buildRefundMemo(memo, items)
+}
+
+function parseRefundSummaryMemo(memo: string | null | undefined) {
+  const raw = stripRefundMetaDetail(memo)
+  const getNum = (label: string) => {
+    const m = raw.match(new RegExp(`${label}:\\s*([0-9.,]+)`))
+    if (!m) return 0
+    return n(String(m[1]).replace(/,/g, ''))
+  }
+  return {
+    targetKRW: getNum('환불 대상 원가'),
+    actualKRW: getNum('실제 환불금액'),
+    lossKRW: getNum('환불 차손'),
+    overRefundKRW: getNum('초과 환불'),
+  }
 }
 
 async function restoreRefundAdjustedItemsFromMemo(memo: string | null | undefined) {
@@ -516,7 +581,6 @@ function distributeByWeightsCeilIntSigned(total: number, weights: number[]) {
 }
 
 function signedCostAmountByType(costType: string, amount: number) {
-  if (normalizeCostType(costType) === '환불') return -Math.abs(amount)
   return Math.abs(amount)
 }
 
@@ -864,7 +928,7 @@ function buildRefundItemEditMap(ids: string[], allItems: PurchaseItemRow[]) {
     if (!it) return
     next[id] = {
       item_name: it.item_name ?? '',
-      next_qty: String(Math.max(1, n(it.qty))),
+      next_qty: String(Math.max(0, n(it.qty))),
     }
   })
   return next
@@ -878,9 +942,18 @@ async function updateRefundAdjustedItems(
     const edit = refundMap[it.id]
     if (!edit) continue
 
-    const nextQty = Math.max(1, Math.floor(n(edit.next_qty)))
-    const foreignUnit = n(it.foreign_unit_price) > 0 ? n(it.foreign_unit_price) : (Math.max(1, n(it.qty)) > 0 ? ceil4(n(it.foreign_total) / Math.max(1, n(it.qty))) : 0)
-    const unitKRW = n(it.unit_price) > 0 ? n(it.unit_price) : (Math.max(1, n(it.qty)) > 0 ? ceil4(n(it.line_total) / Math.max(1, n(it.qty))) : 0)
+    const nextQty = Math.max(0, Math.floor(n(edit.next_qty)))
+
+    // 전체 환불이면 상품 자체를 삭제해서 상품/재고관리에도 남지 않게 처리
+    if (nextQty <= 0) {
+      const del = await supabase.from('purchase_items').delete().eq('id', it.id)
+      if (del.error) throw del.error
+      continue
+    }
+
+    const currentQty = Math.max(1, n(it.qty))
+    const foreignUnit = n(it.foreign_unit_price) > 0 ? n(it.foreign_unit_price) : ceil4(n(it.foreign_total) / currentQty)
+    const unitKRW = n(it.unit_price) > 0 ? n(it.unit_price) : ceil4(n(it.line_total) / currentQty)
     const nextForeignTotal = ceil4(foreignUnit * nextQty)
     const nextLineTotal = ceil4(unitKRW * nextQty)
 
@@ -2322,6 +2395,15 @@ export default function DocumentsPage() {
       setEcAmount(String(cost.amount ?? ''))
       setEcTotalForeign(String(nextTotalForeign || ''))
       setEcTotalKRW(String(storedKRW))
+    } else if (normalizeCostType(cost.cost_type) === '환불') {
+      const refundSummary = parseRefundSummaryMemo(cost.memo)
+      const actualRefundKRW = refundSummary.actualKRW > 0 ? refundSummary.actualKRW : n(cost.amount)
+      setEcDutyAmount('')
+      setEcVatAmount('')
+      setEcCustomsFeeAmount('')
+      setEcAmount(String(cost.amount ?? ''))
+      setEcTotalForeign(String(actualRefundKRW || ''))
+      setEcTotalKRW(String(actualRefundKRW || ''))
     } else {
       setEcDutyAmount('')
       setEcVatAmount('')
@@ -2368,21 +2450,25 @@ export default function DocumentsPage() {
         : n(ecTotalKRW)
 
     const chosen = items.filter((it) => ecSelectedItemIds.includes(it.id))
+    const refundInfoEdit = getRefundLossInfo(chosen, editRefundItemEditMap, n(ecTotalKRW), editingCost?.memo ?? null)
 
     const finalMemo =
       ecType === '관부과세'
         ? buildCustomsMemo(ecMemo, ecDutyAmount, ecVatAmount, ecCustomsFeeAmount)
         : ecType === '환불'
-        ? buildRefundMemo(
+        ? buildRefundSummaryMemo(
             ecMemo,
-            buildRefundMetaItems(chosen, editRefundItemEditMap, editingCost?.memo ?? null)
+            buildRefundMetaItems(chosen, editRefundItemEditMap, editingCost?.memo ?? null),
+            refundInfoEdit
           )
         : ecMemo || null
     const resolvedForeign = resolveCostForeignTotals(chosen, editCostItemForeignMap, n(ecTotalForeign))
-    const allocationWeights = resolvedForeign.ok
+    const allocationWeights = ecType === '환불'
+      ? refundInfoEdit.rows.map((row) => row.target_krw)
+      : resolvedForeign.ok
       ? resolvedForeign.rows.map((row) => row.foreign_total)
       : []
-    const signedCostKRW = signedCostAmountByType(ecType, costKRW)
+    const signedCostKRW = ecType === '환불' ? refundInfoEdit.lossKRW : signedCostAmountByType(ecType, costKRW)
 
     if (!ecType.trim()) {
       setErr('추가비용 종류를 선택해줘.')
@@ -2395,6 +2481,11 @@ export default function DocumentsPage() {
     if (ecType === '관부과세') {
       if (amount <= 0 && n(ecTotalKRW) <= 0) {
         setErr('원화 총액이나 관세/부가세를 입력해줘.')
+        return
+      }
+    } else if (ecType === '환불') {
+      if (n(ecTotalKRW) < 0) {
+        setErr('실제 환불금액은 0 이상으로 입력해줘.')
         return
       }
     } else {
@@ -2427,21 +2518,23 @@ export default function DocumentsPage() {
           return
         }
         const nextQty = Math.floor(n(edit.next_qty))
-        if (nextQty < 1) {
-          setErr('변경 후 수량은 1 이상이어야 해.')
+        if (nextQty < 0) {
+          setErr('변경 후 수량은 0 이상이어야 해.')
           return
         }
-        if (nextQty > Math.max(1, n(it.qty))) {
-          setErr('변경 후 수량은 현재 수량보다 크게 넣을 수 없어.')
+        const prevRefund = parseRefundMeta(editingCost?.memo).items.find((x) => x.item_id === it.id)
+        const maxQty = prevRefund?.original_qty ?? Math.max(0, n(it.qty))
+        if (nextQty > maxQty) {
+          setErr('변경 후 수량은 원래 수량보다 크게 넣을 수 없어.')
           return
         }
       }
     }
-    if (!resolvedForeign.ok) {
+    if (ecType !== '환불' && !resolvedForeign.ok) {
       setErr(resolvedForeign.message)
       return
     }
-    if (allocationWeights.every((w) => n(w) <= 0)) {
+    if (ecType !== '환불' && allocationWeights.every((w) => n(w) <= 0)) {
       setErr('상품 외화 총액 배분값이 0이야.')
       return
     }
@@ -2455,9 +2548,9 @@ export default function DocumentsPage() {
         .from('purchase_costs')
         .update({
           cost_type: ecType,
-          amount,
-          currency: cur,
-          fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
+          amount: ecType === '환불' ? refundInfoEdit.lossKRW : amount,
+          currency: ecType === '환불' ? 'KRW' : cur,
+          fx_rate: ecType === '환불' ? 1 : normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
           memo: finalMemo,
           vendor_name: ecVendorName || null,
           cost_date: ecDate,
@@ -2699,6 +2792,11 @@ async function openItemDetail(it: PurchaseItemRow) {
         setErr('관부과세 합계와 원화 총액을 입력하면 환율이 자동 계산돼.')
         return
       }
+    } else if (cType === '환불') {
+      if (n(cTotalKRW) < 0) {
+        setErr('실제 환불금액은 0 이상으로 입력해줘.')
+        return
+      }
     } else {
       if (n(cTotalForeign) <= 0) {
         setErr('외화 총액을 입력해줘.')
@@ -2723,12 +2821,17 @@ async function openItemDetail(it: PurchaseItemRow) {
     }
 
     const chosen = selectedItems
+    const refundInfo = getRefundLossInfo(chosen, refundItemEditMap, n(cTotalKRW))
 
     const finalMemo =
       cType === '관부과세'
         ? buildCustomsMemo(cMemo, cDutyAmount, cVatAmount, cCustomsFeeAmount)
         : cType === '환불'
-        ? buildRefundMemo(cMemo, buildRefundMetaItems(chosen, refundItemEditMap))
+        ? buildRefundSummaryMemo(
+            cMemo,
+            buildRefundMetaItems(chosen, refundItemEditMap),
+            refundInfo
+          )
         : cMemo || null
 
     if (cType === '환불') {
@@ -2739,30 +2842,32 @@ async function openItemDetail(it: PurchaseItemRow) {
           return
         }
         const nextQty = Math.floor(n(edit.next_qty))
-        if (nextQty < 1) {
-          setErr('변경 후 수량은 1 이상이어야 해.')
+        if (nextQty < 0) {
+          setErr('변경 후 수량은 0 이상이어야 해.')
           return
         }
-        if (nextQty > Math.max(1, n(it.qty))) {
+        if (nextQty > Math.max(0, n(it.qty))) {
           setErr('변경 후 수량은 현재 수량보다 크게 넣을 수 없어.')
           return
         }
       }
     }
-    if (costKRW <= 0) {
+    if (cType !== '환불' && costKRW <= 0) {
       setErr('원화 환산 금액이 0이야.')
       return
     }
     const resolvedForeign = resolveCostForeignTotals(chosen, costItemForeignMap, n(cTotalForeign))
-    const allocationWeights = resolvedForeign.ok
+    const allocationWeights = cType === '환불'
+      ? refundInfo.rows.map((row) => row.target_krw)
+      : resolvedForeign.ok
       ? resolvedForeign.rows.map((row) => row.foreign_total)
       : []
-    const signedCostKRW = signedCostAmountByType(cType, costKRW)
-    if (!resolvedForeign.ok) {
+    const signedCostKRW = cType === '환불' ? refundInfo.lossKRW : signedCostAmountByType(cType, costKRW)
+    if (cType !== '환불' && !resolvedForeign.ok) {
       setErr(resolvedForeign.message)
       return
     }
-    if (allocationWeights.every((w) => n(w) <= 0)) {
+    if (cType !== '환불' && allocationWeights.every((w) => n(w) <= 0)) {
       setErr('상품 외화 총액 배분값이 0이야.')
       return
     }
@@ -2777,9 +2882,9 @@ async function openItemDetail(it: PurchaseItemRow) {
         .insert({
           purchase_id: linkedPurchaseId,
           cost_type: cType,
-          amount,
-          currency: cur,
-          fx_rate: normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
+          amount: cType === '환불' ? refundInfo.lossKRW : amount,
+          currency: cType === '환불' ? 'KRW' : cur,
+          fx_rate: cType === '환불' ? 1 : normalizeCurrencyCode(cur) === 'KRW' ? 1 : fx,
           memo: finalMemo,
           vendor_name: cVendorName || null,
           cost_date: cDate,
@@ -4166,7 +4271,7 @@ async function openItemDetail(it: PurchaseItemRow) {
             ① 전부 비우면 <b>수량대비 자동배분</b>
             {'\n'}② 일부만 입력하면 <b>남은 금액만 빈 칸에 자동배분</b>
             {'\n'}③ 전부 입력 후 외화 총액과 안 맞으면 <b>입력 금액대비 전체 자동보정</b>
-            {cType === '환불' ? '\n※ 환불은 저장 시 자동으로 마이너스 처리돼.' : ''}
+            {cType === '환불' ? '\n※ 환불은 실제 환불금액과 원가 차액만 손실로 기록돼.' : ''}
           </div>
           <div style={{ display: 'grid', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
             {selectedItems.length === 0 ? (
@@ -4221,7 +4326,7 @@ async function openItemDetail(it: PurchaseItemRow) {
                                 ...prev,
                                 [it.id]: {
                                   item_name: e.target.value,
-                                  next_qty: prev[it.id]?.next_qty ?? String(Math.max(1, n(it.qty))),
+                                  next_qty: prev[it.id]?.next_qty ?? String(Math.max(0, n(it.qty))),
                                 },
                               }))
                               setCostDirty(true)
@@ -4234,7 +4339,7 @@ async function openItemDetail(it: PurchaseItemRow) {
                           <input
                             style={styles.input}
                             inputMode="numeric"
-                            value={refundItemEditMap[it.id]?.next_qty ?? String(Math.max(1, n(it.qty)))}
+                            value={refundItemEditMap[it.id]?.next_qty ?? String(Math.max(0, n(it.qty)))}
                             onChange={(e) => {
                               setRefundItemEditMap((prev) => ({
                                 ...prev,
@@ -4249,8 +4354,8 @@ async function openItemDetail(it: PurchaseItemRow) {
                           />
                         </div>
                         <div style={styles.small}>
-                          현재 수량 <b>{fmtNum(Math.max(1, n(it.qty)))}</b> → 변경 후 수량{' '}
-                          <b>{fmtNum(Math.max(1, Math.floor(n(refundItemEditMap[it.id]?.next_qty ?? it.qty))))}</b>
+                          현재 수량 <b>{fmtNum(Math.max(0, n(it.qty)))}</b> → 변경 후 수량{' '}
+                          <b>{fmtNum(Math.max(0, Math.floor(n(refundItemEditMap[it.id]?.next_qty ?? it.qty))))}</b>
                         </div>
                       </div>
                     ) : null}
@@ -4477,7 +4582,7 @@ async function openItemDetail(it: PurchaseItemRow) {
                 ① 전부 비우면 <b>수량대비 자동배분</b>
                 {'\n'}② 일부만 입력하면 <b>남은 금액만 빈 칸에 자동배분</b>
                 {'\n'}③ 전부 입력 후 외화 총액과 안 맞으면 <b>입력 금액대비 전체 자동보정</b>
-                {ecType === '환불' ? '\n※ 환불은 저장 시 자동으로 마이너스 처리돼.' : ''}
+                {ecType === '환불' ? '\n※ 환불은 실제 환불금액과 원가 차액만 손실로 기록돼.' : ''}
               </div>
               <div style={{ display: 'grid', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
                 {editSelectedItems.length === 0 ? (
@@ -4532,7 +4637,7 @@ async function openItemDetail(it: PurchaseItemRow) {
                                     ...prev,
                                     [it.id]: {
                                       item_name: e.target.value,
-                                      next_qty: prev[it.id]?.next_qty ?? String(Math.max(1, n(it.qty))),
+                                      next_qty: prev[it.id]?.next_qty ?? String(Math.max(0, n(it.qty))),
                                     },
                                   }))
                                   setCostEditDirty(true)
@@ -4545,7 +4650,7 @@ async function openItemDetail(it: PurchaseItemRow) {
                               <input
                                 style={styles.input}
                                 inputMode="numeric"
-                                value={editRefundItemEditMap[it.id]?.next_qty ?? String(Math.max(1, n(it.qty)))}
+                                value={editRefundItemEditMap[it.id]?.next_qty ?? String(Math.max(0, n(it.qty)))}
                                 onChange={(e) => {
                                   setEditRefundItemEditMap((prev) => ({
                                     ...prev,
@@ -4560,8 +4665,8 @@ async function openItemDetail(it: PurchaseItemRow) {
                               />
                             </div>
                             <div style={styles.small}>
-                              현재 수량 <b>{fmtNum(Math.max(1, n(it.qty)))}</b> → 변경 후 수량{' '}
-                              <b>{fmtNum(Math.max(1, Math.floor(n(editRefundItemEditMap[it.id]?.next_qty ?? it.qty))))}</b>
+                              현재 수량 <b>{fmtNum(Math.max(0, n(it.qty)))}</b> → 변경 후 수량{' '}
+                              <b>{fmtNum(Math.max(0, Math.floor(n(editRefundItemEditMap[it.id]?.next_qty ?? it.qty))))}</b>
                             </div>
                           </div>
                         ) : null}
