@@ -1457,7 +1457,7 @@ export default function ProductsPage() {
           >
             <colgroup>
               <col style={{ width: '3%' }} />
-              <col style={{ width: '32%' }} />
+              <col style={{ width: '27%' }} />
               <col style={{ width: '6%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '9%' }} />
@@ -1465,8 +1465,8 @@ export default function ProductsPage() {
               <col style={{ width: '9%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '5%' }} />
-              <col style={{ width: '6%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
             </colgroup>
             <thead>
               <tr>
@@ -1625,7 +1625,16 @@ export default function ProductsPage() {
                     <td style={{ ...compactTd, color: n(row.item.offline_price) > 0 ? '#166534' : '#6b7280', fontWeight: 800 }}>
                       {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '미입력'}
                     </td>
-                    <td style={compactTd}>{fmtDate(row.lastArrivedDate)}</td>
+                    <td
+                      style={{
+                        ...compactTd,
+                        whiteSpace: 'nowrap',
+                        wordBreak: 'normal',
+                        fontSize: 10,
+                      }}
+                    >
+                      {fmtDate(row.lastArrivedDate)}
+                    </td>
                     <td style={{ ...compactTd, padding: '8px 4px' }}>
                       <div style={{ display: 'grid', gap: 4 }}>
                         {!row.isComplete ? (
