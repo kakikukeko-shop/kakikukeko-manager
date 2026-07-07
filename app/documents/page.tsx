@@ -57,6 +57,11 @@ type CostAllocationRow = {
   allocated_amount: number | null;
 };
 
+type ArrivalRow = {
+  purchase_item_id: string;
+  arrived_qty: number | null;
+};
+
 type VendorRow = {
   id: string;
   created_at: string;
@@ -1412,6 +1417,7 @@ export default function DocumentsPage() {
   const [items, setItems] = useState<PurchaseItemRow[]>([]);
   const [costs, setCosts] = useState<PurchaseCostRow[]>([]);
   const [allocations, setAllocations] = useState<CostAllocationRow[]>([]);
+  const [arrivals, setArrivals] = useState<ArrivalRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [files, setFiles] = useState<FileRow[]>([]);
 
@@ -1593,6 +1599,17 @@ export default function DocumentsPage() {
     }
     return map;
   }, [items]);
+
+  const arrivedQtyByItem = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of arrivals) {
+      map.set(
+        row.purchase_item_id,
+        (map.get(row.purchase_item_id) ?? 0) + Math.max(0, n(row.arrived_qty)),
+      );
+    }
+    return map;
+  }, [arrivals]);
 
   const filesByItem = useMemo(() => {
     const map = new Map<string, FileRow[]>();
@@ -1961,23 +1978,32 @@ export default function DocumentsPage() {
   }, [files]);
 
   const purchaseCardCounts = useMemo(() => {
-    const map = new Map<string, { itemKinds: number; hasPreorder: boolean }>();
+    const map = new Map<
+      string,
+      { itemKinds: number; hasUnreceived: boolean; unreceivedQty: number }
+    >();
+
     for (const p of purchases) {
       const its = itemsByPurchase.get(p.id) ?? [];
+      const unreceivedQty = its.reduce((sum, item) => {
+        const total = Math.max(0, n(item.qty));
+        const arrived = Math.max(0, arrivedQtyByItem.get(item.id) ?? 0);
+        return sum + Math.max(0, total - arrived);
+      }, 0);
+
       map.set(p.id, {
         itemKinds: its.length,
-        hasPreorder: its.some(
-          (x) => !!x.is_preorder && !hasBalanceByItem.get(x.id),
-        ),
+        hasUnreceived: unreceivedQty > 0,
+        unreceivedQty,
       });
     }
     return map;
-  }, [purchases, itemsByPurchase, hasBalanceByItem]);
+  }, [purchases, itemsByPurchase, arrivedQtyByItem]);
 
   const filteredPurchases = useMemo(() => {
     if (purchaseViewFilter === "unreceived") {
       return searchedSortedPurchases.filter(
-        (purchase) => purchaseCardCounts.get(purchase.id)?.hasPreorder,
+        (purchase) => purchaseCardCounts.get(purchase.id)?.hasUnreceived,
       );
     }
 
@@ -2199,7 +2225,7 @@ export default function DocumentsPage() {
     setMsg(null);
 
     try {
-      const [pRes, iRes, cRes, aRes, vRes, fRes] = await Promise.all([
+      const [pRes, iRes, cRes, aRes, arRes, vRes, fRes] = await Promise.all([
         supabase
           .from("purchase")
           .select(
@@ -2227,6 +2253,10 @@ export default function DocumentsPage() {
           .select("purchase_cost_id,purchase_item_id,allocated_amount"),
 
         supabase
+          .from("purchase_item_arrivals")
+          .select("purchase_item_id,arrived_qty"),
+
+        supabase
           .from("vendors")
           .select(
             "id,created_at,name,is_product_supplier,is_forwarder,is_carry_in,is_active",
@@ -2245,6 +2275,7 @@ export default function DocumentsPage() {
       if (iRes.error) throw iRes.error;
       if (cRes.error) throw cRes.error;
       if (aRes.error) throw aRes.error;
+      if (arRes.error) throw arRes.error;
       if (vRes.error) throw vRes.error;
       if (fRes.error) throw fRes.error;
 
@@ -2252,6 +2283,7 @@ export default function DocumentsPage() {
       const it = (iRes.data ?? []) as PurchaseItemRow[];
       const cs = (cRes.data ?? []) as PurchaseCostRow[];
       const as = (aRes.data ?? []) as CostAllocationRow[];
+      const ars = (arRes.data ?? []) as ArrivalRow[];
       const vs = (vRes.data ?? []) as VendorRow[];
       const fs = (fRes.data ?? []) as FileRow[];
 
@@ -2259,6 +2291,7 @@ export default function DocumentsPage() {
       setItems(it);
       setCosts(cs);
       setAllocations(as);
+      setArrivals(ars);
       setVendors(vs.filter((x) => x.is_active !== false));
       setFiles(fs);
 
@@ -4043,9 +4076,9 @@ export default function DocumentsPage() {
                         }}
                       >
                         {p.supplier?.trim() ? p.supplier : "(거래처 없음)"}{" "}
-                        {cnt?.hasPreorder ? (
+                        {cnt?.hasUnreceived ? (
                           <span style={styles.badge("orange")}>
-                            미입고 포함
+                            미입고 {cnt.unreceivedQty}개
                           </span>
                         ) : null}
                         {refundSummary?.fullCount ? (
@@ -4095,6 +4128,11 @@ export default function DocumentsPage() {
                           상품 종류 수: <b>{cnt?.itemKinds ?? 0}개</b> / 총원화:{" "}
                           <b>{fmtKRW(n(p.total_amount))}</b>
                         </div>
+                        {cnt?.hasUnreceived ? (
+                          <div style={{ color: "#9a3412", fontWeight: 900 }}>
+                            미입고: {cnt.unreceivedQty}개
+                          </div>
+                        ) : null}
                         {refundSummary &&
                         (refundSummary.fullCount > 0 ||
                           refundSummary.partialCount > 0 ||
@@ -4297,6 +4335,9 @@ export default function DocumentsPage() {
                             (lineTotal + allocSum) / Math.max(1, n(it.qty)),
                           );
                       const parentPurchase = purchaseMap.get(it.purchase_id);
+                      const arrivedQty = Math.max(0, arrivedQtyByItem.get(it.id) ?? 0);
+                      const unreceivedQty = Math.max(0, n(it.qty) - arrivedQty);
+                      const isUnreceived = !isFullyRefunded && unreceivedQty > 0;
 
                       return (
                         <tr key={it.id}>
@@ -4392,31 +4433,32 @@ export default function DocumentsPage() {
                                         {refundStatus}
                                       </span>
                                     ) : null}
-                                    {it.is_preorder &&
-                                    !hasBalanceByItem.get(it.id) ? (
+                                    {isUnreceived ? (
                                       <span style={styles.badge("orange")}>
-                                        미입고
+                                        미입고 {fmtNum(unreceivedQty)}개
                                       </span>
                                     ) : null}
-                                    {(itemCostBadgeMap.get(it.id) ?? []).map(
-                                      (badge) => (
-                                        <button
-                                          key={badge.costId}
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            openCostEditorById(badge.costId);
-                                          }}
-                                          style={{
-                                            ...styles.badge("purple"),
-                                            border: "none",
-                                            cursor: "pointer",
-                                          }}
-                                        >
-                                          {badge.label}
-                                        </button>
-                                      ),
-                                    )}
+                                    <span data-tablet-role="documents-cost-badges">
+                                      {(itemCostBadgeMap.get(it.id) ?? []).map(
+                                        (badge) => (
+                                          <button
+                                            key={badge.costId}
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              openCostEditorById(badge.costId);
+                                            }}
+                                            style={{
+                                              ...styles.badge("purple"),
+                                              border: "none",
+                                              cursor: "pointer",
+                                            }}
+                                          >
+                                            {badge.label}
+                                          </button>
+                                        ),
+                                      )}
+                                    </span>
                                   </div>
                                 </div>
                                 <div style={styles.small}>

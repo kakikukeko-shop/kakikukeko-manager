@@ -145,3 +145,150 @@ html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence
 html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th,
 html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td { padding:7px 3px !important; font-size:10px !important; }
 html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] button { min-height:29px !important; padding:4px 5px !important; font-size:10px !important; }
+
+
+/* ===== 2026-07 태블릿 전용 최종 정리 =====
+   PC 화면에는 전혀 적용되지 않으며, 헤더의 '태블릿 버전'을 눌렀을 때만 적용됩니다. */
+
+/* 매입관리: 입고이력 기준 미입고, 결제일은 상품명 아래, 상품명·비용뱃지는 가로로 */
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] {
+  grid-template-columns: minmax(270px, 31vw) minmax(0, 1fr) !important;
+  gap: 12px !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] {
+  overflow-x: hidden !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date'] {
+  display: none !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date-inline'] {
+  display: block !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th,
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] td {
+  white-space: normal !important;
+  word-break: break-word !important;
+  padding: 9px 6px !important;
+  font-size: 12px !important;
+  vertical-align: top !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(1) { width: 5% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(2) { width: 52% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(3) { width: 7% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(5) { width: 14% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(6) { width: 9% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] th:nth-child(7) { width: 13% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-product-name'] {
+  display: block !important;
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow: visible !important;
+  line-height: 1.38 !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-item-title'] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-wrap: wrap !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-cost-badges'] {
+  display: inline-flex !important;
+  flex: 0 1 auto !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-wrap: wrap !important;
+}
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-cost-badges'] button {
+  min-height: 24px !important;
+  padding: 3px 6px !important;
+  font-size: 10px !important;
+  white-space: nowrap !important;
+}
+
+/* 상품/재고관리: 별도 카드 표를 만들지 않고 기존 상품칸에 핵심정보를 모아 가로 드래그를 없앰 */
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] {
+  overflow-x: hidden !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th,
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td {
+  padding: 8px 6px !important;
+  font-size: 11px !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  vertical-align: top !important;
+}
+/* 매입일~마지막입고일은 상품명 아래 요약으로 옮기고 태블릿 표에서는 숨김 */
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(n+3):nth-child(-n+18),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(n+3):nth-child(-n+18) {
+  display: none !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(1) { width: 5% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(2) { width: 79% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(19) { width: 16% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(2) {
+  overflow: visible !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-item-meta'] {
+  display: grid !important;
+  gap: 4px !important;
+  margin-top: 5px !important;
+  color: #4b5563 !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-qty-summary'] {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 4px !important;
+  padding: 6px 7px !important;
+  border-radius: 8px !important;
+  background: #f5f3ff !important;
+  color: #312e81 !important;
+  text-align: center !important;
+  font-size: 11px !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-qty-summary'] span {
+  min-width: 0 !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-price-summary'] {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, .56fr) !important;
+  gap: 6px !important;
+  padding-top: 2px !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-price-summary'] > div {
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  background: #fafafa !important;
+  padding: 5px 6px !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] button {
+  min-height: 30px !important;
+  padding: 5px 6px !important;
+  font-size: 10px !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(19) > div {
+  justify-items: stretch !important;
+}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(19) button {
+  width: 100% !important;
+}
+
+/* iPad 세로에서도 태블릿 모드 자체는 유지하되, 매입목록은 위로만 내려보냄 */
+@media (max-width: 850px) {
+  html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

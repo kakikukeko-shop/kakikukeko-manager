@@ -1422,7 +1422,7 @@ export default function ProductsPage() {
         <div style={styles.card}>조건에 맞는 상품이 없어.</div>
       ) : (
         <div style={styles.tableWrap} data-tablet-role="products-table-wrap">
-          <table style={styles.table} data-tablet-role="products-table">
+          <table style={styles.table} data-tablet-role="products-table" data-tablet-role-desktop="products-desktop-table">
             <thead>
               <tr>
                 <th style={{ ...styles.th, ...styles.checkCell, width: 42 }}>
@@ -1514,8 +1514,30 @@ export default function ProductsPage() {
                           </div>
                           <div data-tablet-role="products-item-meta" style={{ display: 'none' }}>
                             <div>매입일 {fmtDate(row.purchase?.purchase_date)} · 거래처 {row.purchase?.supplier ?? '(거래처 없음)'}</div>
-                            <div data-tablet-role="products-qty-summary"><b>총 {fmtNum(row.totalQty)}</b> · 입고 {fmtNum(row.arrivedQty)} · 판매 {fmtNum(row.soldQty)} <span>│</span> <b>재고 {fmtNum(row.stockQty)}</b> · 미도착 {fmtNum(row.remainingArrivalQty)}</div>
+                            <div data-tablet-role="products-qty-summary">
+                              <span><b>총</b> {fmtNum(row.totalQty)}</span>
+                              <span><b>입고</b> {fmtNum(row.arrivedQty)}</span>
+                              <span><b>판매</b> {fmtNum(row.soldQty)}</span>
+                              <span><b>재고</b> {fmtNum(row.stockQty)}</span>
+                              <span><b>미도착</b> {fmtNum(row.remainingArrivalQty)}</span>
+                            </div>
                             <div>원가 {fmtKRW(row.finalUnitCost)} · {row.isComplete ? '입고완료' : row.arrivedQty > 0 ? '부분입고' : '미도착'}</div>
+                            <div data-tablet-role="products-price-summary">
+                              <div>
+                                <b>온라인</b> {n(row.item.online_price) > 0 ? fmtKRW(n(row.item.online_price)) : '미입력'}
+                                <br />
+                                배송비 일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '-'} / 편의점 {receivedConvenienceShipping > 0 ? fmtKRW(receivedConvenienceShipping) : '-'}
+                                <br />
+                                예상 일반 {expectedGeneralShipping > 0 ? fmtKRW(expectedGeneralShipping) : '-'} / 편의점 {expectedConvenienceShipping > 0 ? fmtKRW(expectedConvenienceShipping) : '-'}
+                                <br />
+                                이익 일반 {n(row.item.online_price) > 0 ? fmtKRW(generalOnlineProfit) : '-'} / 편의점 {n(row.item.online_price) > 0 ? fmtKRW(convenienceOnlineProfit) : '-'}
+                              </div>
+                              <div>
+                                <b>오프라인</b> {n(row.item.offline_price) > 0 ? fmtKRW(n(row.item.offline_price)) : '미입력'}
+                                <br />
+                                이익 {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '-'}
+                              </div>
+                            </div>
                           </div>
                           {row.isReservationOpen ? (
                             <div style={{ marginTop: 4 }}>
