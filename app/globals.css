@@ -90,3 +90,58 @@ html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence
   html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] { grid-template-columns:minmax(0,1fr) !important; }
   html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-sidebar'] { position:static !important; top:auto !important; }
 }
+
+
+/* ===== 태블릿 전용 2차 정리: PC 표에는 영향 없음 ===== */
+/* 매입관리 */
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] { grid-template-columns:minmax(260px,31vw) minmax(0,1fr) !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] table { table-layout:fixed !important; width:100% !important; min-width:0 !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date'] { display:none !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date-inline'] { display:block !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-item-title'] { align-items:flex-start !important; gap:4px !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-item-title'] > button,
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-item-title'] > span:not([data-tablet-role='documents-product-name']) { display:inline-flex !important; min-height:23px !important; padding:3px 6px !important; font-size:10px !important; line-height:1.1 !important; white-space:nowrap !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-product-name'] { flex:1 1 100% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(1){width:5% !important;}
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(2){width:49% !important;}
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(3){width:7% !important;}
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(5){width:14% !important;}
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(6){width:10% !important;}
+html[data-view-mode='tablet'] [data-page='documents'] th:nth-child(7){width:15% !important;}
+
+/* 상품/재고: 수량은 상품 아래에서 크게, 온라인 배송비/예상배송비는 다시 표시 */
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] { table-layout:fixed !important; width:100% !important; min-width:0 !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(11),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(11),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(12),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(12),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(13),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(13),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(14),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(14),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(15),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(15),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(16),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(16),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(19),html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(19) { display:table-cell !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(1){width:4% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(2){width:36% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(11){width:8% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(12){width:10% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(13){width:10% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(14){width:9% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(15){width:7% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(16){width:7% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(19){width:9% !important;}
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-qty-summary'] { font-size:12px !important; color:#312e81 !important; line-height:1.45 !important; }
+
+/* 증빙: 거래처·매입일은 상품 아래, 사진/별도 열 숨김. 가로 스크롤 금지 */
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] { table-layout:fixed !important; width:100% !important; min-width:0 !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-supplier'],
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-date'] { display:none !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-item-meta'] { display:block !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(1),html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td:nth-child(1),
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(3),
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(4) { display:none !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(2){width:31% !important;}
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(n+5){width:8.625% !important;}
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th,
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td { padding:7px 3px !important; font-size:10px !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] button { min-height:29px !important; padding:4px 5px !important; font-size:10px !important; }

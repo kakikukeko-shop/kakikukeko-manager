@@ -4371,6 +4371,7 @@ export default function DocumentsPage() {
                                   }}
                                 >
                                   <div
+                                    data-tablet-role="documents-item-title"
                                     style={{
                                       fontWeight: 900,
                                       display: "flex",

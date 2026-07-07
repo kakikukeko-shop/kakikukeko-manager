@@ -1283,8 +1283,8 @@ export default function EvidencePage() {
                           </div>
                         </div>
                       </td>
-                      <td style={styles.td}>{purchase?.supplier ?? '(거래처 없음)'}</td>
-                      <td style={styles.td}>{fmtDate(purchase?.purchase_date)}</td>
+                      <td data-tablet-role="evidence-supplier" style={styles.td}>{purchase?.supplier ?? '(거래처 없음)'}</td>
+                      <td data-tablet-role="evidence-date" style={styles.td}>{fmtDate(purchase?.purchase_date)}</td>
                       <td style={styles.td}>
                         {renderPurchaseFileCell(purchaseReceipt, {
                           purchase_id: it.purchase_id,

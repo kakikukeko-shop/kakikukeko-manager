@@ -1514,7 +1514,7 @@ export default function ProductsPage() {
                           </div>
                           <div data-tablet-role="products-item-meta" style={{ display: 'none' }}>
                             <div>매입일 {fmtDate(row.purchase?.purchase_date)} · 거래처 {row.purchase?.supplier ?? '(거래처 없음)'}</div>
-                            <div>총 {fmtNum(row.totalQty)} / 입고 {fmtNum(row.arrivedQty)} / 판매 {fmtNum(row.soldQty)} · 재고 {fmtNum(row.stockQty)} / 미도착 {fmtNum(row.remainingArrivalQty)}</div>
+                            <div data-tablet-role="products-qty-summary"><b>총 {fmtNum(row.totalQty)}</b> · 입고 {fmtNum(row.arrivedQty)} · 판매 {fmtNum(row.soldQty)} <span>│</span> <b>재고 {fmtNum(row.stockQty)}</b> · 미도착 {fmtNum(row.remainingArrivalQty)}</div>
                             <div>원가 {fmtKRW(row.finalUnitCost)} · {row.isComplete ? '입고완료' : row.arrivedQty > 0 ? '부분입고' : '미도착'}</div>
                           </div>
                           {row.isReservationOpen ? (
