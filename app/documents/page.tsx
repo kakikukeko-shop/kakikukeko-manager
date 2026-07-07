@@ -4268,7 +4268,7 @@ export default function DocumentsPage() {
                     <th style={{ ...styles.th, width: 44 }}>선택</th>
                     <th style={styles.th}>상품</th>
                     <th style={{ ...styles.th, width: 70 }}>수량</th>
-                    <th style={{ ...styles.th, width: 110 }}>결제일</th>
+                    <th data-tablet-role="documents-payment-date" style={{ ...styles.th, width: 110 }}>결제일</th>
                     <th style={{ ...styles.th, width: 130 }}>원화합계</th>
                     <th style={{ ...styles.th, width: 100 }}>배분</th>
                     <th style={{ ...styles.th, width: 120 }}>최종단가</th>
@@ -4379,7 +4379,7 @@ export default function DocumentsPage() {
                                       flexWrap: "wrap",
                                     }}
                                   >
-                                    <span>{it.item_name ?? "(이름 없음)"}</span>
+                                    <span data-tablet-role="documents-product-name">{it.item_name ?? "(이름 없음)"}</span>
                                     {refundStatus ? (
                                       <span
                                         style={styles.badge(
@@ -4425,6 +4425,12 @@ export default function DocumentsPage() {
                                 <div style={styles.small}>
                                   등록: {fmtDateTime(it.created_at)}
                                 </div>
+                                <div
+                                  data-tablet-role="documents-payment-date-inline"
+                                  style={{ ...styles.small, display: "none" }}
+                                >
+                                  결제일: {fmtDate(parentPurchase?.purchase_date)}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -4437,7 +4443,7 @@ export default function DocumentsPage() {
                               <div style={styles.small}>환불완료</div>
                             ) : null}
                           </td>
-                          <td style={styles.td}>
+                          <td data-tablet-role="documents-payment-date" style={styles.td}>
                             {fmtDate(parentPurchase?.purchase_date)}
                           </td>
 
@@ -4531,7 +4537,7 @@ export default function DocumentsPage() {
                               flexWrap: "wrap",
                             }}
                           >
-                            <span>{it.item_name ?? "(이름 없음)"}</span>
+                            <span data-tablet-role="documents-product-name">{it.item_name ?? "(이름 없음)"}</span>
                             {itemRefundStatusMap.get(it.id) ? (
                               <span
                                 style={styles.badge(

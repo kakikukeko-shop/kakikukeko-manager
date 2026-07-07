@@ -1072,7 +1072,7 @@ export default function ProductsPage() {
         cursor: 'pointer',
         fontWeight: 800,
         fontSize: 14,
-        whiteSpace: 'nowrap',
+        whiteSpace: 'normal',
       }) as React.CSSProperties,
 
     smallBtn: {
@@ -1425,7 +1425,7 @@ export default function ProductsPage() {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={{ ...styles.th, ...styles.checkCell, width: 42 }}>
+                <th style={{ ...styles.th, ...styles.checkCell, width: 44 }}>
                   <input
                     type="checkbox"
                     checked={
@@ -1435,23 +1435,11 @@ export default function ProductsPage() {
                     onChange={toggleSelectAllVisible}
                   />
                 </th>
-                <th style={{ ...styles.th, width: 190 }}>상품</th>
-                <th style={{ ...styles.th, width: 76 }}>매입일</th>
-                <th style={{ ...styles.th, width: 78 }}>거래처</th>
-                <th style={{ ...styles.th, width: 72 }}>원가</th>
-                <th style={{ ...styles.th, width: 44 }}>총수량</th>
-                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>입고<br />수량</th>
-                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>판매<br />수량</th>
-                <th style={{ ...styles.th, width: 44, lineHeight: 1.2 }}>현재<br />재고</th>
-                <th style={{ ...styles.th, width: 44 }}>미도착</th>
-                <th style={{ ...styles.th, width: 74, lineHeight: 1.2 }}>온라인<br />판매가</th>
-                <th style={{ ...styles.th, width: 96, lineHeight: 1.2 }}>온라인<br />배송비</th>
-                <th style={{ ...styles.th, width: 96, lineHeight: 1.2 }}>예상<br />배송비</th>
-                <th style={{ ...styles.th, width: 92, lineHeight: 1.2 }}>온라인<br />이익</th>
-                <th style={{ ...styles.th, width: 74, lineHeight: 1.2 }}>오프라인<br />판매가</th>
-                <th style={{ ...styles.th, width: 72, lineHeight: 1.2 }}>오프라인<br />이익</th>
-                <th style={{ ...styles.th, width: 78, lineHeight: 1.2 }}>마지막<br />입고일</th>
-                <th style={{ ...styles.th, width: 68 }}>상태</th>
+                <th style={{ ...styles.th, width: '34%' }}>상품</th>
+                <th style={{ ...styles.th, width: 88 }}>원가</th>
+                <th style={{ ...styles.th, width: 110 }}>수량</th>
+                <th style={{ ...styles.th, width: 160 }}>온라인</th>
+                <th style={{ ...styles.th, width: 104 }}>오프라인</th>
                 <th style={{ ...styles.th, width: 118 }}>액션</th>
               </tr>
             </thead>
@@ -1467,6 +1455,8 @@ export default function ProductsPage() {
                   n(row.item.online_price) - row.finalUnitCost - expectedConvenienceShipping + receivedConvenienceShipping
                 const offlineProfit = n(row.item.offline_price) - row.finalUnitCost
                 const isChecked = selectedItemIds.includes(row.item.id)
+                const statusLabel = row.isComplete ? '입고완료' : row.arrivedQty > 0 ? '부분입고' : '미도착'
+                const statusKind = row.isComplete ? 'green' : row.arrivedQty > 0 ? 'orange' : 'gray'
 
                 return (
                   <tr key={row.item.id}>
@@ -1479,7 +1469,7 @@ export default function ProductsPage() {
                     </td>
 
                     <td style={{ ...styles.td, overflow: 'hidden' }}>
-                      <div style={styles.thumbCell}>
+                      <div style={{ ...styles.thumbCell, alignItems: 'flex-start' }}>
                         {row.photoUrl ? (
                           <img
                             src={row.photoUrl}
@@ -1500,97 +1490,62 @@ export default function ProductsPage() {
                             없음
                           </div>
                         )}
-                        <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                        <div style={{ minWidth: 0, overflow: 'hidden', display: 'grid', gap: 4 }}>
                           <div
                             title={row.item.item_name ?? '(이름 없음)'}
                             style={{
                               fontWeight: 900,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
+                              lineHeight: 1.35,
+                              whiteSpace: 'normal',
+                              overflowWrap: 'anywhere',
                             }}
                           >
                             {row.item.item_name ?? '(이름 없음)'}
                           </div>
-                          {row.isReservationOpen ? (
-                            <div style={{ marginTop: 4 }}>
+                          <div style={{ ...styles.small, lineHeight: 1.35 }}>
+                            매입일: {fmtDate(row.purchase?.purchase_date)}
+                            <br />
+                            거래처: {row.purchase?.supplier ?? '(거래처 없음)'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            <span style={styles.badge(statusKind)}>{statusLabel}</span>
+                            {row.isReservationOpen ? (
                               <span style={styles.badge('orange')}>예약</span>
-                            </div>
-                          ) : null}
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </td>
 
-                    <td style={styles.td}>{fmtDate(row.purchase?.purchase_date)}</td>
-                    <td style={styles.td}>{row.purchase?.supplier ?? '(거래처 없음)'}</td>
                     <td style={styles.td}>
-                      <div>
-                        <b>{fmtKRW(row.finalUnitCost)}</b>
-                      </div>
+                      <b>{fmtKRW(row.finalUnitCost)}</b>
                       <div style={styles.small}>배분포함</div>
                     </td>
-                    <td style={styles.td}>{fmtNum(row.totalQty)}</td>
-                    <td style={styles.td}>{fmtNum(row.arrivedQty)}</td>
-                    <td style={styles.td}>{fmtNum(row.soldQty)}</td>
-                    <td style={styles.td}>
-                      <b>{fmtNum(row.stockQty)}</b>
+                    <td style={{ ...styles.td, lineHeight: 1.5 }}>
+                      <div>총 {fmtNum(row.totalQty)}</div>
+                      <div>입고 {fmtNum(row.arrivedQty)} / 판매 {fmtNum(row.soldQty)}</div>
+                      <div><b>재고 {fmtNum(row.stockQty)}</b></div>
+                      <div style={styles.small}>미도착 {fmtNum(row.remainingArrivalQty)}</div>
                     </td>
-                    <td style={styles.td}>{fmtNum(row.remainingArrivalQty)}</td>
-                    <td style={styles.td}>
-                      {n(row.item.online_price) > 0
-                        ? fmtKRW(n(row.item.online_price))
-                        : '미입력'}
-                    </td>
-                    <td style={styles.td}>
-                      {receivedGeneralShipping > 0 || receivedConvenienceShipping > 0 ? (
-                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
-                          <div>일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '미입력'}</div>
-                          <div>편의점 {receivedConvenienceShipping > 0 ? fmtKRW(receivedConvenienceShipping) : '미입력'}</div>
-                        </div>
-                      ) : (
-                        '미입력'
-                      )}
-                    </td>
-                    <td style={styles.td}>
-                      {expectedGeneralShipping > 0 || expectedConvenienceShipping > 0 ? (
-                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
-                          <div>일반 {expectedGeneralShipping > 0 ? fmtKRW(expectedGeneralShipping) : '미입력'}</div>
-                          <div>편의점 {expectedConvenienceShipping > 0 ? fmtKRW(expectedConvenienceShipping) : '미입력'}</div>
-                        </div>
-                      ) : (
-                        '미입력'
-                      )}
-                    </td>
-                    <td style={styles.td}>
+                    <td style={{ ...styles.td, lineHeight: 1.5 }}>
                       {n(row.item.online_price) > 0 ? (
-                        <div style={{ display: 'grid', gap: 4, lineHeight: 1.25 }}>
-                          <div><b>일반 {fmtKRW(generalOnlineProfit)}</b></div>
-                          <div><b>편의점 {fmtKRW(convenienceOnlineProfit)}</b></div>
-                        </div>
+                        <>
+                          <div><b>판매 {fmtKRW(n(row.item.online_price))}</b></div>
+                          <div style={styles.small}>일반 이익 {fmtKRW(generalOnlineProfit)}</div>
+                          <div style={styles.small}>편의점 이익 {fmtKRW(convenienceOnlineProfit)}</div>
+                        </>
                       ) : (
                         '미입력'
                       )}
                     </td>
-                    <td style={styles.td}>
-                      {n(row.item.offline_price) > 0
-                        ? fmtKRW(n(row.item.offline_price))
-                        : '미입력'}
-                    </td>
-                    <td style={styles.td}>
+                    <td style={{ ...styles.td, lineHeight: 1.5 }}>
                       {n(row.item.offline_price) > 0 ? (
-                        <b>{fmtKRW(offlineProfit)}</b>
+                        <>
+                          <div><b>{fmtKRW(n(row.item.offline_price))}</b></div>
+                          <div style={styles.small}>이익 {fmtKRW(offlineProfit)}</div>
+                        </>
                       ) : (
                         '미입력'
-                      )}
-                    </td>
-                    <td style={styles.td}>{fmtDate(row.lastArrivedDate)}</td>
-                    <td style={styles.td}>
-                      {row.isComplete ? (
-                        <span style={styles.badge('green')}>입고완료</span>
-                      ) : row.arrivedQty > 0 ? (
-                        <span style={styles.badge('orange')}>부분입고</span>
-                      ) : (
-                        <span style={styles.badge('gray')}>미도착</span>
                       )}
                     </td>
                     <td style={styles.td}>
