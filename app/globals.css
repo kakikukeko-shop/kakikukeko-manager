@@ -693,3 +693,319 @@ html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products
   width: 108px !important;
   min-width: 108px !important;
 }
+
+/* ===== 매입관리 상품 상세 모달: 실제 마크업 기준 태블릿 카드형 =====
+   documents/page.tsx의
+   - item-detail-allocation-table
+   - item-detail-allocation-cards
+   - item-detail-allocation-card
+   구조에 맞춘 최종 규칙입니다.
+   PC에서는 기존 표만, 태블릿 버튼을 눌렀을 때는 카드만 보입니다. */
+
+/* PC 기본값 */
+[data-page='documents'] [data-tablet-role='item-detail-allocation-cards'] {
+  display: none;
+}
+
+/* 태블릿: 기존 표 숨기고 카드형만 표시 */
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-table'] {
+  display: none !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-cards'] {
+  display: grid !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-card'] {
+  display: grid !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 12px !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  box-sizing: border-box !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-card-head'] {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  align-items: start !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-type'] {
+  color: #312e81 !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+  line-height: 1.35 !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-date'] {
+  margin-top: 3px !important;
+  color: #6b7280 !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  white-space: nowrap !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-amount'] {
+  white-space: nowrap !important;
+  color: #111827 !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  line-height: 1.3 !important;
+  text-align: right !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-products'] {
+  display: grid !important;
+  gap: 5px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 10px !important;
+  border-radius: 10px !important;
+  background: #f5f3ff !important;
+  color: #312e81 !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  white-space: normal !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-products'] > b {
+  color: #6d28d9 !important;
+  font-size: 11px !important;
+  font-weight: 900 !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-products'] > div {
+  min-width: 0 !important;
+  white-space: normal !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-meta'] {
+  display: grid !important;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr) !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-meta'] > div {
+  display: grid !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  padding: 9px 10px !important;
+  border: 1px solid #eef0f6 !important;
+  border-radius: 10px !important;
+  background: #fafafa !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-meta'] b {
+  color: #6b7280 !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-meta'] span {
+  min-width: 0 !important;
+  color: #111827 !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+  white-space: pre-line !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-actions'] {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 7px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-actions'] button {
+  min-height: 34px !important;
+  padding: 7px 11px !important;
+  font-size: 11px !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 680px) {
+  html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='item-detail-allocation-meta'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+
+/* ===== 상품 상세 모달 태블릿 최종 수정 =====
+   SafeModal은 화면 최상단(Portal)에 렌더링되어 [data-page='documents'] 바깥에 있습니다.
+   그래서 아래 규칙은 data-page 조건 없이 모달의 실제 data-tablet-role에 바로 적용합니다. */
+
+/* PC 기본: 상세 모달에서는 기존 표만 보이게 */
+[data-tablet-role='item-detail-allocation-cards'] {
+  display: none;
+}
+
+/* 태블릿: 기존 가로 표를 완전히 숨기고 카드만 표시 */
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-table'] {
+  display: none !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-cards'] {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 12px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-card'] {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 14px !important;
+  margin: 0 !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-card-head'] {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: start !important;
+  gap: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-type'] {
+  color: #312e81 !important;
+  font-weight: 900 !important;
+  font-size: 14px !important;
+  line-height: 1.35 !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-date'] {
+  margin-top: 3px !important;
+  color: #6b7280 !important;
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+  white-space: nowrap !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-amount'] {
+  color: #111827 !important;
+  font-weight: 900 !important;
+  font-size: 17px !important;
+  line-height: 1.25 !important;
+  white-space: nowrap !important;
+  text-align: right !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-products'] {
+  display: grid !important;
+  grid-template-columns: 92px minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 10px 11px !important;
+  border-radius: 10px !important;
+  background: #f5f3ff !important;
+  color: #312e81 !important;
+  box-sizing: border-box !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-products'] > b {
+  color: #6d28d9 !important;
+  font-size: 11px !important;
+  font-weight: 900 !important;
+  white-space: nowrap !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-products'] > div {
+  min-width: 0 !important;
+  color: #312e81 !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  white-space: normal !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-meta'] {
+  display: grid !important;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr) !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-meta'] > div {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  padding: 9px 10px !important;
+  border: 1px solid #eef0f6 !important;
+  border-radius: 10px !important;
+  background: #fafafa !important;
+  box-sizing: border-box !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-meta'] b {
+  color: #6b7280 !important;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-meta'] span {
+  display: block !important;
+  min-width: 0 !important;
+  color: #111827 !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  white-space: pre-line !important;
+  word-break: keep-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-actions'] {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-actions'] button {
+  min-height: 34px !important;
+  padding: 7px 12px !important;
+  font-size: 11px !important;
+  white-space: nowrap !important;
+}
+
+/* 아이패드 세로 폭: 거래처와 메모를 위아래로 바꿔 한 글자씩 꺾이는 현상 방지 */
+@media (max-width: 760px) {
+  html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-products'] {
+    grid-template-columns: 1fr !important;
+    gap: 4px !important;
+  }
+
+  html[data-view-mode='tablet'] [data-tablet-role='item-detail-allocation-meta'] {
+    grid-template-columns: 1fr !important;
+  }
+}
