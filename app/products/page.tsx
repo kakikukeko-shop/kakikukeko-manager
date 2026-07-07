@@ -1457,7 +1457,7 @@ export default function ProductsPage() {
           >
             <colgroup>
               <col style={{ width: '3%' }} />
-              <col style={{ width: '27%' }} />
+              <col style={{ width: '32%' }} />
               <col style={{ width: '6%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '9%' }} />
@@ -1465,7 +1465,6 @@ export default function ProductsPage() {
               <col style={{ width: '9%' }} />
               <col style={{ width: '7%' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '5%' }} />
               <col style={{ width: '5%' }} />
               <col style={{ width: '6%' }} />
             </colgroup>
@@ -1490,7 +1489,6 @@ export default function ProductsPage() {
                 <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>오프라인<br />판매가</th>
                 <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>오프라인<br />이익</th>
                 <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>마지막<br />입고일</th>
-                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center' }}>상태</th>
                 <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center' }}>액션</th>
               </tr>
             </thead>
@@ -1564,6 +1562,13 @@ export default function ProductsPage() {
                             }}
                           >
                             {row.item.item_name ?? '(이름 없음)'}
+                            {row.isComplete ? (
+                              <span style={{ ...styles.badge('green'), marginLeft: 4, fontSize: 10, padding: '3px 5px' }}>입고완료</span>
+                            ) : row.arrivedQty > 0 ? (
+                              <span style={{ ...styles.badge('orange'), marginLeft: 4, fontSize: 10, padding: '3px 5px' }}>부분입고</span>
+                            ) : (
+                              <span style={{ ...styles.badge('gray'), marginLeft: 4, fontSize: 10, padding: '3px 5px' }}>미도착</span>
+                            )}
                             {row.isReservationOpen ? (
                               <span style={{ ...styles.badge('orange'), marginLeft: 4, fontSize: 10 }}>예약</span>
                             ) : null}
@@ -1621,15 +1626,6 @@ export default function ProductsPage() {
                       {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '미입력'}
                     </td>
                     <td style={compactTd}>{fmtDate(row.lastArrivedDate)}</td>
-                    <td style={compactTd}>
-                      {row.isComplete ? (
-                        <span style={{ ...styles.badge('green'), fontSize: 10, padding: '3px 5px' }}>입고완료</span>
-                      ) : row.arrivedQty > 0 ? (
-                        <span style={{ ...styles.badge('orange'), fontSize: 10, padding: '3px 5px' }}>부분입고</span>
-                      ) : (
-                        <span style={{ ...styles.badge('gray'), fontSize: 10, padding: '3px 5px' }}>미도착</span>
-                      )}
-                    </td>
                     <td style={{ ...compactTd, padding: '8px 4px' }}>
                       <div style={{ display: 'grid', gap: 4 }}>
                         {!row.isComplete ? (
