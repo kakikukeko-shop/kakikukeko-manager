@@ -300,22 +300,27 @@ function parseRefundSummaryMemo(memo: string | null | undefined) {
 
 function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
   const parsed = parseRefundSummaryMemo(row.memo)
-  const storedAdjustment = Number(row.amountKrw || 0)
 
   /*
-   * 환불 차손·차익은 메모나 과거 저장값을 그대로 믿지 않고,
-   * 항상 '환불 대상 원가'와 '실제 환불금액'의 차이로 다시 계산한다.
-   * 예: 대상원가 8,133원 / 실제환불 9,788원 → 차익 1,655원
+   * 환불 비용 행의 amount는 보통 실제로 돌려받은 금액이 음수로 저장된다.
+   * 따라서 메모에 실제 환불금액이 없더라도 amountKrw 절댓값을 실제 환불금액으로 쓴다.
+   * 대상원가는 메모의 '환불 대상 원가'를 우선 쓰고,
+   * 없으면 [환불 상세] 내부의 환불 수량 × 당시 단가 합계로 복구한다.
    */
+  const refundItemTargetKRW = getRefundItemLines(row.memo).reduce(
+    (sum, item) => sum + Number(item.targetKRW || 0),
+    0
+  )
+
   const targetKRW =
     parsed.targetKRW > 0
       ? parsed.targetKRW
-      : Math.max(0, parsed.actualKRW - storedAdjustment)
+      : Math.max(0, refundItemTargetKRW)
 
   const actualKRW =
     parsed.actualKRW > 0
       ? parsed.actualKRW
-      : Math.max(0, targetKRW + storedAdjustment)
+      : Math.abs(Number(row.amountKrw || 0))
 
   const difference = actualKRW - targetKRW
   const lossKRW = Math.max(0, -difference)
