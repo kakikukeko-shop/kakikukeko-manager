@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import React from 'react'
 import { supabase } from '@/lib/supabase'
 
 const MENUS = [
@@ -14,17 +14,42 @@ const MENUS = [
   { href: '/evidence', label: '증빙서류관리' },
 ]
 
+type ViewMode = 'pc' | 'tablet'
+
+const VIEW_MODE_STORAGE_KEY = 'kakikukeko-view-mode'
+
+function applyViewMode(mode: ViewMode) {
+  document.documentElement.dataset.viewMode = mode
+  window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode)
+  window.dispatchEvent(new CustomEvent('kakikukeko:view-mode-change', { detail: mode }))
+}
+
 export default function AppHeader() {
   const pathname = usePathname()
   const router = useRouter()
+  const [viewMode, setViewMode] = useState<ViewMode>('pc')
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
+    const nextMode: ViewMode = saved === 'tablet' ? 'tablet' : 'pc'
+    setViewMode(nextMode)
+    applyViewMode(nextMode)
+  }, [])
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
     router.replace('/login')
   }
 
+  const toggleViewMode = () => {
+    const nextMode: ViewMode = viewMode === 'pc' ? 'tablet' : 'pc'
+    setViewMode(nextMode)
+    applyViewMode(nextMode)
+  }
+
   return (
     <header
+      data-app-header
       style={{
         position: 'sticky',
         top: 0,
@@ -35,6 +60,7 @@ export default function AppHeader() {
       }}
     >
       <div
+        data-app-header-inner
         style={{
           maxWidth: 1680,
           margin: '0 auto',
@@ -46,8 +72,8 @@ export default function AppHeader() {
           flexWrap: 'wrap',
         }}
       >
-        {/* 로고 */}
         <Link
+          data-app-logo
           href="/"
           style={{
             textDecoration: 'none',
@@ -64,8 +90,8 @@ export default function AppHeader() {
           <span>카키쿠케코 상점</span>
         </Link>
 
-        {/* 메뉴 + 로그아웃 묶음 */}
         <div
+          data-app-header-actions
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -74,8 +100,8 @@ export default function AppHeader() {
             justifyContent: 'flex-end',
           }}
         >
-          {/* 메뉴 */}
           <nav
+            data-app-nav
             style={{
               display: 'flex',
               gap: 8,
@@ -113,8 +139,29 @@ export default function AppHeader() {
             })}
           </nav>
 
-          {/* 로그아웃 버튼 */}
           <button
+            data-view-toggle
+            type="button"
+            onClick={toggleViewMode}
+            aria-pressed={viewMode === 'tablet'}
+            style={{
+              padding: '10px 14px',
+              borderRadius: 14,
+              border: '1px solid #0f766e',
+              background: viewMode === 'tablet' ? '#0f766e' : '#fff',
+              color: viewMode === 'tablet' ? '#fff' : '#0f766e',
+              fontSize: 14,
+              fontWeight: 800,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {viewMode === 'tablet' ? '🖥️ PC 버전' : '📱 태블릿 버전'}
+          </button>
+
+          <button
+            data-logout-button
+            type="button"
             onClick={handleLogout}
             style={{
               padding: '10px 14px',
@@ -125,6 +172,7 @@ export default function AppHeader() {
               fontSize: 14,
               fontWeight: 800,
               cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
           >
             로그아웃

@@ -12,15 +12,184 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
+html {
+  background: #f8f7ff;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: linear-gradient(180deg, #f8f7ff 0%, #f7fbff 100%);
+  color: #111827;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Apple SD Gothic Neo',
+    'Noto Sans KR',
+    'Malgun Gothic',
+    sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.app-main {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 태블릿 모드: 헤더는 두 줄, 메뉴는 가로 스크롤로 유지 */
+html[data-view-mode='tablet'] [data-app-header-inner] {
+  max-width: 1180px !important;
+  padding: 12px 14px !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+html[data-view-mode='tablet'] [data-app-logo] {
+  min-width: 0;
+  font-size: 19px !important;
+}
+
+html[data-view-mode='tablet'] [data-app-header-actions] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+}
+
+html[data-view-mode='tablet'] [data-app-nav] {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 2px 0;
+}
+
+html[data-view-mode='tablet'] [data-app-nav]::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-view-mode='tablet'] [data-app-nav] a {
+  flex: 0 0 auto;
+  padding: 11px 13px !important;
+  font-size: 14px !important;
+}
+
+html[data-view-mode='tablet'] [data-view-toggle],
+html[data-view-mode='tablet'] [data-logout-button] {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 10px 12px !important;
+}
+
+/* 태블릿 터치 조작 편의 */
+html[data-view-mode='tablet'] .app-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 12px !important;
+}
+
+html[data-view-mode='tablet'] button,
+html[data-view-mode='tablet'] input:not([type='checkbox']):not([type='radio']),
+html[data-view-mode='tablet'] select {
+  min-height: 42px;
+}
+
+html[data-view-mode='tablet'] textarea {
+  min-height: 96px;
+}
+
+html[data-view-mode='tablet'] table th,
+html[data-view-mode='tablet'] table td {
+  font-size: 14px;
+}
+
+/* 대시보드: 아이패드에서는 상단 요약을 한 줄이 아닌 세로형으로 */
+html[data-view-mode='tablet'] [data-page='dashboard'] [data-tablet-role='dashboard-hero'] {
+  grid-template-columns: minmax(0, 1fr) !important;
+  padding: 18px !important;
+  gap: 14px !important;
+}
+
+/* 매입관리: 가로 아이패드는 2단 유지, 세로 아이패드는 위아래로 배치 */
+html[data-view-mode='tablet'] [data-page='documents'] {
+  padding: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-layout='documents-main'] {
+  grid-template-columns: minmax(300px, 36vw) minmax(0, 1fr) !important;
+  gap: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='documents-sidebar'] {
+  top: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-tablet-role='documents-table-wrap'] {
+  max-height: calc(100vh - 300px) !important;
+}
+
+@media (max-width: 850px) {
+  html[data-view-mode='tablet'] [data-app-header-inner] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html[data-view-mode='tablet'] [data-app-header-actions] {
+    gap: 7px !important;
+  }
+
+  html[data-view-mode='tablet'] [data-view-toggle],
+  html[data-view-mode='tablet'] [data-logout-button] {
+    padding: 9px 10px !important;
+    font-size: 13px !important;
+  }
+
+  html[data-view-mode='tablet'] [data-tablet-layout='documents-main'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html[data-view-mode='tablet'] [data-tablet-role='documents-sidebar'] {
+    position: static !important;
+    top: auto !important;
+  }
+
+  html[data-view-mode='tablet'] [data-tablet-role='documents-table-wrap'] {
+    max-height: 460px !important;
+  }
 }

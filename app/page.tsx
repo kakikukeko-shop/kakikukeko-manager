@@ -258,6 +258,8 @@ function getRefundUserMemo(memo: string | null | undefined) {
         trimmed.startsWith('환불 대상 원가:') ||
         trimmed.startsWith('실제 환불금액:') ||
         trimmed.startsWith('환불 차손:') ||
+        trimmed.startsWith('환불 차익:') ||
+        trimmed.startsWith('환불 원가조정:') ||
         trimmed.startsWith('초과 환불:')
       )
     })
@@ -269,31 +271,49 @@ function parseRefundSummaryMemo(memo: string | null | undefined) {
   const raw = stripRefundMetaDetail(memo)
 
   const getNum = (label: string) => {
-    const m = raw.match(new RegExp(`${label}:\\s*([0-9.,-]+)`))
+    const m = raw.match(new RegExp(`${label}:\\s*(-?[0-9.,]+)`))
     if (!m) return 0
     const value = Number(String(m[1]).replace(/,/g, ''))
     return Number.isFinite(value) ? value : 0
   }
 
+  const legacyOverRefundKRW = getNum('초과 환불')
+  const lossKRW = Math.max(0, getNum('환불 차손'))
+  const profitKRW = Math.max(0, getNum('환불 차익') || legacyOverRefundKRW)
+  const storedAdjustment = getNum('환불 원가조정')
+
   return {
     targetKRW: getNum('환불 대상 원가'),
     actualKRW: getNum('실제 환불금액'),
-    lossKRW: getNum('환불 차손'),
-    overRefundKRW: getNum('초과 환불'),
+    lossKRW,
+    profitKRW,
+    adjustmentKRW:
+      storedAdjustment !== 0
+        ? storedAdjustment
+        : lossKRW > 0
+          ? lossKRW
+          : profitKRW > 0
+            ? -profitKRW
+            : 0,
   }
 }
 
 function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
   const parsed = parseRefundSummaryMemo(row.memo)
-  const actualKRW = parsed.actualKRW > 0 ? parsed.actualKRW : Math.abs(Number(row.amountKrw || 0))
-  const lossKRW = Math.max(0, parsed.lossKRW)
-  const targetKRW = parsed.targetKRW > 0 ? parsed.targetKRW : actualKRW + lossKRW
+  const storedAdjustment = Number(row.amountKrw || 0)
+  const lossKRW = Math.max(0, parsed.lossKRW, storedAdjustment)
+  const profitKRW = Math.max(0, parsed.profitKRW, storedAdjustment < 0 ? Math.abs(storedAdjustment) : 0)
+  const actualKRW = parsed.actualKRW > 0
+    ? parsed.actualKRW
+    : Math.max(0, parsed.targetKRW - lossKRW + profitKRW)
+  const targetKRW = parsed.targetKRW > 0 ? parsed.targetKRW : actualKRW + lossKRW - profitKRW
 
   return {
     targetKRW,
     actualKRW,
     lossKRW,
-    overRefundKRW: Math.max(0, parsed.overRefundKRW),
+    profitKRW,
+    adjustmentKRW: parsed.adjustmentKRW || storedAdjustment,
   }
 }
 
@@ -549,12 +569,20 @@ export default function DashboardPage() {
       (sum, row) => sum + getRefundSummaryFromCost(row).lossKRW,
       0
     )
+    const monthRefundProfit = monthRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).profitKRW,
+      0
+    )
     const totalRefundActual = totalRefundCostRows.reduce(
       (sum, row) => sum + getRefundSummaryFromCost(row).actualKRW,
       0
     )
     const totalRefundLoss = totalRefundCostRows.reduce(
       (sum, row) => sum + getRefundSummaryFromCost(row).lossKRW,
+      0
+    )
+    const totalRefundProfit = totalRefundCostRows.reduce(
+      (sum, row) => sum + getRefundSummaryFromCost(row).profitKRW,
       0
     )
 
@@ -570,8 +598,10 @@ export default function DashboardPage() {
       totalPurchase,
       monthRefundActual,
       monthRefundLoss,
+      monthRefundProfit,
       totalRefundActual,
       totalRefundLoss,
+      totalRefundProfit,
     }
   }, [daySales, monthSales, yearSales, totalSalesRows, dayPurchases, monthPurchases, yearPurchases, totalPurchaseRows, dayPurchaseCosts, monthPurchaseCosts, yearPurchaseCosts, totalPurchaseCostRows, monthRefundCostRows, totalRefundCostRows])
 
@@ -644,17 +674,17 @@ export default function DashboardPage() {
     },
     {
       key: 'month_refund_loss' as const,
-      title: '월 매입 환불/차손',
+      title: '월 매입 환불',
       value: `차손 ${fmtKRW(summary.monthRefundLoss)}`,
-      subValue: `환불금액 ${fmtKRW(summary.monthRefundActual)}`,
+      subValue: `환불 ${fmtKRW(summary.monthRefundActual)} · 차익 ${fmtKRW(summary.monthRefundProfit)}`,
       bg: '#fee2e2',
       color: '#991b1b',
     },
     {
       key: 'total_refund_loss' as const,
-      title: '총 매입 환불/차손',
+      title: '총 매입 환불',
       value: `차손 ${fmtKRW(summary.totalRefundLoss)}`,
-      subValue: `환불금액 ${fmtKRW(summary.totalRefundActual)}`,
+      subValue: `환불 ${fmtKRW(summary.totalRefundActual)} · 차익 ${fmtKRW(summary.totalRefundProfit)}`,
       bg: '#ffedd5',
       color: '#9a3412',
     },
@@ -681,9 +711,9 @@ export default function DashboardPage() {
       case 'total_purchase':
         return '전체 매입 내역'
       case 'month_refund_loss':
-        return '이번 달 매입 환불/차손 내역'
+        return '이번 달 매입 환불·차손·차익 내역'
       case 'total_refund_loss':
-        return '전체 매입 환불/차손 내역'
+        return '전체 매입 환불·차손·차익 내역'
       default:
         return ''
     }
@@ -751,8 +781,9 @@ export default function DashboardPage() {
     selectedMetric === 'total_sales_profit'
 
   return (
-    <div style={{ display: 'grid', gap: 18 }}>
+    <div style={{ display: 'grid', gap: 18 }} data-page="dashboard">
       <section
+        data-tablet-role="dashboard-hero"
         style={{
           background: '#fff',
           border: '1px solid #e5e7eb',
@@ -1221,7 +1252,8 @@ export default function DashboardPage() {
                       )}
                       <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900 }}>
                         실제 환불 {fmtKRW(getRefundSummaryFromCost(row).actualKRW)} / 차손{' '}
-                        {fmtKRW(getRefundSummaryFromCost(row).lossKRW)}
+                        {fmtKRW(getRefundSummaryFromCost(row).lossKRW)} / 차익{' '}
+                        {fmtKRW(getRefundSummaryFromCost(row).profitKRW)}
                       </div>
                     </>
                   ) : (

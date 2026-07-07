@@ -14,10 +14,13 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="ko">
+    <html lang="ko" suppressHydrationWarning>
       <body
+        data-app-shell="kakikukeko"
         style={{
           margin: 0,
+          minWidth: 0,
+          overflowX: 'hidden',
           background: 'linear-gradient(180deg, #f8f7ff 0%, #f7fbff 100%)',
           color: '#111827',
           fontFamily:
@@ -27,9 +30,11 @@ export default function RootLayout({
         <AuthGuard>
           <AppHeader />
           <main
+            className="app-main"
             style={{
               width: '100%',
               maxWidth: '100%',
+              minWidth: 0,
               margin: 0,
               padding: 16,
               boxSizing: 'border-box',
