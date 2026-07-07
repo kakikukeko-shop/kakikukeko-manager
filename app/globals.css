@@ -631,3 +631,65 @@ html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence
   font-size: 10px !important;
   white-space: normal;
 }
+
+/* ===== 2026-07-07 상품/재고 태블릿 폭 최종 보정 =====
+   상품칸의 남는 폭을 줄이고 '마지막 입고일'과 액션칸에 여유를 줍니다.
+   PC 버전에는 적용되지 않습니다. */
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] {
+  table-layout: fixed !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(1),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(1) {
+  width: 40px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(2),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(2) {
+  width: 270px !important;
+  min-width: 270px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(5),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(5) {
+  width: 72px !important;
+  min-width: 72px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(11),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(11) {
+  width: 72px !important;
+  min-width: 72px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(12),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(12),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(13),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(13),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(14),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(14) {
+  width: 98px !important;
+  min-width: 98px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(15),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(15),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(16),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(16) {
+  width: 70px !important;
+  min-width: 70px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(17),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(17) {
+  width: 112px !important;
+  min-width: 112px !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(19),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(19) {
+  width: 108px !important;
+  min-width: 108px !important;
+}
