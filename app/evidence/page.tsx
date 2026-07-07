@@ -754,11 +754,10 @@ export default function EvidencePage() {
       boxShadow: '0 8px 24px rgba(124, 58, 237, 0.05)',
       overflow: 'hidden',
     },
-    tableWrap: { overflowX: 'hidden', width: '100%' },
+    tableWrap: { overflowX: 'auto' },
     table: {
       width: '100%',
-      minWidth: 0,
-      tableLayout: 'fixed',
+      minWidth: 1500,
       borderCollapse: 'separate',
       borderSpacing: 0,
       background: '#fff',
@@ -1187,10 +1186,10 @@ export default function EvidencePage() {
   }
 
   return (
-    <div style={styles.page} data-page="evidence">
-      <div style={styles.topbar} data-tablet-role="evidence-topbar">
+    <div style={styles.page}>
+      <div style={styles.topbar}>
         <div style={styles.title}>증빙서류관리</div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }} data-tablet-role="evidence-filters">
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             style={styles.input}
             value={search}
@@ -1219,21 +1218,27 @@ export default function EvidencePage() {
 
       <div style={styles.card}>
         <div style={styles.tableWrap} data-tablet-role="evidence-table-wrap">
-          <table style={styles.table}>
+          <table style={styles.table} data-tablet-role="evidence-table">
             <thead>
               <tr>
-                <th style={{ ...styles.th, width: '31%' }}>상품 / 거래처</th>
-                <th style={{ ...styles.th, width: '13.8%' }}>매입증빙</th>
-                <th style={{ ...styles.th, width: '13.8%' }}>배송비</th>
-                <th style={{ ...styles.th, width: '13.8%' }}>관부·잔금</th>
-                <th style={{ ...styles.th, width: '13.8%' }}>기타·수입신고</th>
-                <th style={{ ...styles.th, width: '13.8%' }}>매출증빙</th>
+                <th style={{ ...styles.th, width: 110 }}>상품사진</th>
+                <th style={{ ...styles.th, width: 180 }}>상품</th>
+                <th style={{ ...styles.th, width: 140 }}>거래처</th>
+                <th style={{ ...styles.th, width: 110 }}>매입일</th>
+                <th style={{ ...styles.th, width: 140 }}>매입영수증</th>
+                <th style={{ ...styles.th, width: 140 }}>배송비(거래처)</th>
+                <th style={{ ...styles.th, width: 140 }}>배송비(배대지)</th>
+                <th style={{ ...styles.th, width: 140 }}>관부과세</th>
+                <th style={{ ...styles.th, width: 140 }}>잔금</th>
+                <th style={{ ...styles.th, width: 140 }}>수입신고필증</th>
+                <th style={{ ...styles.th, width: 140 }}>기타영수증</th>
+                <th style={{ ...styles.th, width: 140 }}>매출영수증</th>
               </tr>
             </thead>
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td style={styles.td} colSpan={6}>
+                  <td style={styles.td} colSpan={12}>
                     조건에 맞는 상품이 없어.
                   </td>
                 </tr>
@@ -1259,122 +1264,108 @@ export default function EvidencePage() {
                   const saleSingle = saleEntries.length === 1 ? saleEntries[0] : null
                   const latestSale = getLatestSaleForItem(it.id)
                   const imageUrl = itemPhotoMap.get(it.id) || ''
-                  const compactGroupStyle: CSSProperties = { display: 'grid', gap: 7, minWidth: 0 }
-                  const compactLabelStyle: CSSProperties = { ...styles.small, fontWeight: 900, color: '#4b5563' }
 
                   return (
                     <tr key={it.id}>
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
-                          {renderPhotoCell(it, imageUrl)}
-                          <div style={{ minWidth: 0, display: 'grid', gap: 3 }}>
-                            <div style={{ fontWeight: 900, fontSize: 14, wordBreak: 'break-word' }}>
-                              {it.item_name ?? '(이름 없음)'}
-                              {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
-                                <span style={styles.badge}>예약</span>
-                              ) : null}
-                            </div>
-                            <div style={styles.small}>등록: {new Date(it.created_at).toLocaleString('ko-KR')}</div>
-                            <div style={styles.small}>매출 {saleEntries.length}건</div>
-                            <div style={styles.small}>거래처: {purchase?.supplier ?? '(거래처 없음)'}</div>
-                            <div style={styles.small}>매입일: {fmtDate(purchase?.purchase_date)}</div>
+                      <td style={styles.td}>{renderPhotoCell(it, imageUrl)}</td>
+                      <td style={styles.td}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 900, fontSize: 13 }}>
+                            {it.item_name ?? '(이름 없음)'}
+                            {it.is_preorder && !hasBalanceByItem.get(it.id) ? (
+                              <span style={styles.badge}>예약</span>
+                            ) : null}
+                          </div>
+                          <div style={styles.small}>등록: {new Date(it.created_at).toLocaleString('ko-KR')}</div>
+                          <div style={styles.small}>매출 {saleEntries.length}건</div>
+                          <div data-tablet-role="evidence-item-meta" style={{ display: 'none', marginTop: 4, fontSize: 12, color: '#4b5563', lineHeight: 1.35 }}>
+                            거래처: {purchase?.supplier ?? '(거래처 없음)'} · 매입일: {fmtDate(purchase?.purchase_date)}
                           </div>
                         </div>
                       </td>
-
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
-                        <div style={compactGroupStyle}>
-                          {renderPurchaseFileCell(purchaseReceipt, {
-                            purchase_id: it.purchase_id,
-                            file_type: '매입영수증',
-                            uploadKey: `purchase-receipt-${it.purchase_id}`,
-                            enabled: !!it.purchase_id,
-                            dateText: fmtDate(purchase?.purchase_date),
-                          })}
-                        </div>
+                      <td style={styles.td}>{purchase?.supplier ?? '(거래처 없음)'}</td>
+                      <td style={styles.td}>{fmtDate(purchase?.purchase_date)}</td>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(purchaseReceipt, {
+                          purchase_id: it.purchase_id,
+                          file_type: '매입영수증',
+                          uploadKey: `purchase-receipt-${it.purchase_id}`,
+                          enabled: !!it.purchase_id,
+                          dateText: fmtDate(purchase?.purchase_date),
+                        })}
                       </td>
-
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
-                        <div style={compactGroupStyle}>
-                          <div style={compactLabelStyle}>거래처</div>
-                          {renderPurchaseFileCell(supplierShippingReceipt, {
-                            cost_id: supplierShippingCost?.id ?? null,
-                            file_type: '배송비영수증',
-                            uploadKey: `supplier-shipping-${it.id}-${supplierShippingCost?.id ?? 'none'}`,
-                            enabled: !!supplierShippingCost?.id,
-                            dateText: fmtDate(supplierShippingCost?.cost_date),
-                          })}
-                          <div style={compactLabelStyle}>배대지</div>
-                          {renderPurchaseFileCell(forwarderShippingReceipt, {
-                            cost_id: forwarderShippingCost?.id ?? null,
-                            file_type: '배송비영수증',
-                            uploadKey: `forwarder-shipping-${it.id}-${forwarderShippingCost?.id ?? 'none'}`,
-                            enabled: !!forwarderShippingCost?.id,
-                            dateText: fmtDate(forwarderShippingCost?.cost_date),
-                          })}
-                        </div>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(supplierShippingReceipt, {
+                          cost_id: supplierShippingCost?.id ?? null,
+                          file_type: '배송비영수증',
+                          uploadKey: `supplier-shipping-${it.id}-${supplierShippingCost?.id ?? 'none'}`,
+                          enabled: !!supplierShippingCost?.id,
+                          dateText: fmtDate(supplierShippingCost?.cost_date),
+                        })}
                       </td>
-
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
-                        <div style={compactGroupStyle}>
-                          <div style={compactLabelStyle}>관부과세</div>
-                          {renderPurchaseFileCell(customsReceipt, {
-                            cost_id: customsCost?.id ?? null,
-                            file_type: '관부과세영수증',
-                            uploadKey: `customs-${it.id}-${customsCost?.id ?? 'none'}`,
-                            enabled: !!customsCost?.id,
-                            dateText: fmtDate(customsCost?.cost_date),
-                          })}
-                          <div style={compactLabelStyle}>잔금</div>
-                          {renderPurchaseFileCell(balanceReceipt, {
-                            cost_id: balanceCost?.id ?? null,
-                            file_type: '잔금비용영수증',
-                            uploadKey: `balance-${it.id}-${balanceCost?.id ?? 'none'}`,
-                            enabled: !!balanceCost?.id,
-                            dateText: fmtDate(balanceCost?.cost_date),
-                          })}
-                        </div>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(forwarderShippingReceipt, {
+                          cost_id: forwarderShippingCost?.id ?? null,
+                          file_type: '배송비영수증',
+                          uploadKey: `forwarder-shipping-${it.id}-${forwarderShippingCost?.id ?? 'none'}`,
+                          enabled: !!forwarderShippingCost?.id,
+                          dateText: fmtDate(forwarderShippingCost?.cost_date),
+                        })}
                       </td>
-
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
-                        <div style={compactGroupStyle}>
-                          <div style={compactLabelStyle}>수입신고</div>
-                          {renderPurchaseFileCell(customsDoc, {
-                            cost_id: customsDocCost?.id ?? null,
-                            file_type: '수입신고필증',
-                            uploadKey: `customs-doc-${it.id}-${customsDocCost?.id ?? 'none'}`,
-                            enabled: !!customsDocCost?.id,
-                          })}
-                          <div style={compactLabelStyle}>기타</div>
-                          {otherEntries.length > 1 ? (
-                            <button
-                              type="button"
-                              style={styles.uploadBtn}
-                              onClick={() =>
-                                setReceiptModal({
-                                  kind: 'other',
-                                  itemId: it.id,
-                                  title: `${it.item_name ?? '상품'} / 기타영수증`,
-                                })
-                              }
-                            >
-                              보기 ({otherEntries.length})
-                            </button>
-                          ) : otherSingle ? (
-                            renderPurchaseFileCell(otherSingle.file, {
-                              cost_id: otherSingle.cost.id,
-                              file_type: '기타비용영수증',
-                              uploadKey: `other-${it.id}-${otherSingle.cost.id}`,
-                              enabled: !!otherSingle.cost.id,
-                              dateText: fmtDate(otherSingle.cost.cost_date),
-                            })
-                          ) : (
-                            <span style={styles.no}>미업로드</span>
-                          )}
-                        </div>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(customsReceipt, {
+                          cost_id: customsCost?.id ?? null,
+                          file_type: '관부과세영수증',
+                          uploadKey: `customs-${it.id}-${customsCost?.id ?? 'none'}`,
+                          enabled: !!customsCost?.id,
+                          dateText: fmtDate(customsCost?.cost_date),
+                        })}
                       </td>
-
-                      <td style={{ ...styles.td, whiteSpace: 'normal' }}>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(balanceReceipt, {
+                          cost_id: balanceCost?.id ?? null,
+                          file_type: '잔금비용영수증',
+                          uploadKey: `balance-${it.id}-${balanceCost?.id ?? 'none'}`,
+                          enabled: !!balanceCost?.id,
+                          dateText: fmtDate(balanceCost?.cost_date),
+                        })}
+                      </td>
+                      <td style={styles.td}>
+                        {renderPurchaseFileCell(customsDoc, {
+                          cost_id: customsDocCost?.id ?? null,
+                          file_type: '수입신고필증',
+                          uploadKey: `customs-doc-${it.id}-${customsDocCost?.id ?? 'none'}`,
+                          enabled: !!customsDocCost?.id,
+                        })}
+                      </td>
+                      <td style={styles.td}>
+                        {otherEntries.length > 1 ? (
+                          <button
+                            type="button"
+                            style={styles.uploadBtn}
+                            onClick={() =>
+                              setReceiptModal({
+                                kind: 'other',
+                                itemId: it.id,
+                                title: `${it.item_name ?? '상품'} / 기타영수증`,
+                              })
+                            }
+                          >
+                            보기 ({otherEntries.length})
+                          </button>
+                        ) : otherSingle ? (
+                          renderPurchaseFileCell(otherSingle.file, {
+                            cost_id: otherSingle.cost.id,
+                            file_type: '기타비용영수증',
+                            uploadKey: `other-${it.id}-${otherSingle.cost.id}`,
+                            enabled: !!otherSingle.cost.id,
+                            dateText: fmtDate(otherSingle.cost.cost_date),
+                          })
+                        ) : (
+                          <span style={styles.no}>미업로드</span>
+                        )}
+                      </td>
+                      <td style={styles.td}>
                         {saleEntries.length > 1 ? (
                           <button
                             type="button"

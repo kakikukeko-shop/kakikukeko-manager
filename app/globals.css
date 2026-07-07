@@ -1,302 +1,92 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+:root { --background: #ffffff; --foreground: #171717; }
+@theme inline { --color-background: var(--background); --color-foreground: var(--foreground); --font-sans: var(--font-geist-sans); --font-mono: var(--font-geist-mono); }
+* { box-sizing: border-box; }
+html, body { width:100%; min-width:0; min-height:100%; }
+html { background:#f8f7ff; }
+body { margin:0; background:linear-gradient(180deg,#f8f7ff 0%,#f7fbff 100%); color:#111827; font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif; -webkit-text-size-adjust:100%; }
+button,a,input,select,textarea { -webkit-tap-highlight-color:transparent; }
+button,input,select,textarea { font:inherit; }
+.app-main { width:100%; min-width:0; }
+
+/* ===== 태블릿 버튼을 눌렀을 때만 적용. PC는 각 페이지의 원래 표 그대로 유지 ===== */
+html[data-view-mode='tablet'] [data-app-header-inner] { max-width:1180px !important; padding:12px 14px !important; display:grid !important; grid-template-columns:minmax(0,1fr) auto; align-items:center !important; gap:10px !important; }
+html[data-view-mode='tablet'] [data-app-logo] { min-width:0; font-size:19px !important; }
+html[data-view-mode='tablet'] [data-app-header-actions] { grid-column:1 / -1; width:100%; min-width:0; display:flex !important; flex-wrap:nowrap !important; align-items:center !important; justify-content:space-between !important; gap:8px !important; }
+html[data-view-mode='tablet'] [data-app-nav] { min-width:0; flex:1 1 auto; display:flex !important; flex-wrap:nowrap !important; overflow-x:auto; scrollbar-width:none; padding:2px 0; }
+html[data-view-mode='tablet'] [data-app-nav]::-webkit-scrollbar { display:none; }
+html[data-view-mode='tablet'] [data-app-nav] a { flex:0 0 auto; padding:11px 13px !important; font-size:14px !important; }
+html[data-view-mode='tablet'] [data-view-toggle], html[data-view-mode='tablet'] [data-logout-button] { flex:0 0 auto; min-height:42px; padding:10px 12px !important; }
+html[data-view-mode='tablet'] .app-main { max-width:1180px; margin:0 auto; padding:12px !important; }
+html[data-view-mode='tablet'] button, html[data-view-mode='tablet'] input:not([type='checkbox']):not([type='radio']), html[data-view-mode='tablet'] select { min-height:42px; }
+html[data-view-mode='tablet'] textarea { min-height:96px; }
+
+/* 매입관리: 결제일은 태블릿에서만 상품명 아래 '등록' 밑으로 이동. 상품명은 절대 겹치거나 잘리지 않음 */
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] { grid-template-columns:minmax(300px,36vw) minmax(0,1fr) !important; gap:12px !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] { overflow-x:hidden !important; max-height:calc(100vh - 300px) !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-table-wrap'] table { width:100% !important; min-width:0 !important; table-layout:fixed !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date'] { display:none !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-payment-date-inline'] { display:block !important; }
+html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-product-name'] { display:block; overflow:visible !important; white-space:normal !important; word-break:break-word !important; line-height:1.35; }
+html[data-view-mode='tablet'] [data-page='documents'] td:nth-child(2) { width:42% !important; }
+html[data-view-mode='tablet'] [data-page='documents'] td:nth-child(2) > div { min-width:0 !important; }
+html[data-view-mode='tablet'] [data-page='documents'] th, html[data-view-mode='tablet'] [data-page='documents'] td { padding:10px 8px !important; font-size:13px !important; white-space:normal !important; vertical-align:top; }
+
+/* 상품/재고: PC는 19열 원본 유지. 태블릿은 필요한 6열만 남기고 상품 아래에 매입·거래처·수량·상태를 표시 */
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] { width:100% !important; min-width:0 !important; table-layout:fixed !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th, html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td { padding:9px 6px !important; font-size:12px !important; white-space:normal !important; word-break:break-word; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(3), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(3),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(4), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(4),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(5), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(5),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(6), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(6),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(7), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(7),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(8), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(8),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(9), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(9),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(10), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(10),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(12), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(12),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(13), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(13),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(17), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(17),
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(18), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] td:nth-child(18) { display:none !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(1) { width:4% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(2) { width:42% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(11), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(14), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(15), html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(16) { width:11% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table'] th:nth-child(19) { width:10% !important; }
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-item-meta'] { display:grid !important; gap:3px; margin-top:5px; color:#6b7280; font-size:11px; line-height:1.35; }
+html[data-view-mode='tablet'] [data-page='products'] [title] { white-space:normal !important; overflow:visible !important; text-overflow:clip !important; }
+html[data-view-mode='tablet'] [data-page='products'] button { min-height:34px !important; padding:6px 7px !important; font-size:11px !important; }
+
+/* 매출: 구분·판매일은 상품 아래로. PC의 원래 상세금액 열은 유지하되 태블릿에서만 불필요 열을 숨겨 드래그 제거 */
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] { width:100% !important; min-width:0 !important; table-layout:fixed !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th, html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td { padding:8px 5px !important; font-size:11px !important; white-space:normal !important; word-break:break-word; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(2), html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td:nth-child(2),
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(3), html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td:nth-child(3),
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(4), html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td:nth-child(4),
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(13), html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td:nth-child(13),
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(14), html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] td:nth-child(14) { display:none !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(1) { width:29% !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(5),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(6),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(7),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(8),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(9),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(10),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(11),html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(12) { width:8% !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] th:nth-child(15) { width:7% !important; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-item-meta'] { display:block !important; line-height:1.35; }
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table'] button { min-height:32px !important; padding:5px 6px !important; font-size:10px !important; }
+
+/* 증빙: 사진·거래처·매입일을 상품칸으로 합침. 남은 증빙 버튼은 모두 한 화면에 */
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] { overflow-x:hidden !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] { width:100% !important; min-width:0 !important; table-layout:fixed !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th, html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td { padding:8px 5px !important; font-size:11px !important; white-space:normal !important; word-break:break-word; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(1), html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td:nth-child(1),
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(3), html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td:nth-child(3),
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(4), html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] td:nth-child(4) { display:none !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(2) { width:28% !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] th:nth-child(n+5) { width:9% !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-item-meta'] { display:block !important; }
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table'] button { min-height:32px !important; padding:5px 7px !important; font-size:10px !important; }
+
+@media (max-width:850px) {
+  html[data-view-mode='tablet'] [data-app-header-inner] { grid-template-columns:minmax(0,1fr) !important; }
+  html[data-view-mode='tablet'] [data-view-toggle], html[data-view-mode='tablet'] [data-logout-button] { padding:9px 10px !important; font-size:13px !important; }
+  html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-layout='documents-main'] { grid-template-columns:minmax(0,1fr) !important; }
+  html[data-view-mode='tablet'] [data-page='documents'] [data-tablet-role='documents-sidebar'] { position:static !important; top:auto !important; }
 }
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  width: 100%;
-  min-width: 0;
-  min-height: 100%;
-}
-
-html {
-  background: #f8f7ff;
-}
-
-body {
-  margin: 0;
-  background: linear-gradient(180deg, #f8f7ff 0%, #f7fbff 100%);
-  color: #111827;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    'Apple SD Gothic Neo',
-    'Noto Sans KR',
-    'Malgun Gothic',
-    sans-serif;
-  -webkit-text-size-adjust: 100%;
-}
-
-button,
-a,
-input,
-select,
-textarea {
-  -webkit-tap-highlight-color: transparent;
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
-
-.app-main {
-  width: 100%;
-  min-width: 0;
-}
-
-/* 태블릿 모드: 헤더는 두 줄, 메뉴는 가로 스크롤로 유지 */
-html[data-view-mode='tablet'] [data-app-header-inner] {
-  max-width: 1180px !important;
-  padding: 12px 14px !important;
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center !important;
-  gap: 10px !important;
-}
-
-html[data-view-mode='tablet'] [data-app-logo] {
-  min-width: 0;
-  font-size: 19px !important;
-}
-
-html[data-view-mode='tablet'] [data-app-header-actions] {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-width: 0;
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 8px !important;
-}
-
-html[data-view-mode='tablet'] [data-app-nav] {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  padding: 2px 0;
-}
-
-html[data-view-mode='tablet'] [data-app-nav]::-webkit-scrollbar {
-  display: none;
-}
-
-html[data-view-mode='tablet'] [data-app-nav] a {
-  flex: 0 0 auto;
-  padding: 11px 13px !important;
-  font-size: 14px !important;
-}
-
-html[data-view-mode='tablet'] [data-view-toggle],
-html[data-view-mode='tablet'] [data-logout-button] {
-  flex: 0 0 auto;
-  min-height: 42px;
-  padding: 10px 12px !important;
-}
-
-/* 태블릿 터치 조작 편의 */
-html[data-view-mode='tablet'] .app-main {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 12px !important;
-}
-
-html[data-view-mode='tablet'] button,
-html[data-view-mode='tablet'] input:not([type='checkbox']):not([type='radio']),
-html[data-view-mode='tablet'] select {
-  min-height: 42px;
-}
-
-html[data-view-mode='tablet'] textarea {
-  min-height: 96px;
-}
-
-html[data-view-mode='tablet'] table th,
-html[data-view-mode='tablet'] table td {
-  font-size: 14px;
-}
-
-/* 대시보드: 아이패드에서는 상단 요약을 한 줄이 아닌 세로형으로 */
-html[data-view-mode='tablet'] [data-page='dashboard'] [data-tablet-role='dashboard-hero'] {
-  grid-template-columns: minmax(0, 1fr) !important;
-  padding: 18px !important;
-  gap: 14px !important;
-}
-
-/* 매입관리: 가로 아이패드는 2단 유지, 세로 아이패드는 위아래로 배치 */
-html[data-view-mode='tablet'] [data-page='documents'] {
-  padding: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-tablet-layout='documents-main'] {
-  grid-template-columns: minmax(300px, 36vw) minmax(0, 1fr) !important;
-  gap: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-tablet-role='documents-sidebar'] {
-  top: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-tablet-role='documents-table-wrap'] {
-  max-height: calc(100vh - 300px) !important;
-}
-
-@media (max-width: 850px) {
-  html[data-view-mode='tablet'] [data-app-header-inner] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  html[data-view-mode='tablet'] [data-app-header-actions] {
-    gap: 7px !important;
-  }
-
-  html[data-view-mode='tablet'] [data-view-toggle],
-  html[data-view-mode='tablet'] [data-logout-button] {
-    padding: 9px 10px !important;
-    font-size: 13px !important;
-  }
-
-  html[data-view-mode='tablet'] [data-tablet-layout='documents-main'] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  html[data-view-mode='tablet'] [data-tablet-role='documents-sidebar'] {
-    position: static !important;
-    top: auto !important;
-  }
-
-  html[data-view-mode='tablet'] [data-tablet-role='documents-table-wrap'] {
-    max-height: 460px !important;
-  }
-}
-
-/* 상품 / 재고관리: 아이패드에서는 조작부를 위아래로 정리하고, 넓은 표는 가로 스크롤로 유지 */
-html[data-view-mode='tablet'] [data-page='products'] {
-  padding: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-topbar'] {
-  align-items: stretch !important;
-  gap: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-actions'] {
-  width: 100%;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] {
-  width: 100%;
-  display: grid !important;
-  grid-template-columns: minmax(220px, 1fr) 170px 190px auto;
-  gap: 8px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] input,
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] select {
-  width: 100% !important;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] {
-  overflow-x: auto !important;
-  max-height: calc(100vh - 310px) !important;
-  -webkit-overflow-scrolling: touch;
-}
-
-html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] table {
-  min-width: 1420px !important;
-}
-
-/* 매출관리: 필터는 아이패드에서도 한 줄 우선, 표는 억지로 좁히지 않고 스크롤 */
-html[data-view-mode='tablet'] [data-page='sales'] {
-  padding: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-panel'] {
-  border-radius: 22px !important;
-  padding: 14px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-header'] {
-  gap: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-filters'] {
-  grid-template-columns: minmax(220px, 1fr) 160px 190px !important;
-  gap: 8px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'] {
-  max-height: calc(100vh - 320px) !important;
-  overflow: auto !important;
-  -webkit-overflow-scrolling: touch;
-}
-
-html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'] table {
-  min-width: 1380px !important;
-}
-
-/* 증빙서류관리: 검색/정렬은 상단 전체폭, 영수증 표는 가로 스크롤 */
-html[data-view-mode='tablet'] [data-page='evidence'] {
-  padding: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-topbar'] {
-  align-items: stretch !important;
-  gap: 12px !important;
-}
-
-html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-filters'] {
-  width: 100%;
-}
-
-html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-filters'] input {
-  flex: 1 1 260px;
-}
-
-html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] {
-  overflow: auto !important;
-  max-height: calc(100vh - 250px) !important;
-  -webkit-overflow-scrolling: touch;
-}
-
-html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] table {
-  min-width: 1660px !important;
-}
-
-@media (max-width: 850px) {
-  html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'],
-  html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-filters'] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'],
-  html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'],
-  html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] {
-    max-height: 520px !important;
-  }
-}
-
