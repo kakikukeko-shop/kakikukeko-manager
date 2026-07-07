@@ -1178,7 +1178,7 @@ export default function EvidencePage() {
 
   if (loading) {
     return (
-      <div style={styles.page}>
+      <div style={styles.page} data-page="evidence">
         <div style={styles.title}>증빙서류관리</div>
         <div style={{ ...styles.card, padding: 16 }}>불러오는 중...</div>
       </div>
@@ -1186,10 +1186,10 @@ export default function EvidencePage() {
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.topbar}>
+    <div style={styles.page} data-page="evidence">
+      <div style={styles.topbar} data-tablet-role="evidence-topbar">
         <div style={styles.title}>증빙서류관리</div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }} data-tablet-role="evidence-filters">
           <input
             style={styles.input}
             value={search}
@@ -1217,7 +1217,7 @@ export default function EvidencePage() {
       {err ? <div style={styles.errorBox}>오류: {err}</div> : null}
 
       <div style={styles.card}>
-        <div style={styles.tableWrap}>
+        <div style={styles.tableWrap} data-tablet-role="evidence-table-wrap">
           <table style={styles.table}>
             <thead>
               <tr>

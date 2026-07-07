@@ -1241,9 +1241,9 @@ export default function ProductsPage() {
   }
 
   return (
-    <div ref={pageRef} style={styles.page}>
-      <div style={styles.topbar}>
-        <div style={{ display: 'grid', gap: 8 }}>
+    <div ref={pageRef} style={styles.page} data-page="products">
+      <div style={styles.topbar} data-tablet-role="products-topbar">
+        <div style={{ display: 'grid', gap: 8 }} data-tablet-role="products-actions">
           <div style={styles.title}>상품 / 재고관리</div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1300,7 +1300,7 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }} data-tablet-role="products-filters">
           <input
             style={{ ...styles.input, width: 240 }}
             placeholder="상품명 / 거래처 / 메모 검색"
@@ -1421,7 +1421,7 @@ export default function ProductsPage() {
       ) : rows.length === 0 ? (
         <div style={styles.card}>조건에 맞는 상품이 없어.</div>
       ) : (
-        <div style={styles.tableWrap}>
+        <div style={styles.tableWrap} data-tablet-role="products-table-wrap">
           <table style={styles.table}>
             <thead>
               <tr>

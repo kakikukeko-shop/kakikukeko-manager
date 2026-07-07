@@ -1226,9 +1226,9 @@ export default function SalesPage() {
   }, [sales, search, channelFilter, saleSort])
 
   return (
-    <div className="min-h-screen bg-[#f6f5fb] p-4 md:p-5">
-      <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen bg-[#f6f5fb] p-4 md:p-5" data-page="sales">
+      <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm md:p-5" data-tablet-role="sales-panel">
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between" data-tablet-role="sales-header">
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">매출관리</h1>
             <p className="mt-1 text-sm font-medium text-slate-600">
@@ -1246,7 +1246,7 @@ export default function SalesPage() {
           </div>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
+        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_220px]" data-tablet-role="sales-filters">
           <input
             className={inputClass}
             placeholder="상품명 / 메모 / 판매일 검색"
@@ -1280,7 +1280,7 @@ export default function SalesPage() {
         </div>
 
         <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
-          <div className="max-h-[620px] overflow-auto">
+          <div className="max-h-[620px] overflow-auto" data-tablet-role="sales-table-wrap">
             <table className="w-full text-[13px]">
               <thead className="bg-slate-50 text-slate-700">
                 <tr className="border-b border-slate-200">

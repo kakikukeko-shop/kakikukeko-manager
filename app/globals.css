@@ -193,3 +193,110 @@ html[data-view-mode='tablet'] [data-tablet-role='documents-table-wrap'] {
     max-height: 460px !important;
   }
 }
+
+/* 상품 / 재고관리: 아이패드에서는 조작부를 위아래로 정리하고, 넓은 표는 가로 스크롤로 유지 */
+html[data-view-mode='tablet'] [data-page='products'] {
+  padding: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-topbar'] {
+  align-items: stretch !important;
+  gap: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-actions'] {
+  width: 100%;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] {
+  width: 100%;
+  display: grid !important;
+  grid-template-columns: minmax(220px, 1fr) 170px 190px auto;
+  gap: 8px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] input,
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'] select {
+  width: 100% !important;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] {
+  overflow-x: auto !important;
+  max-height: calc(100vh - 310px) !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'] table {
+  min-width: 1420px !important;
+}
+
+/* 매출관리: 필터는 아이패드에서도 한 줄 우선, 표는 억지로 좁히지 않고 스크롤 */
+html[data-view-mode='tablet'] [data-page='sales'] {
+  padding: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-panel'] {
+  border-radius: 22px !important;
+  padding: 14px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-header'] {
+  gap: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-filters'] {
+  grid-template-columns: minmax(220px, 1fr) 160px 190px !important;
+  gap: 8px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'] {
+  max-height: calc(100vh - 320px) !important;
+  overflow: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'] table {
+  min-width: 1380px !important;
+}
+
+/* 증빙서류관리: 검색/정렬은 상단 전체폭, 영수증 표는 가로 스크롤 */
+html[data-view-mode='tablet'] [data-page='evidence'] {
+  padding: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-topbar'] {
+  align-items: stretch !important;
+  gap: 12px !important;
+}
+
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-filters'] {
+  width: 100%;
+}
+
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-filters'] input {
+  flex: 1 1 260px;
+}
+
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] {
+  overflow: auto !important;
+  max-height: calc(100vh - 250px) !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] table {
+  min-width: 1660px !important;
+}
+
+@media (max-width: 850px) {
+  html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-filters'],
+  html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-filters'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html[data-view-mode='tablet'] [data-page='products'] [data-tablet-role='products-table-wrap'],
+  html[data-view-mode='tablet'] [data-page='sales'] [data-tablet-role='sales-table-wrap'],
+  html[data-view-mode='tablet'] [data-page='evidence'] [data-tablet-role='evidence-table-wrap'] {
+    max-height: 520px !important;
+  }
+}
+
