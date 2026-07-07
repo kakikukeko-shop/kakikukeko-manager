@@ -301,19 +301,32 @@ function parseRefundSummaryMemo(memo: string | null | undefined) {
 function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
   const parsed = parseRefundSummaryMemo(row.memo)
   const storedAdjustment = Number(row.amountKrw || 0)
-  const lossKRW = Math.max(0, parsed.lossKRW, storedAdjustment)
-  const profitKRW = Math.max(0, parsed.profitKRW, storedAdjustment < 0 ? Math.abs(storedAdjustment) : 0)
-  const actualKRW = parsed.actualKRW > 0
-    ? parsed.actualKRW
-    : Math.max(0, parsed.targetKRW - lossKRW + profitKRW)
-  const targetKRW = parsed.targetKRW > 0 ? parsed.targetKRW : actualKRW + lossKRW - profitKRW
+
+  /*
+   * 환불 차손·차익은 메모나 과거 저장값을 그대로 믿지 않고,
+   * 항상 '환불 대상 원가'와 '실제 환불금액'의 차이로 다시 계산한다.
+   * 예: 대상원가 8,133원 / 실제환불 9,788원 → 차익 1,655원
+   */
+  const targetKRW =
+    parsed.targetKRW > 0
+      ? parsed.targetKRW
+      : Math.max(0, parsed.actualKRW - storedAdjustment)
+
+  const actualKRW =
+    parsed.actualKRW > 0
+      ? parsed.actualKRW
+      : Math.max(0, targetKRW + storedAdjustment)
+
+  const difference = actualKRW - targetKRW
+  const lossKRW = Math.max(0, -difference)
+  const profitKRW = Math.max(0, difference)
 
   return {
     targetKRW,
     actualKRW,
     lossKRW,
     profitKRW,
-    adjustmentKRW: parsed.adjustmentKRW || storedAdjustment,
+    adjustmentKRW: difference,
   }
 }
 

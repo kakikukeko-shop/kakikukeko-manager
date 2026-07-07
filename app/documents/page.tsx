@@ -137,13 +137,61 @@ type RefundMetaItem = {
 const REFUND_META_HEADER = "[환불 상세]";
 
 function stripRefundMetaDetail(raw: string | null | undefined) {
-  const text = (raw ?? "").trim();
+  const text = String(raw ?? "").trim();
   if (!text) return "";
-  if (!text.startsWith(REFUND_META_HEADER)) return text;
 
-  const parts = text.split("\n\n");
-  if (parts.length <= 1) return "";
-  return parts.slice(1).join("\n\n").trim();
+  // 환불 내부 메타(JSON)는 저장용이며 화면에는 보이지 않게 한다.
+  // 예전 데이터처럼 앞뒤에 안내문이 섞여 있어도 [환불 상세]부터
+  // JSON 객체 끝까지 찾아 안전하게 제거한다.
+  const markerIndex = text.indexOf(REFUND_META_HEADER);
+  if (markerIndex < 0) return text;
+
+  const before = text.slice(0, markerIndex).trim();
+  const afterHeader = text
+    .slice(markerIndex + REFUND_META_HEADER.length)
+    .trimStart();
+
+  if (!afterHeader.startsWith("{")) {
+    return before;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let endIndex = -1;
+
+  for (let i = 0; i < afterHeader.length; i += 1) {
+    const ch = afterHeader[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        endIndex = i + 1;
+        break;
+      }
+    }
+  }
+
+  // JSON이 깨진 예전 데이터도 내부 메타가 노출되지 않도록 숨긴다.
+  if (endIndex < 0) return before;
+
+  const after = afterHeader.slice(endIndex).replace(/^\s+/, "").trim();
+  return [before, after].filter(Boolean).join("\n\n").trim();
 }
 
 function parseRefundMeta(memo: string | null | undefined): {
@@ -182,8 +230,8 @@ function parseRefundMeta(memo: string | null | undefined): {
 }
 
 function getRefundMetaItemIds(memo: string | null | undefined) {
-  return parseRefundMeta(memo).items
-    .map((item) => item.item_id)
+  return parseRefundMeta(memo)
+    .items.map((item) => item.item_id)
     .filter(Boolean);
 }
 
@@ -1176,7 +1224,9 @@ async function updateRefundAdjustedItems(
  * 환불 차익/차손(cost_type=환불)은 이 함수에서 건드리지 않는다.
  * 그 값은 환불한 해당 상품에만 적용해야 한다.
  */
-function isSharedRefundReallocationCostType(costType: string | null | undefined) {
+function isSharedRefundReallocationCostType(
+  costType: string | null | undefined,
+) {
   const normalized = normalizeCostType(costType);
   return (
     normalized === "배송비(거래처)" ||
@@ -1962,7 +2012,10 @@ export default function DocumentsPage() {
   // 환불 상세 메모에 남아 있는 원래 상품 정보를 바탕으로 수량 0 상품을 다시 만들 수 있다.
   const legacyRefundRestoreCandidates = useMemo(() => {
     const existingItemIds = new Set(items.map((item) => item.id));
-    const candidateMap = new Map<string, { cost: PurchaseCostRow; meta: RefundMetaItem }>();
+    const candidateMap = new Map<
+      string,
+      { cost: PurchaseCostRow; meta: RefundMetaItem }
+    >();
 
     const refundCosts = [...costs]
       .filter((cost) => normalizeCostType(cost.cost_type) === "환불")
@@ -1995,7 +2048,10 @@ export default function DocumentsPage() {
 
     // 환불 상세 메모의 원래 상품 ID를 기준으로 마지막 환불 상태를 집계한다.
     // 예전 전체환불 상품은 purchase_items에서 삭제됐어도, 여기서는 환불 이력을 그대로 보여줄 수 있다.
-    const statusByPurchase = new Map<string, Map<string, "전체환불" | "부분환불">>();
+    const statusByPurchase = new Map<
+      string,
+      Map<string, "전체환불" | "부분환불">
+    >();
     const unknownByPurchase = new Map<string, number>();
 
     const refundCosts = [...costs]
@@ -2424,24 +2480,26 @@ export default function DocumentsPage() {
     setMsg(null);
 
     try {
-      const restoreRows = legacyRefundRestoreCandidates.map(({ cost, meta }) => {
-        const qty = Math.max(0, Math.floor(n(meta.override_qty)));
-        const foreignUnit = Math.max(0, n(meta.original_foreign_unit_price));
-        const unitKRW = Math.max(0, n(meta.original_unit_price));
+      const restoreRows = legacyRefundRestoreCandidates.map(
+        ({ cost, meta }) => {
+          const qty = Math.max(0, Math.floor(n(meta.override_qty)));
+          const foreignUnit = Math.max(0, n(meta.original_foreign_unit_price));
+          const unitKRW = Math.max(0, n(meta.original_unit_price));
 
-        return {
-          id: meta.item_id,
-          purchase_id: cost.purchase_id as string,
-          item_name: meta.override_name || meta.original_name || "환불 상품",
-          qty,
-          foreign_total: ceil4(foreignUnit * qty),
-          foreign_unit_price: foreignUnit,
-          unit_price: unitKRW,
-          line_total: ceil4(unitKRW * qty),
-          memo: "[이전 환불 기록 복구] 환불 이력 확인용 상품",
-          is_preorder: false,
-        };
-      });
+          return {
+            id: meta.item_id,
+            purchase_id: cost.purchase_id as string,
+            item_name: meta.override_name || meta.original_name || "환불 상품",
+            qty,
+            foreign_total: ceil4(foreignUnit * qty),
+            foreign_unit_price: foreignUnit,
+            unit_price: unitKRW,
+            line_total: ceil4(unitKRW * qty),
+            memo: "[이전 환불 기록 복구] 환불 이력 확인용 상품",
+            is_preorder: false,
+          };
+        },
+      );
 
       const ins = await supabase.from("purchase_items").insert(restoreRows);
       if (ins.error) throw ins.error;
@@ -4299,7 +4357,8 @@ export default function DocumentsPage() {
                               width: "fit-content",
                             }}
                           >
-                            환불: {refundSummary.fullCount > 0 ? (
+                            환불:{" "}
+                            {refundSummary.fullCount > 0 ? (
                               <>전체 {refundSummary.fullCount}개</>
                             ) : null}
                             {refundSummary.fullCount > 0 &&
@@ -4457,7 +4516,12 @@ export default function DocumentsPage() {
                     <th style={{ ...styles.th, width: 44 }}>선택</th>
                     <th style={styles.th}>상품</th>
                     <th style={{ ...styles.th, width: 70 }}>수량</th>
-                    <th data-tablet-role="documents-payment-date" style={{ ...styles.th, width: 110 }}>결제일</th>
+                    <th
+                      data-tablet-role="documents-payment-date"
+                      style={{ ...styles.th, width: 110 }}
+                    >
+                      결제일
+                    </th>
                     <th style={{ ...styles.th, width: 130 }}>원화합계</th>
                     <th style={{ ...styles.th, width: 100 }}>배분</th>
                     <th style={{ ...styles.th, width: 120 }}>최종단가</th>
@@ -4486,9 +4550,13 @@ export default function DocumentsPage() {
                             (lineTotal + allocSum) / Math.max(1, n(it.qty)),
                           );
                       const parentPurchase = purchaseMap.get(it.purchase_id);
-                      const arrivedQty = Math.max(0, arrivedQtyByItem.get(it.id) ?? 0);
+                      const arrivedQty = Math.max(
+                        0,
+                        arrivedQtyByItem.get(it.id) ?? 0,
+                      );
                       const unreceivedQty = Math.max(0, n(it.qty) - arrivedQty);
-                      const isUnreceived = !isFullyRefunded && unreceivedQty > 0;
+                      const isUnreceived =
+                        !isFullyRefunded && unreceivedQty > 0;
 
                       return (
                         <tr key={it.id}>
@@ -4572,7 +4640,9 @@ export default function DocumentsPage() {
                                       flexWrap: "wrap",
                                     }}
                                   >
-                                    <span data-tablet-role="documents-product-name">{it.item_name ?? "(이름 없음)"}</span>
+                                    <span data-tablet-role="documents-product-name">
+                                      {it.item_name ?? "(이름 없음)"}
+                                    </span>
                                     {refundStatus ? (
                                       <span
                                         style={styles.badge(
@@ -4623,7 +4693,8 @@ export default function DocumentsPage() {
                                   data-tablet-role="documents-payment-date-inline"
                                   style={{ ...styles.small, display: "none" }}
                                 >
-                                  결제일: {fmtDate(parentPurchase?.purchase_date)}
+                                  결제일:{" "}
+                                  {fmtDate(parentPurchase?.purchase_date)}
                                 </div>
                               </div>
                             </div>
@@ -4637,7 +4708,10 @@ export default function DocumentsPage() {
                               <div style={styles.small}>환불완료</div>
                             ) : null}
                           </td>
-                          <td data-tablet-role="documents-payment-date" style={styles.td}>
+                          <td
+                            data-tablet-role="documents-payment-date"
+                            style={styles.td}
+                          >
                             {fmtDate(parentPurchase?.purchase_date)}
                           </td>
 
@@ -4731,7 +4805,9 @@ export default function DocumentsPage() {
                               flexWrap: "wrap",
                             }}
                           >
-                            <span data-tablet-role="documents-product-name">{it.item_name ?? "(이름 없음)"}</span>
+                            <span data-tablet-role="documents-product-name">
+                              {it.item_name ?? "(이름 없음)"}
+                            </span>
                             {itemRefundStatusMap.get(it.id) ? (
                               <span
                                 style={styles.badge(
@@ -6385,17 +6461,29 @@ export default function DocumentsPage() {
                           </td>
                           <td style={styles.td}>
                             {a.cost_id ? (
-                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 6,
+                                  flexWrap: "wrap",
+                                }}
+                              >
                                 <button
                                   style={styles.smallBtn}
-                                  onClick={() => openCostEditorById(a.cost_id as string, true)}
+                                  onClick={() =>
+                                    openCostEditorById(
+                                      a.cost_id as string,
+                                      true,
+                                    )
+                                  }
                                 >
                                   수정
                                 </button>
                                 <button
                                   style={styles.dangerSmallBtn}
                                   onClick={() => {
-                                    if (!confirm("이 추가비용을 삭제할까?")) return;
+                                    if (!confirm("이 추가비용을 삭제할까?"))
+                                      return;
                                     setItemDetailOpen(false);
                                     deleteCost(a.cost_id as string);
                                   }}
@@ -6414,7 +6502,10 @@ export default function DocumentsPage() {
                 {/* 태블릿: 한 글자씩 내려가는 표 대신 카드형 */}
                 <div data-tablet-role="item-detail-allocation-cards">
                   {detailAlloc.map((a, idx) => (
-                    <div key={idx} data-tablet-role="item-detail-allocation-card">
+                    <div
+                      key={idx}
+                      data-tablet-role="item-detail-allocation-card"
+                    >
                       <div data-tablet-role="item-detail-allocation-card-head">
                         <div>
                           <div data-tablet-role="item-detail-allocation-type">
@@ -6453,7 +6544,9 @@ export default function DocumentsPage() {
                         <div data-tablet-role="item-detail-allocation-actions">
                           <button
                             style={styles.smallBtn}
-                            onClick={() => openCostEditorById(a.cost_id as string, true)}
+                            onClick={() =>
+                              openCostEditorById(a.cost_id as string, true)
+                            }
                           >
                             수정
                           </button>
