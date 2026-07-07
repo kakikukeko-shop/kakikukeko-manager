@@ -231,6 +231,7 @@ export default function ProductsPage() {
   const [bulkArrivalMemo, setBulkArrivalMemo] = useState('')
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
   const [bulkQtyMap, setBulkQtyMap] = useState<Record<string, string>>({})
+  const [isTabletMode, setIsTabletMode] = useState(false)
 
   const pageRef = useRef<HTMLDivElement | null>(null)
   const pendingScrollRestoreRef = useRef<number | null>(null)
@@ -380,6 +381,22 @@ export default function ProductsPage() {
 
   useEffect(() => {
     load()
+  }, [])
+
+  useEffect(() => {
+    const syncViewMode = () => {
+      setIsTabletMode(document.documentElement.dataset.viewMode === 'tablet')
+    }
+
+    syncViewMode()
+
+    const observer = new MutationObserver(syncViewMode)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-view-mode'],
+    })
+
+    return () => observer.disconnect()
   }, [])
 
   useEffect(() => {
@@ -1241,7 +1258,7 @@ export default function ProductsPage() {
   }
 
   return (
-    <div ref={pageRef} style={styles.page} data-page="products">
+    <div ref={pageRef} style={styles.page}>
       <div style={styles.topbar}>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={styles.title}>상품 / 재고관리</div>
@@ -1420,9 +1437,255 @@ export default function ProductsPage() {
         <div style={styles.card}>불러오는 중...</div>
       ) : rows.length === 0 ? (
         <div style={styles.card}>조건에 맞는 상품이 없어.</div>
+      ) : isTabletMode ? (
+        <div
+          style={{
+            ...styles.tableWrap,
+            overflowX: 'hidden',
+          }}
+          data-tablet-role="products-tablet-compact"
+        >
+          <table
+            style={{
+              width: '100%',
+              minWidth: 0,
+              tableLayout: 'fixed',
+              borderCollapse: 'separate',
+              borderSpacing: 0,
+              background: '#fff',
+            }}
+          >
+            <colgroup>
+              <col style={{ width: '3%' }} />
+              <col style={{ width: '27%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '5%' }} />
+              <col style={{ width: '5%' }} />
+              <col style={{ width: '6%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th style={{ ...styles.th, padding: '9px 4px', textAlign: 'center' }}>
+                  <input
+                    type="checkbox"
+                    checked={
+                      visibleRows.length > 0 &&
+                      visibleRows.every((row) => selectedItemIds.includes(row.item.id))
+                    }
+                    onChange={toggleSelectAllVisible}
+                  />
+                </th>
+                <th style={{ ...styles.th, padding: '9px 7px' }}>상품</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center' }}>원가</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>온라인<br />판매가</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>온라인<br />배송비</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>예상<br />배송비</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>온라인<br />이익</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>오프라인<br />판매가</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>오프라인<br />이익</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center', lineHeight: 1.15 }}>마지막<br />입고일</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center' }}>상태</th>
+                <th style={{ ...styles.th, padding: '9px 5px', textAlign: 'center' }}>액션</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const receivedGeneralShipping = getReceivedGeneralShipping(row.item)
+                const expectedGeneralShipping = getExpectedGeneralShipping(row.item)
+                const receivedConvenienceShipping = getReceivedConvenienceShipping(row.item)
+                const expectedConvenienceShipping = getExpectedConvenienceShipping(row.item)
+                const generalOnlineProfit =
+                  n(row.item.online_price) - row.finalUnitCost - expectedGeneralShipping + receivedGeneralShipping
+                const convenienceOnlineProfit =
+                  n(row.item.online_price) - row.finalUnitCost - expectedConvenienceShipping + receivedConvenienceShipping
+                const offlineProfit = n(row.item.offline_price) - row.finalUnitCost
+                const isChecked = selectedItemIds.includes(row.item.id)
+
+                const compactTd: React.CSSProperties = {
+                  ...styles.td,
+                  padding: '10px 5px',
+                  fontSize: 11,
+                  lineHeight: 1.3,
+                  whiteSpace: 'normal',
+                  textAlign: 'center',
+                  verticalAlign: 'middle',
+                  wordBreak: 'keep-all',
+                }
+
+                return (
+                  <tr key={`tablet-${row.item.id}`}>
+                    <td style={{ ...compactTd, padding: '10px 3px' }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelectItem(row.item.id)}
+                      />
+                    </td>
+                    <td style={{ ...compactTd, textAlign: 'left', padding: '10px 7px' }}>
+                      <div style={{ display: 'flex', gap: 7, minWidth: 0, alignItems: 'center' }}>
+                        {row.photoUrl ? (
+                          <img
+                            src={row.photoUrl}
+                            alt={row.item.item_name ?? '상품'}
+                            style={{ ...styles.thumb, width: 44, height: 44 }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              ...styles.thumb,
+                              width: 44,
+                              height: 44,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#888',
+                              fontSize: 10,
+                            }}
+                          >
+                            없음
+                          </div>
+                        )}
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div
+                            title={row.item.item_name ?? '(이름 없음)'}
+                            style={{
+                              fontWeight: 900,
+                              fontSize: 12,
+                              lineHeight: 1.3,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {row.item.item_name ?? '(이름 없음)'}
+                            {row.isReservationOpen ? (
+                              <span style={{ ...styles.badge('orange'), marginLeft: 4, fontSize: 10 }}>예약</span>
+                            ) : null}
+                          </div>
+                          <div style={{ marginTop: 2, color: '#64748b', fontSize: 10 }}>
+                            매입일 {fmtDate(row.purchase?.purchase_date)} · 거래처 {row.purchase?.supplier ?? '(거래처 없음)'}
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              gap: '2px 8px',
+                              marginTop: 4,
+                              color: '#312e81',
+                              fontSize: 10,
+                              fontWeight: 800,
+                            }}
+                          >
+                            <span>총 {fmtNum(row.totalQty)}</span>
+                            <span>입고 {fmtNum(row.arrivedQty)}</span>
+                            <span>판매 {fmtNum(row.soldQty)}</span>
+                            <span>재고 {fmtNum(row.stockQty)}</span>
+                            <span>미도착 {fmtNum(row.remainingArrivalQty)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={compactTd}>
+                      <b>{fmtKRW(row.finalUnitCost)}</b>
+                      <div style={{ color: '#64748b', fontSize: 9 }}>배분포함</div>
+                    </td>
+                    <td style={compactTd}>
+                      {n(row.item.online_price) > 0 ? fmtKRW(n(row.item.online_price)) : '미입력'}
+                    </td>
+                    <td style={compactTd}>
+                      <div>일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '-'}</div>
+                      <div>편의 {receivedConvenienceShipping > 0 ? fmtKRW(receivedConvenienceShipping) : '-'}</div>
+                    </td>
+                    <td style={compactTd}>
+                      <div>일반 {expectedGeneralShipping > 0 ? fmtKRW(expectedGeneralShipping) : '-'}</div>
+                      <div>편의 {expectedConvenienceShipping > 0 ? fmtKRW(expectedConvenienceShipping) : '-'}</div>
+                    </td>
+                    <td style={{ ...compactTd, color: n(row.item.online_price) > 0 ? '#166534' : '#6b7280', fontWeight: 800 }}>
+                      {n(row.item.online_price) > 0 ? (
+                        <>
+                          <div>일반 {fmtKRW(generalOnlineProfit)}</div>
+                          <div>편의 {fmtKRW(convenienceOnlineProfit)}</div>
+                        </>
+                      ) : '미입력'}
+                    </td>
+                    <td style={compactTd}>
+                      {n(row.item.offline_price) > 0 ? fmtKRW(n(row.item.offline_price)) : '미입력'}
+                    </td>
+                    <td style={{ ...compactTd, color: n(row.item.offline_price) > 0 ? '#166534' : '#6b7280', fontWeight: 800 }}>
+                      {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '미입력'}
+                    </td>
+                    <td style={compactTd}>{fmtDate(row.lastArrivedDate)}</td>
+                    <td style={compactTd}>
+                      {row.isComplete ? (
+                        <span style={{ ...styles.badge('green'), fontSize: 10, padding: '3px 5px' }}>입고완료</span>
+                      ) : row.arrivedQty > 0 ? (
+                        <span style={{ ...styles.badge('orange'), fontSize: 10, padding: '3px 5px' }}>부분입고</span>
+                      ) : (
+                        <span style={{ ...styles.badge('gray'), fontSize: 10, padding: '3px 5px' }}>미도착</span>
+                      )}
+                    </td>
+                    <td style={{ ...compactTd, padding: '8px 4px' }}>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        {!row.isComplete ? (
+                          <>
+                            <button
+                              style={{ ...styles.smallBtn, width: '100%', padding: '5px 3px', fontSize: 10 }}
+                              onClick={() => openArrivalModal(row.item)}
+                            >
+                              부분입고
+                            </button>
+                            <button
+                              style={{ ...styles.btn('green'), width: '100%', padding: '5px 3px', fontSize: 10 }}
+                              onClick={() => {
+                                const input = prompt(
+                                  '입고날짜를 입력해줘 (YYYY-MM-DD)',
+                                  new Date().toISOString().slice(0, 10)
+                                )
+                                if (input === null) return
+                                completeArrival(row.item, input)
+                              }}
+                            >
+                              입고완료
+                            </button>
+                          </>
+                        ) : null}
+                        {row.arrivedQty > 0 ? (
+                          <button
+                            style={{ ...styles.smallBtn, width: '100%', padding: '5px 3px', fontSize: 10 }}
+                            onClick={() => revertToUndelivered(row.item.id)}
+                          >
+                            미도착으로
+                          </button>
+                        ) : null}
+                        <button
+                          style={{ ...styles.smallBtn, width: '100%', padding: '5px 3px', fontSize: 10 }}
+                          onClick={() => openHistoryModal(row.item)}
+                        >
+                          입고이력
+                        </button>
+                        <button
+                          style={{ ...styles.smallBtn, width: '100%', padding: '5px 3px', fontSize: 10 }}
+                          onClick={() => openEditModal(row.item)}
+                        >
+                          수정
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
-        <div style={styles.tableWrap} data-tablet-role="products-table-wrap">
-          <table style={styles.table} data-tablet-role="products-table" data-tablet-role-desktop="products-desktop-table">
+        <div style={styles.tableWrap}>
+          <table style={styles.table}>
             <thead>
               <tr>
                 <th style={{ ...styles.th, ...styles.checkCell, width: 42 }}>
@@ -1511,33 +1774,6 @@ export default function ProductsPage() {
                             }}
                           >
                             {row.item.item_name ?? '(이름 없음)'}
-                          </div>
-                          <div data-tablet-role="products-item-meta" style={{ display: 'none' }}>
-                            <div>매입일 {fmtDate(row.purchase?.purchase_date)} · 거래처 {row.purchase?.supplier ?? '(거래처 없음)'}</div>
-                            <div data-tablet-role="products-qty-summary">
-                              <span><b>총</b> {fmtNum(row.totalQty)}</span>
-                              <span><b>입고</b> {fmtNum(row.arrivedQty)}</span>
-                              <span><b>판매</b> {fmtNum(row.soldQty)}</span>
-                              <span><b>재고</b> {fmtNum(row.stockQty)}</span>
-                              <span><b>미도착</b> {fmtNum(row.remainingArrivalQty)}</span>
-                            </div>
-                            <div>원가 {fmtKRW(row.finalUnitCost)} · {row.isComplete ? '입고완료' : row.arrivedQty > 0 ? '부분입고' : '미도착'}</div>
-                            <div data-tablet-role="products-price-summary">
-                              <div>
-                                <b>온라인</b> {n(row.item.online_price) > 0 ? fmtKRW(n(row.item.online_price)) : '미입력'}
-                                <br />
-                                배송비 일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '-'} / 편의점 {receivedConvenienceShipping > 0 ? fmtKRW(receivedConvenienceShipping) : '-'}
-                                <br />
-                                예상 일반 {expectedGeneralShipping > 0 ? fmtKRW(expectedGeneralShipping) : '-'} / 편의점 {expectedConvenienceShipping > 0 ? fmtKRW(expectedConvenienceShipping) : '-'}
-                                <br />
-                                이익 일반 {n(row.item.online_price) > 0 ? fmtKRW(generalOnlineProfit) : '-'} / 편의점 {n(row.item.online_price) > 0 ? fmtKRW(convenienceOnlineProfit) : '-'}
-                              </div>
-                              <div>
-                                <b>오프라인</b> {n(row.item.offline_price) > 0 ? fmtKRW(n(row.item.offline_price)) : '미입력'}
-                                <br />
-                                이익 {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '-'}
-                              </div>
-                            </div>
                           </div>
                           {row.isReservationOpen ? (
                             <div style={{ marginTop: 4 }}>
