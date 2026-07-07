@@ -181,6 +181,12 @@ function parseRefundMeta(memo: string | null | undefined): {
   }
 }
 
+function getRefundMetaItemIds(memo: string | null | undefined) {
+  return parseRefundMeta(memo).items
+    .map((item) => item.item_id)
+    .filter(Boolean);
+}
+
 function buildRefundMetaItems(
   selectedItems: PurchaseItemRow[],
   refundMap: Record<string, RefundItemEdit>,
@@ -276,7 +282,7 @@ function getRefundLossInfo(
   const lossKRW = ceilInt(Math.max(0, targetKRW - actualKRW));
   const profitKRW = ceilInt(Math.max(0, actualKRW - targetKRW));
 
-  // 양수면 차손(남은 상품 원가에 더해짐), 음수면 차익(남은 상품 원가에서 차감됨)
+  // 양수면 차손(환불 처리한 해당 상품의 남은 원가에 더해짐), 음수면 차익(해당 상품 원가에서 차감됨)
   const adjustmentKRW = ceilInt(targetKRW - actualKRW);
 
   return { rows, targetKRW, actualKRW, lossKRW, profitKRW, adjustmentKRW };
@@ -327,58 +333,54 @@ function parseRefundSummaryMemo(memo: string | null | undefined) {
   };
 }
 
-function getRefundDistributionTargets(
-  allItems: PurchaseItemRow[],
+type RefundItemAdjustment = {
+  item_id: string;
+  target_krw: number;
+  actual_refund_krw: number;
+  adjustment_krw: number;
+};
+
+/**
+ * 환불 차손/차익은 같은 매입의 다른 상품으로 퍼뜨리지 않는다.
+ * 환불 처리한 상품 행에만 배분해서, 부분환불이면 남은 그 상품의 단가만 올라가거나 내려간다.
+ */
+function getRefundItemAdjustments(
   selectedItems: PurchaseItemRow[],
   refundMap: Record<string, RefundItemEdit>,
+  actualRefundKRW: number,
   existingMemo?: string | null,
-) {
-  const existing = new Map<string, RefundMetaItem>(
-    parseRefundMeta(existingMemo).items.map(
-      (item): [string, RefundMetaItem] => [item.item_id, item],
-    ),
+): RefundItemAdjustment[] {
+  const info = getRefundLossInfo(
+    selectedItems,
+    refundMap,
+    actualRefundKRW,
+    existingMemo,
   );
-  const selectedIds = new Set(selectedItems.map((item) => item.id));
-  const purchaseIds = new Set(selectedItems.map((item) => item.purchase_id));
 
-  return allItems
-    .filter((item) => purchaseIds.has(item.purchase_id))
-    .map((item) => {
-      if (!selectedIds.has(item.id)) return item;
+  if (info.rows.length === 0) return [];
 
-      const prev = existing.get(item.id);
-      const baselineQty =
-        prev?.original_qty ?? Math.max(0, Math.floor(n(item.qty)));
-      const baselineForeignUnit =
-        prev?.original_foreign_unit_price ??
-        (n(item.foreign_unit_price) > 0
-          ? n(item.foreign_unit_price)
-          : baselineQty > 0
-            ? ceil4(n(item.foreign_total) / baselineQty)
-            : 0);
-      const baselineUnitKRW =
-        prev?.original_unit_price ??
-        (n(item.unit_price) > 0
-          ? n(item.unit_price)
-          : baselineQty > 0
-            ? ceil4(n(item.line_total) / baselineQty)
-            : 0);
-      const nextQty = Math.max(
-        0,
-        Math.floor(n(refundMap[item.id]?.next_qty ?? baselineQty)),
-      );
+  // 한 번에 여러 상품을 환불한 경우에만 실제 환불금액을 각 상품의
+  // "환불 대상 원가" 비율로 나눠 계산한다. 한 상품만 선택하면 전액이 그 상품에만 적용된다.
+  const actualParts = distributeByWeightsCeilIntSigned(
+    Math.round(info.actualKRW),
+    info.rows.map((row) => Math.max(0, row.target_krw)),
+  );
 
-      return {
-        ...item,
-        qty: nextQty,
-        foreign_unit_price: baselineForeignUnit,
-        unit_price: baselineUnitKRW,
-        foreign_total: ceil4(baselineForeignUnit * nextQty),
-        line_total: ceil4(baselineUnitKRW * nextQty),
-      };
-    })
-    .filter((item) => Math.max(0, n(item.qty)) > 0);
+  const rows = info.rows.map((row, idx) => ({
+    item_id: row.item_id,
+    target_krw: row.target_krw,
+    actual_refund_krw: actualParts[idx] ?? 0,
+    adjustment_krw: Math.round(row.target_krw) - (actualParts[idx] ?? 0),
+  }));
+
+  // 합계는 비용 테이블에 저장되는 환불 원가조정값과 반드시 같게 맞춘다.
+  const allocatedSum = rows.reduce((sum, row) => sum + row.adjustment_krw, 0);
+  const diff = info.adjustmentKRW - allocatedSum;
+  if (rows.length > 0 && diff !== 0) rows[0].adjustment_krw += diff;
+
+  return rows;
 }
+
 async function restoreRefundAdjustedItemsFromMemo(
   memo: string | null | undefined,
 ) {
@@ -1165,6 +1167,100 @@ async function updateRefundAdjustedItems(
     if (upd.error) throw upd.error;
   }
 }
+
+/**
+ * 배송비·관부과세는 환불 후 남은 재고가 실제로 부담해야 하는 공동비용이다.
+ * 그래서 환불 상품의 수량이 줄면, 해당 비용에 연결돼 있던 상품들 중
+ * 수량이 남아 있는 상품만 대상으로 "현재 남은 수량" 비율로 다시 나눈다.
+ *
+ * 환불 차익/차손(cost_type=환불)은 이 함수에서 건드리지 않는다.
+ * 그 값은 환불한 해당 상품에만 적용해야 한다.
+ */
+function isSharedRefundReallocationCostType(costType: string | null | undefined) {
+  const normalized = normalizeCostType(costType);
+  return (
+    normalized === "배송비(거래처)" ||
+    normalized === "배송비(배대지)" ||
+    normalized === "관부과세"
+  );
+}
+
+async function rebalanceSharedCostsAfterRefund(
+  changedItemIds: string[],
+  allCosts: PurchaseCostRow[],
+  allAllocations: CostAllocationRow[],
+) {
+  const changedIdSet = new Set(changedItemIds);
+  if (changedIdSet.size === 0) return;
+
+  // 환불 상품이 기존에 포함돼 있던 배송비/관부과세만 재배분한다.
+  const targetCosts = allCosts.filter((cost) => {
+    if (!isSharedRefundReallocationCostType(cost.cost_type)) return false;
+    return allAllocations.some(
+      (allocation) =>
+        allocation.purchase_cost_id === cost.id &&
+        changedIdSet.has(allocation.purchase_item_id),
+    );
+  });
+
+  for (const cost of targetCosts) {
+    const oldRows = allAllocations.filter(
+      (allocation) => allocation.purchase_cost_id === cost.id,
+    );
+    if (oldRows.length === 0) continue;
+
+    const linkedItemIds = Array.from(
+      new Set(oldRows.map((allocation) => allocation.purchase_item_id)),
+    );
+
+    const itemRes = await supabase
+      .from("purchase_items")
+      .select("id,qty")
+      .in("id", linkedItemIds);
+
+    if (itemRes.error) throw itemRes.error;
+
+    const remainingItems = (itemRes.data ?? [])
+      .map((item: { id: string; qty: number | null }) => ({
+        id: item.id,
+        qty: Math.max(0, Math.floor(n(item.qty))),
+      }))
+      .filter((item) => item.qty > 0);
+
+    // 기존 배분합을 그대로 유지한다. 배송비/관부과세 총액 자체를 바꾸는 게 아니라,
+    // 환불 후 남은 상품들 사이에서만 다시 나누는 처리다.
+    const totalAllocatedKRW = Math.round(
+      oldRows.reduce(
+        (sum, allocation) => sum + n(allocation.allocated_amount),
+        0,
+      ),
+    );
+
+    const del = await supabase
+      .from("cost_allocations")
+      .delete()
+      .eq("purchase_cost_id", cost.id);
+    if (del.error) throw del.error;
+
+    // 모두 환불되어 남은 재고가 없으면 비용을 억지로 상품에 남기지 않는다.
+    if (remainingItems.length === 0 || totalAllocatedKRW === 0) continue;
+
+    const redistributedAmounts = distributeByWeightsCeilIntSigned(
+      totalAllocatedKRW,
+      remainingItems.map((item) => item.qty),
+    );
+
+    const ins = await supabase.from("cost_allocations").insert(
+      remainingItems.map((item, index) => ({
+        purchase_cost_id: cost.id,
+        purchase_item_id: item.id,
+        allocated_amount: redistributedAmounts[index] ?? 0,
+      })),
+    );
+    if (ins.error) throw ins.error;
+  }
+}
+
 function ItemSelectionManager({
   title,
   selectedItems,
@@ -2858,7 +2954,13 @@ export default function DocumentsPage() {
     setMsg(null);
     try {
       const targetCost = costs.find((c) => c.id === costId) ?? null;
-      if (normalizeCostType(targetCost?.cost_type) === "환불") {
+      const isRefund = normalizeCostType(targetCost?.cost_type) === "환불";
+      const affectedItemIds = isRefund
+        ? getRefundMetaItemIds(targetCost?.memo)
+        : [];
+
+      // 환불 비용을 지우면 해당 상품의 원래 수량/상품명부터 원복한다.
+      if (isRefund) {
         await restoreRefundAdjustedItemsFromMemo(targetCost?.memo);
       }
 
@@ -2868,9 +2970,19 @@ export default function DocumentsPage() {
         .eq("id", costId);
       if (del.error) throw del.error;
 
+      // 버튼을 따로 누를 필요 없이, 환불 취소로 수량이 되돌아간 경우에도
+      // 연결된 배송비·관부과세를 현재 수량 기준으로 자동 재배분한다.
+      if (isRefund && affectedItemIds.length > 0) {
+        await rebalanceSharedCostsAfterRefund(
+          affectedItemIds,
+          costs,
+          allocations,
+        );
+      }
+
       setMsg(
-        normalizeCostType(targetCost?.cost_type) === "환불"
-          ? "환불 삭제 완료 (상품명/수량 원복)"
+        isRefund
+          ? "환불 삭제 완료 · 상품 원복 및 공동비용 자동 재배분 완료"
           : "추가비용 삭제 완료",
       );
       await refreshAll();
@@ -2981,6 +3093,10 @@ export default function DocumentsPage() {
     const cur = currencyValue(ecCurrency, ecCurrencyCustom);
     const previousType = normalizeCostType(editingCost.cost_type);
     const wasRefund = previousType === "환불";
+    // 기존 환불을 수정하거나 일반 비용으로 바꿔도, 원복된 상품까지 함께 재배분 대상으로 잡는다.
+    const previousRefundItemIds = wasRefund
+      ? getRefundMetaItemIds(editingCost.memo)
+      : [];
 
     const customsAmount = customsTotal(
       ecDutyAmount,
@@ -3016,10 +3132,10 @@ export default function DocumentsPage() {
       n(ecTotalKRW),
       wasRefund ? editingCost.memo : null,
     );
-    const refundAllocationItems = getRefundDistributionTargets(
-      items,
+    const refundItemAdjustments = getRefundItemAdjustments(
       chosen,
       editRefundItemEditMap,
+      n(ecTotalKRW),
       wasRefund ? editingCost.memo : null,
     );
 
@@ -3048,13 +3164,10 @@ export default function DocumentsPage() {
       editCostItemForeignMap,
       n(ecTotalForeign),
     );
-    const allocationItems = ecType === "환불" ? refundAllocationItems : chosen;
-    const allocationWeights =
-      ecType === "환불"
-        ? refundAllocationItems.map((item) => Math.max(0, n(item.line_total)))
-        : resolvedForeign.ok
-          ? resolvedForeign.rows.map((row) => row.foreign_total)
-          : [];
+    const allocationItems = chosen;
+    const allocationWeights = resolvedForeign.ok
+      ? resolvedForeign.rows.map((row) => row.foreign_total)
+      : [];
     const signedCostKRW =
       ecType === "환불"
         ? refundInfoEdit.adjustmentKRW
@@ -3168,14 +3281,22 @@ export default function DocumentsPage() {
         .eq("purchase_cost_id", editingCost.id);
       if (delAlloc.error) throw delAlloc.error;
 
-      const allocAmounts = distributeByWeightsCeilIntSigned(
-        signedCostKRW,
-        allocationWeights,
-      );
-      const alloc = allocationItems.map((it, idx) => ({
-        item_id: it.id,
-        amt: allocAmounts[idx] ?? 0,
-      }));
+      const alloc =
+        ecType === "환불"
+          ? refundItemAdjustments.map((row) => ({
+              item_id: row.item_id,
+              amt: row.adjustment_krw,
+            }))
+          : (() => {
+              const allocAmounts = distributeByWeightsCeilIntSigned(
+                signedCostKRW,
+                allocationWeights,
+              );
+              return allocationItems.map((it, idx) => ({
+                item_id: it.id,
+                amt: allocAmounts[idx] ?? 0,
+              }));
+            })();
 
       if (alloc.length > 0) {
         const insAlloc = await supabase.from("cost_allocations").insert(
@@ -3214,10 +3335,28 @@ export default function DocumentsPage() {
         );
       }
 
+      // 환불 신규등록·수정·삭제·일반비용 전환 모두 저장 직후 자동 재배분한다.
+      // 이전 환불 상품과 새 환불 상품을 합쳐서 처리하므로, 환불 대상이 바뀌어도 누락되지 않는다.
+      const autoRebalanceItemIds = Array.from(
+        new Set([
+          ...previousRefundItemIds,
+          ...(ecType === "환불" ? chosen.map((item) => item.id) : []),
+        ]),
+      );
+      if (autoRebalanceItemIds.length > 0) {
+        await rebalanceSharedCostsAfterRefund(
+          autoRebalanceItemIds,
+          costs,
+          allocations,
+        );
+      }
+
       setMsg(
         ecType === "환불"
-          ? `환불 수정 완료 (차손 ${fmtKRW(refundInfoEdit.lossKRW)} / 차익 ${fmtKRW(refundInfoEdit.profitKRW)})`
-          : "추가비용 수정 완료",
+          ? `환불 수정 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfoEdit.lossKRW)} / 차익 ${fmtKRW(refundInfoEdit.profitKRW)})`
+          : wasRefund
+            ? "환불 해제 완료 · 공동비용 자동 재배분 완료"
+            : "추가비용 수정 완료",
       );
       setCostEditModalOpen(false);
       setEditingCost(null);
@@ -3461,10 +3600,10 @@ export default function DocumentsPage() {
       refundItemEditMap,
       n(cTotalKRW),
     );
-    const refundAllocationItems = getRefundDistributionTargets(
-      items,
+    const refundItemAdjustments = getRefundItemAdjustments(
       chosen,
       refundItemEditMap,
+      n(cTotalKRW),
     );
 
     const finalMemo =
@@ -3506,13 +3645,10 @@ export default function DocumentsPage() {
       costItemForeignMap,
       n(cTotalForeign),
     );
-    const allocationItems = cType === "환불" ? refundAllocationItems : chosen;
-    const allocationWeights =
-      cType === "환불"
-        ? refundAllocationItems.map((item) => Math.max(0, n(item.line_total)))
-        : resolvedForeign.ok
-          ? resolvedForeign.rows.map((row) => row.foreign_total)
-          : [];
+    const allocationItems = chosen;
+    const allocationWeights = resolvedForeign.ok
+      ? resolvedForeign.rows.map((row) => row.foreign_total)
+      : [];
     const signedCostKRW =
       cType === "환불"
         ? refundInfo.adjustmentKRW
@@ -3559,14 +3695,22 @@ export default function DocumentsPage() {
       if (insCost.error) throw insCost.error;
       const costId = insCost.data.id as string;
 
-      const allocAmounts = distributeByWeightsCeilIntSigned(
-        signedCostKRW,
-        allocationWeights,
-      );
-      const alloc = allocationItems.map((it, idx) => ({
-        item_id: it.id,
-        amt: allocAmounts[idx] ?? 0,
-      }));
+      const alloc =
+        cType === "환불"
+          ? refundItemAdjustments.map((row) => ({
+              item_id: row.item_id,
+              amt: row.adjustment_krw,
+            }))
+          : (() => {
+              const allocAmounts = distributeByWeightsCeilIntSigned(
+                signedCostKRW,
+                allocationWeights,
+              );
+              return allocationItems.map((it, idx) => ({
+                item_id: it.id,
+                amt: allocAmounts[idx] ?? 0,
+              }));
+            })();
 
       if (alloc.length > 0) {
         const insAlloc = await supabase.from("cost_allocations").insert(
@@ -3597,11 +3741,18 @@ export default function DocumentsPage() {
 
       if (cType === "환불") {
         await updateRefundAdjustedItems(chosen, refundItemEditMap);
+
+        // 공동비용 전체 재배분 버튼 없이, 환불 저장과 동시에 자동 처리한다.
+        await rebalanceSharedCostsAfterRefund(
+          chosen.map((item) => item.id),
+          costs,
+          allocations,
+        );
       }
 
       setMsg(
         cType === "환불"
-          ? `환불 저장 완료 (차손 ${fmtKRW(refundInfo.lossKRW)} / 차익 ${fmtKRW(refundInfo.profitKRW)})`
+          ? `환불 저장 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfo.lossKRW)} / 차익 ${fmtKRW(refundInfo.profitKRW)})`
           : cType === "카드할인"
             ? `카드할인 저장 완료 (${fmtKRW(Math.abs(Math.round(costKRW)))} 차감)`
             : `추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`,
@@ -5454,7 +5605,7 @@ export default function DocumentsPage() {
             {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
             <b>입력 금액대비 전체 자동보정</b>
             {cType === "환불"
-              ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 남은 상품 원가에 재배분되고, 더 많으면 차익(-)으로 차감돼."
+              ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 환불한 해당 상품의 남은 원가에만 더해지고, 더 많으면 그 상품 원가에서만 차감돼.\n배송비·관부과세는 환불 후 남은 상품 수량 기준으로 자동 재배분돼."
               : cType === "카드할인"
                 ? "\n※ 카드할인은 선택 상품 원가에서 자동 차감돼."
                 : ""}
@@ -5935,7 +6086,7 @@ export default function DocumentsPage() {
                 {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
                 <b>입력 금액대비 전체 자동보정</b>
                 {ecType === "환불"
-                  ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 남은 상품 원가에 재배분되고, 더 많으면 차익(-)으로 차감돼."
+                  ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 환불한 해당 상품의 남은 원가에만 더해지고, 더 많으면 그 상품 원가에서만 차감돼.\n배송비·관부과세는 환불 후 남은 상품 수량 기준으로 자동 재배분돼."
                   : ecType === "카드할인"
                     ? "\n※ 카드할인은 선택 상품 원가에서 자동 차감돼."
                     : ""}
@@ -6200,69 +6351,128 @@ export default function DocumentsPage() {
             {detailAlloc.length === 0 ? (
               <div style={styles.small}>아직 분배된 추가비용이 없어.</div>
             ) : (
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>종류</th>
-                    <th style={{ ...styles.th, width: 120 }}>날짜</th>
-                    <th style={{ ...styles.th, width: 150 }}>배분금액</th>
-                    <th style={styles.th}>같이 배분된 상품</th>
-                    <th style={styles.th}>거래처</th>
-                    <th style={styles.th}>메모</th>
-                    <th style={{ ...styles.th, width: 150 }}>액션</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <>
+                {/* PC에서는 기존 표 유지 */}
+                <div data-tablet-role="item-detail-allocation-table">
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        <th style={styles.th}>종류</th>
+                        <th style={{ ...styles.th, width: 120 }}>날짜</th>
+                        <th style={{ ...styles.th, width: 150 }}>배분금액</th>
+                        <th style={styles.th}>같이 배분된 상품</th>
+                        <th style={styles.th}>거래처</th>
+                        <th style={styles.th}>메모</th>
+                        <th style={{ ...styles.th, width: 150 }}>액션</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detailAlloc.map((a, idx) => (
+                        <tr key={idx}>
+                          <td style={styles.td}>{a.cost_type ?? ""}</td>
+                          <td style={styles.td}>{fmtDate(a.cost_date)}</td>
+                          <td style={styles.td}>
+                            <b>{fmtKRW(a.amount_krw)}</b>
+                          </td>
+                          <td style={styles.td}>
+                            {a.related_item_names.length > 0
+                              ? a.related_item_names.join(", ")
+                              : "-"}
+                          </td>
+                          <td style={styles.td}>{a.vendor_name ?? "-"}</td>
+                          <td style={{ ...styles.td, whiteSpace: "pre-line" }}>
+                            {stripRefundMetaDetail(a.memo)}
+                          </td>
+                          <td style={styles.td}>
+                            {a.cost_id ? (
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                <button
+                                  style={styles.smallBtn}
+                                  onClick={() => openCostEditorById(a.cost_id as string, true)}
+                                >
+                                  수정
+                                </button>
+                                <button
+                                  style={styles.dangerSmallBtn}
+                                  onClick={() => {
+                                    if (!confirm("이 추가비용을 삭제할까?")) return;
+                                    setItemDetailOpen(false);
+                                    deleteCost(a.cost_id as string);
+                                  }}
+                                >
+                                  삭제
+                                </button>
+                              </div>
+                            ) : null}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 태블릿: 한 글자씩 내려가는 표 대신 카드형 */}
+                <div data-tablet-role="item-detail-allocation-cards">
                   {detailAlloc.map((a, idx) => (
-                    <tr key={idx}>
-                      <td style={styles.td}>{a.cost_type ?? ""}</td>
-                      <td style={styles.td}>{fmtDate(a.cost_date)}</td>
-                      <td style={styles.td}>
-                        <b>{fmtKRW(a.amount_krw)}</b>
-                      </td>
-                      <td style={styles.td}>
-                        {a.related_item_names.length > 0
-                          ? a.related_item_names.join(", ")
-                          : "-"}
-                      </td>
-                      <td style={styles.td}>{a.vendor_name ?? "-"}</td>
-                      <td style={{ ...styles.td, whiteSpace: "pre-line" }}>
-                        {a.memo ?? ""}
-                      </td>
-                      <td style={styles.td}>
-                        {a.cost_id ? (
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 6,
-                              flexWrap: "wrap",
+                    <div key={idx} data-tablet-role="item-detail-allocation-card">
+                      <div data-tablet-role="item-detail-allocation-card-head">
+                        <div>
+                          <div data-tablet-role="item-detail-allocation-type">
+                            {a.cost_type ?? "추가비용"}
+                          </div>
+                          <div data-tablet-role="item-detail-allocation-date">
+                            {fmtDate(a.cost_date)}
+                          </div>
+                        </div>
+                        <div data-tablet-role="item-detail-allocation-amount">
+                          {fmtKRW(a.amount_krw)}
+                        </div>
+                      </div>
+
+                      <div data-tablet-role="item-detail-allocation-products">
+                        <b>같이 배분된 상품</b>
+                        <div>
+                          {a.related_item_names.length > 0
+                            ? a.related_item_names.join(", ")
+                            : "-"}
+                        </div>
+                      </div>
+
+                      <div data-tablet-role="item-detail-allocation-meta">
+                        <div>
+                          <b>거래처</b>
+                          <span>{a.vendor_name ?? "-"}</span>
+                        </div>
+                        <div>
+                          <b>메모</b>
+                          <span>{stripRefundMetaDetail(a.memo) || "-"}</span>
+                        </div>
+                      </div>
+
+                      {a.cost_id ? (
+                        <div data-tablet-role="item-detail-allocation-actions">
+                          <button
+                            style={styles.smallBtn}
+                            onClick={() => openCostEditorById(a.cost_id as string, true)}
+                          >
+                            수정
+                          </button>
+                          <button
+                            style={styles.dangerSmallBtn}
+                            onClick={() => {
+                              if (!confirm("이 추가비용을 삭제할까?")) return;
+                              setItemDetailOpen(false);
+                              deleteCost(a.cost_id as string);
                             }}
                           >
-                            <button
-                              style={styles.smallBtn}
-                              onClick={() =>
-                                openCostEditorById(a.cost_id as string, true)
-                              }
-                            >
-                              수정
-                            </button>
-                            <button
-                              style={styles.dangerSmallBtn}
-                              onClick={() => {
-                                if (!confirm("이 추가비용을 삭제할까?")) return;
-                                setItemDetailOpen(false);
-                                deleteCost(a.cost_id as string);
-                              }}
-                            >
-                              삭제
-                            </button>
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
+                            삭제
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </>
             )}
 
             <div style={{ height: 12 }} />
