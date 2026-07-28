@@ -117,6 +117,7 @@ type VendorRow = {
   is_product_supplier: boolean | null;
   is_forwarder: boolean | null;
   is_carry_in: boolean | null;
+  is_customs_broker: boolean | null;
   is_active: boolean | null;
 };
 
@@ -2316,8 +2317,12 @@ export default function DocumentsPage() {
 
     if (cType === "배송비(거래처)" || cType === "잔금") {
       filtered = vendors.filter((v) => !!v.is_product_supplier);
-    } else if (cType === "배송비(배대지)" || cType === "관부과세") {
+    } else if (cType === "배송비(배대지)") {
       filtered = vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in);
+    } else if (cType === "관부과세") {
+      filtered = vendors.filter(
+        (v) => !!v.is_forwarder || !!v.is_carry_in || !!v.is_customs_broker,
+      );
     }
 
     return filtered
@@ -2336,8 +2341,12 @@ export default function DocumentsPage() {
 
     if (ecType === "배송비(거래처)" || ecType === "잔금") {
       filtered = vendors.filter((v) => !!v.is_product_supplier);
-    } else if (ecType === "배송비(배대지)" || ecType === "관부과세") {
+    } else if (ecType === "배송비(배대지)") {
       filtered = vendors.filter((v) => !!v.is_forwarder || !!v.is_carry_in);
+    } else if (ecType === "관부과세") {
+      filtered = vendors.filter(
+        (v) => !!v.is_forwarder || !!v.is_carry_in || !!v.is_customs_broker,
+      );
     }
 
     return filtered
@@ -2539,7 +2548,7 @@ export default function DocumentsPage() {
         supabase
           .from("vendors")
           .select(
-            "id,created_at,name,is_product_supplier,is_forwarder,is_carry_in,is_active",
+            "id,created_at,name,is_product_supplier,is_forwarder,is_carry_in,is_customs_broker,is_active",
           )
           .order("name", { ascending: true }),
 
@@ -5448,8 +5457,15 @@ export default function DocumentsPage() {
                               if (cost.cost_type === "배송비(거래처)" || cost.cost_type === "잔금") {
                                 return !!vendor.is_product_supplier;
                               }
-                              if (cost.cost_type === "배송비(배대지)" || cost.cost_type === "관부과세") {
+                              if (cost.cost_type === "배송비(배대지)") {
                                 return !!vendor.is_forwarder || !!vendor.is_carry_in;
+                              }
+                              if (cost.cost_type === "관부과세") {
+                                return (
+                                  !!vendor.is_forwarder ||
+                                  !!vendor.is_carry_in ||
+                                  !!vendor.is_customs_broker
+                                );
                               }
                               return true;
                             })

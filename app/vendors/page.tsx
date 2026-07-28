@@ -20,6 +20,7 @@ type VendorRow = {
   is_product_supplier?: boolean | null
   is_forwarder?: boolean | null
   is_carry_in?: boolean | null
+  is_customs_broker?: boolean | null
   memo?: string | null
 }
 
@@ -82,6 +83,7 @@ export default function VendorsPage() {
   const [isProductSupplier, setIsProductSupplier] = useState(true)
   const [isForwarder, setIsForwarder] = useState(false)
   const [isCarryIn, setIsCarryIn] = useState(false)
+  const [isCustomsBroker, setIsCustomsBroker] = useState(false)
   const [memo, setMemo] = useState('')
 
   async function load() {
@@ -165,11 +167,14 @@ export default function VendorsPage() {
 
     let label = `이용 ${totalCount}회`
 
-    if (v.is_product_supplier && !v.is_forwarder && !v.is_carry_in) {
+    const isAdditionalCostVendor =
+      !!v.is_forwarder || !!v.is_carry_in || !!v.is_customs_broker
+
+    if (v.is_product_supplier && !isAdditionalCostVendor) {
       label = `매입 ${purchaseCount}회`
-    } else if (!v.is_product_supplier && (v.is_forwarder || v.is_carry_in)) {
+    } else if (!v.is_product_supplier && isAdditionalCostVendor) {
       label = `추가비용 ${costCount}회`
-    } else if (v.is_product_supplier && (v.is_forwarder || v.is_carry_in)) {
+    } else if (v.is_product_supplier && isAdditionalCostVendor) {
       label = `매입 ${purchaseCount}회 / 추가비용 ${costCount}회`
     }
 
@@ -245,6 +250,7 @@ export default function VendorsPage() {
     setIsProductSupplier(true)
     setIsForwarder(false)
     setIsCarryIn(false)
+    setIsCustomsBroker(false)
     setMemo('')
     setIsDirty(false)
   }
@@ -269,6 +275,7 @@ export default function VendorsPage() {
     setIsProductSupplier(!!v.is_product_supplier)
     setIsForwarder(!!v.is_forwarder)
     setIsCarryIn(!!v.is_carry_in)
+    setIsCustomsBroker(!!v.is_customs_broker)
     setMemo(v.memo || '')
     setIsDirty(false)
     setModalOpen(true)
@@ -306,6 +313,7 @@ export default function VendorsPage() {
       is_product_supplier: isProductSupplier,
       is_forwarder: isForwarder,
       is_carry_in: isCarryIn,
+      is_customs_broker: isCustomsBroker,
       memo: memo.trim() || null,
     }
 
@@ -635,6 +643,9 @@ export default function VendorsPage() {
                       {v.is_carry_in ? (
                         <span style={styles.badge('#fae8ff', '#a21caf')}>휴대품반입</span>
                       ) : null}
+                      {v.is_customs_broker ? (
+                        <span style={styles.badge('#fce7f3', '#be185d')}>관세사</span>
+                      ) : null}
                       {v.is_domestic ? (
                         <span style={styles.badge('#dcfce7', '#166534')}>국내</span>
                       ) : (
@@ -912,6 +923,15 @@ export default function VendorsPage() {
                     style={{ marginRight: 6 }}
                   />
                   휴대품반입
+                </label>
+                <label style={{ fontSize: 14, fontWeight: 700 }}>
+                  <input
+                    type="checkbox"
+                    checked={isCustomsBroker}
+                    onChange={(e) => setIsCustomsBroker(e.target.checked)}
+                    style={{ marginRight: 6 }}
+                  />
+                  관세사
                 </label>
               </div>
             </div>
