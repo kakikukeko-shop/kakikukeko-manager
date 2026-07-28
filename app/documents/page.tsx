@@ -62,6 +62,15 @@ type DraftPurchaseCost = {
   memo: string;
 };
 
+type ProductType = "피규어" | "가챠" | "랜덤박스" | "기타";
+
+const PRODUCT_TYPE_OPTIONS: ProductType[] = [
+  "피규어",
+  "가챠",
+  "랜덤박스",
+  "기타",
+];
+
 type PurchaseItemRow = {
   id: string;
   created_at: string;
@@ -74,6 +83,7 @@ type PurchaseItemRow = {
   line_total: number | null;
   memo: string | null;
   is_preorder: boolean | null;
+  product_type: ProductType | null;
 };
 
 type PurchaseCostRow = {
@@ -129,6 +139,7 @@ type DraftItem = {
   foreign_total: string;
   memo: string;
   is_preorder: boolean;
+  product_type: ProductType;
   photoFile?: File | null;
   existingPhotoPath?: string | null;
 };
@@ -976,6 +987,7 @@ function resolveDraftForeignTotals(
     was_blank: d.foreign_total_raw === "",
     memo: d.memo,
     is_preorder: d.is_preorder,
+    product_type: d.product_type,
     photoFile: d.photoFile,
     existingPhotoPath: d.existingPhotoPath,
   }));
@@ -1095,6 +1107,7 @@ function computeDraftForeignTotals(
         foreign_total: number;
         memo: string;
         is_preorder: boolean;
+        product_type: ProductType;
         photoFile?: File | null;
         existingPhotoPath?: string | null;
       }[],
@@ -1109,6 +1122,7 @@ function computeDraftForeignTotals(
     foreign_total: ceil4(r.foreign_total),
     memo: r.memo,
     is_preorder: r.is_preorder,
+    product_type: r.product_type,
     photoFile: r.photoFile,
     existingPhotoPath: r.existingPhotoPath,
   }));
@@ -1755,6 +1769,7 @@ export default function DocumentsPage() {
       foreign_total: "",
       memo: "",
       is_preorder: false,
+      product_type: "기타",
       photoFile: null,
       existingPhotoPath: null,
     },
@@ -2501,7 +2516,7 @@ export default function DocumentsPage() {
         supabase
           .from("purchase_items")
           .select(
-            "id,created_at,purchase_id,item_name,qty,foreign_total,foreign_unit_price,unit_price,line_total,memo,is_preorder",
+            "id,created_at,purchase_id,item_name,qty,foreign_total,foreign_unit_price,unit_price,line_total,memo,is_preorder,product_type",
           )
           .order("created_at", { ascending: false }),
 
@@ -2613,6 +2628,7 @@ export default function DocumentsPage() {
             line_total: ceil4(unitKRW * qty),
             memo: "[이전 환불 기록 복구] 환불 이력 확인용 상품",
             is_preorder: false,
+            product_type: "기타",
           };
         },
       );
@@ -2845,6 +2861,7 @@ export default function DocumentsPage() {
         foreign_total: "",
         memo: "",
         is_preorder: false,
+        product_type: "기타",
         photoFile: null,
         existingPhotoPath: null,
       },
@@ -2920,6 +2937,7 @@ export default function DocumentsPage() {
             foreign_total: String(it.foreign_total ?? ""),
             memo: it.memo ?? "",
             is_preorder: !!it.is_preorder,
+            product_type: (it.product_type ?? "기타") as ProductType,
             photoFile: null,
             existingPhotoPath:
               (filesByItem.get(it.id) ?? []).find(
@@ -2934,6 +2952,7 @@ export default function DocumentsPage() {
               foreign_total: "",
               memo: "",
               is_preorder: false,
+              product_type: "기타",
               photoFile: null,
               existingPhotoPath: null,
             },
@@ -3015,9 +3034,54 @@ export default function DocumentsPage() {
       }
     }
 
-    const computed = computeDraftForeignTotals(draftItems, totalForeign);
+    const editingPurchaseItems = editingPurchaseId
+      ? itemsByPurchase.get(editingPurchaseId) ?? []
+      : [];
+    const editingPurchaseItemIds = new Set(
+      editingPurchaseItems.map((item) => item.id),
+    );
+
+    // 환불 이력이 있는 매입은 상품 수량과 외화총액이 최초 매입 당시와 달라지는 게 정상이다.
+    // 그래서 매입 수정 시에는 최초 상품 외화총액과 현재 남은 상품 외화총액의 일치를 강제하지 않는다.
+    const isRefundedPurchaseEdit =
+      buyMode === "edit" &&
+      !!editingPurchaseId &&
+      costs.some((cost) => {
+        if (normalizeCostType(cost.cost_type) !== "환불") return false;
+        if (cost.purchase_id === editingPurchaseId) return true;
+        return parseRefundMeta(cost.memo).items.some((meta) =>
+          editingPurchaseItemIds.has(meta.item_id),
+        );
+      });
+
+    const computed = isRefundedPurchaseEdit
+      ? {
+          ok: true as const,
+          message: "",
+          rows: draftItems
+            .map((d) => ({
+              id: d.id,
+              key: d.key,
+              item_name: d.item_name.trim(),
+              qty: Math.max(0, Math.floor(n(d.qty))),
+              foreign_total: ceil4(Math.max(0, n(d.foreign_total))),
+              memo: d.memo.trim(),
+              is_preorder: d.is_preorder,
+              product_type: d.product_type,
+              photoFile: d.photoFile,
+              existingPhotoPath: d.existingPhotoPath,
+            }))
+            .filter((d) => d.item_name.length > 0),
+        }
+      : computeDraftForeignTotals(draftItems, totalForeign);
+
     if (!computed.ok) {
       setErr(computed.message);
+      return;
+    }
+
+    if (computed.rows.length === 0) {
+      setErr("상품을 1개 이상 입력해줘.");
       return;
     }
 
@@ -3115,11 +3179,22 @@ export default function DocumentsPage() {
 
       for (let idx = 0; idx < cleaned.length; idx++) {
         const d = cleaned[idx];
-        const q = Math.max(1, n(d.qty));
+        const previousItem = d.id
+          ? items.find((item) => item.id === d.id) ?? null
+          : null;
+        const q = isRefundedPurchaseEdit
+          ? Math.max(0, Math.floor(n(d.qty)))
+          : Math.max(1, n(d.qty));
         const ft = Math.max(0, d.foreign_total);
-        const foreignUnit = q > 0 ? ceil4(ft / q) : 0;
-        const lineKRW = ceil4(ft * fx);
-        const unitKRW = q > 0 ? ceil4(lineKRW / q) : 0;
+        const foreignUnit =
+          q > 0
+            ? ceil4(ft / q)
+            : Math.max(0, n(previousItem?.foreign_unit_price));
+        const lineKRW = q > 0 ? ceil4(ft * fx) : 0;
+        const unitKRW =
+          q > 0
+            ? ceil4(lineKRW / q)
+            : Math.max(0, n(previousItem?.unit_price));
 
         const payload = {
           purchase_id: purchaseId,
@@ -3131,6 +3206,7 @@ export default function DocumentsPage() {
           line_total: lineKRW,
           memo: d.memo || null,
           is_preorder: d.is_preorder,
+          product_type: d.product_type,
         };
 
         let savedId = d.id;
@@ -3223,7 +3299,9 @@ export default function DocumentsPage() {
 
       setMsg(
         buyMode === "edit"
-          ? "매입 수정 완료"
+          ? isRefundedPurchaseEdit
+            ? "매입 수정 완료 · 환불 후 남은 상품금액 기준으로 저장했어."
+            : "매입 수정 완료"
           : `매입 저장 완료 (상품 외화합계 일치 / 환율 ${fx.toFixed(4)})`,
       );
       setBuyModalOpen(false);
@@ -4906,6 +4984,9 @@ export default function DocumentsPage() {
                                     <span data-tablet-role="documents-product-name">
                                       {it.item_name ?? "(이름 없음)"}
                                     </span>
+                                    <span style={styles.badge("gray")}>
+                                      {it.product_type ?? "기타"}
+                                    </span>
                                     {refundStatus ? (
                                       <span
                                         style={styles.badge(
@@ -5436,7 +5517,39 @@ export default function DocumentsPage() {
               gap: 10,
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 900 }}>상품 등록</div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 900 }}>상품 등록</div>
+              <select
+                style={{ ...styles.select, width: 190 }}
+                defaultValue=""
+                onChange={(e) => {
+                  const nextType = e.target.value as ProductType;
+                  if (!nextType) return;
+                  setDraftItems((prev) =>
+                    prev.map((item) => ({
+                      ...item,
+                      product_type: nextType,
+                    })),
+                  );
+                  setBuyDirty(true);
+                  e.currentTarget.value = "";
+                }}
+              >
+                <option value="">전체 상품유형 변경</option>
+                {PRODUCT_TYPE_OPTIONS.map((type) => (
+                  <option key={type} value={type}>
+                    전체를 {type}로
+                  </option>
+                ))}
+              </select>
+            </div>
             <button
               style={styles.btn("ghost")}
               onClick={() =>
@@ -5449,6 +5562,7 @@ export default function DocumentsPage() {
                     foreign_total: "",
                     memo: "",
                     is_preorder: false,
+                    product_type: "기타",
                     photoFile: null,
                     existingPhotoPath: null,
                   },
@@ -5581,6 +5695,32 @@ export default function DocumentsPage() {
                         }
                         placeholder="예: 가챠A"
                       />
+                    </div>
+
+                    <div style={styles.field}>
+                      <div style={styles.label}>상품유형</div>
+                      <select
+                        style={styles.select}
+                        value={d.product_type}
+                        onChange={(e) =>
+                          setDraftItems((prev) =>
+                            prev.map((x) =>
+                              x.key === d.key
+                                ? {
+                                    ...x,
+                                    product_type: e.target.value as ProductType,
+                                  }
+                                : x,
+                            ),
+                          )
+                        }
+                      >
+                        {PRODUCT_TYPE_OPTIONS.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div style={styles.field}>

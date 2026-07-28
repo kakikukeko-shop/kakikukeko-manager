@@ -12,6 +12,7 @@ const MENUS = [
   { href: '/sales', label: '매출관리' },
   { href: '/vendors', label: '거래처관리' },
   { href: '/evidence', label: '증빙서류관리' },
+  { href: '/forwarding', label: '배대지비 계산기' },
 ]
 
 type ViewMode = 'pc' | 'tablet'
@@ -21,17 +22,26 @@ const VIEW_MODE_STORAGE_KEY = 'kakikukeko-view-mode'
 function applyViewMode(mode: ViewMode) {
   document.documentElement.dataset.viewMode = mode
   window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode)
-  window.dispatchEvent(new CustomEvent('kakikukeko:view-mode-change', { detail: mode }))
+
+  window.dispatchEvent(
+    new CustomEvent('kakikukeko:view-mode-change', {
+      detail: mode,
+    }),
+  )
 }
 
 export default function AppHeader() {
   const pathname = usePathname()
   const router = useRouter()
+
   const [viewMode, setViewMode] = useState<ViewMode>('pc')
 
   useEffect(() => {
     const saved = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
-    const nextMode: ViewMode = saved === 'tablet' ? 'tablet' : 'pc'
+
+    const nextMode: ViewMode =
+      saved === 'tablet' ? 'tablet' : 'pc'
+
     setViewMode(nextMode)
     applyViewMode(nextMode)
   }, [])
@@ -42,7 +52,9 @@ export default function AppHeader() {
   }
 
   const toggleViewMode = () => {
-    const nextMode: ViewMode = viewMode === 'pc' ? 'tablet' : 'pc'
+    const nextMode: ViewMode =
+      viewMode === 'pc' ? 'tablet' : 'pc'
+
     setViewMode(nextMode)
     applyViewMode(nextMode)
   }
@@ -111,7 +123,8 @@ export default function AppHeader() {
             {MENUS.map((menu) => {
               const active =
                 pathname === menu.href ||
-                (menu.href !== '/' && pathname.startsWith(menu.href))
+                (menu.href !== '/' &&
+                  pathname.startsWith(menu.href))
 
               return (
                 <Link
@@ -121,9 +134,15 @@ export default function AppHeader() {
                     textDecoration: 'none',
                     padding: '10px 14px',
                     borderRadius: 14,
-                    border: active ? '1px solid #7c3aed' : '1px solid #d5d7e2',
-                    background: active ? '#7c3aed' : '#fff',
-                    color: active ? '#fff' : '#111827',
+                    border: active
+                      ? '1px solid #7c3aed'
+                      : '1px solid #d5d7e2',
+                    background: active
+                      ? '#7c3aed'
+                      : '#fff',
+                    color: active
+                      ? '#fff'
+                      : '#111827',
                     fontSize: 14,
                     fontWeight: 800,
                     whiteSpace: 'nowrap',
@@ -148,15 +167,23 @@ export default function AppHeader() {
               padding: '10px 14px',
               borderRadius: 14,
               border: '1px solid #0f766e',
-              background: viewMode === 'tablet' ? '#0f766e' : '#fff',
-              color: viewMode === 'tablet' ? '#fff' : '#0f766e',
+              background:
+                viewMode === 'tablet'
+                  ? '#0f766e'
+                  : '#fff',
+              color:
+                viewMode === 'tablet'
+                  ? '#fff'
+                  : '#0f766e',
               fontSize: 14,
               fontWeight: 800,
               cursor: 'pointer',
               whiteSpace: 'nowrap',
             }}
           >
-            {viewMode === 'tablet' ? '🖥️ PC 버전' : '📱 태블릿 버전'}
+            {viewMode === 'tablet'
+              ? '🖥️ PC 버전'
+              : '📱 태블릿 버전'}
           </button>
 
           <button
