@@ -24,6 +24,44 @@ type PurchaseRow = {
   memo: string | null;
 };
 
+type PurchasePaymentRow = {
+  id: string;
+  created_at: string;
+  purchase_id: string;
+  payment_date: string | null;
+  payment_method: string | null;
+  card_name: string | null;
+  currency: string | null;
+  foreign_amount: number | null;
+  krw_amount: number | null;
+  fx_rate: number | null;
+  memo: string | null;
+};
+
+type DraftPayment = {
+  key: string;
+  payment_date: string;
+  payment_method: string;
+  card_name: string;
+  currency: string;
+  currency_custom: string;
+  foreign_amount: string;
+  krw_amount: string;
+  memo: string;
+};
+
+type DraftPurchaseCost = {
+  key: string;
+  cost_type: string;
+  currency: string;
+  currency_custom: string;
+  foreign_amount: string;
+  krw_amount: string;
+  vendor_name: string;
+  cost_date: string;
+  memo: string;
+};
+
 type PurchaseItemRow = {
   id: string;
   created_at: string;
@@ -414,17 +452,24 @@ function getRefundItemAdjustments(
     info.rows.map((row) => Math.max(0, row.target_krw)),
   );
 
-  const rows = info.rows.map((row, idx) => ({
-    item_id: row.item_id,
-    target_krw: row.target_krw,
-    actual_refund_krw: actualParts[idx] ?? 0,
-    adjustment_krw: Math.round(row.target_krw) - (actualParts[idx] ?? 0),
-  }));
+  const rows = info.rows
+    .map((row, idx) => {
+      const edit = refundMap[row.item_id];
+      const nextQty = Math.max(0, Math.floor(n(edit?.next_qty)));
 
-  // 합계는 비용 테이블에 저장되는 환불 원가조정값과 반드시 같게 맞춘다.
-  const allocatedSum = rows.reduce((sum, row) => sum + row.adjustment_krw, 0);
-  const diff = info.adjustmentKRW - allocatedSum;
-  if (rows.length > 0 && diff !== 0) rows[0].adjustment_krw += diff;
+      return {
+        item_id: row.item_id,
+        target_krw: row.target_krw,
+        actual_refund_krw: actualParts[idx] ?? 0,
+        adjustment_krw:
+          nextQty > 0
+            ? Math.round(row.target_krw) - (actualParts[idx] ?? 0)
+            : 0,
+      };
+    })
+    // 전체환불되어 남은 수량이 0인 상품에는 차손·차익을 원가로 붙이지 않는다.
+    // 차손·차익 금액 자체는 purchase_costs의 환불 기록에 남아 대시보드 손익에 반영된다.
+    .filter((row) => row.adjustment_krw !== 0);
 
   return rows;
 }
@@ -1217,12 +1262,15 @@ async function updateRefundAdjustedItems(
 }
 
 /**
- * 배송비·관부과세는 환불 후 남은 재고가 실제로 부담해야 하는 공동비용이다.
- * 그래서 환불 상품의 수량이 줄면, 해당 비용에 연결돼 있던 상품들 중
- * 수량이 남아 있는 상품만 대상으로 "현재 남은 수량" 비율로 다시 나눈다.
+ * 환불 뒤 공동 추가비용은 기존 배분을 그대로 두지 않고 완전히 다시 계산한다.
  *
- * 환불 차익/차손(cost_type=환불)은 이 함수에서 건드리지 않는다.
- * 그 값은 환불한 해당 상품에만 적용해야 한다.
+ * 1) 환불 상품의 상품금액은 "원래 상품 전체금액 - 환불 대상 상품금액"으로 줄어든다.
+ * 2) 남은 수량이 있는 상품만 배분 대상에 포함한다.
+ * 3) 각 상품의 "개당 상품금액 × 남은 수량"을 다시 계산한다.
+ * 4) 그 금액 비율로 공동 추가비용 전체를 재배분한다. 수량만으로 따로 나누지 않는다.
+ *
+ * 환불 차익/차손(cost_type=환불)은 다른 상품으로 퍼뜨리지 않고
+ * 환불 처리한 해당 상품에만 유지한다.
  */
 function isSharedRefundReallocationCostType(
   costType: string | null | undefined,
@@ -1231,7 +1279,10 @@ function isSharedRefundReallocationCostType(
   return (
     normalized === "배송비(거래처)" ||
     normalized === "배송비(배대지)" ||
-    normalized === "관부과세"
+    normalized === "관부과세" ||
+    normalized === "잔금" ||
+    normalized === "기타" ||
+    normalized === "카드할인"
   );
 }
 
@@ -1265,16 +1316,35 @@ async function rebalanceSharedCostsAfterRefund(
 
     const itemRes = await supabase
       .from("purchase_items")
-      .select("id,qty")
+      .select("id,qty,line_total,unit_price")
       .in("id", linkedItemIds);
 
     if (itemRes.error) throw itemRes.error;
 
     const remainingItems = (itemRes.data ?? [])
-      .map((item: { id: string; qty: number | null }) => ({
-        id: item.id,
-        qty: Math.max(0, Math.floor(n(item.qty))),
-      }))
+      .map(
+        (item: {
+          id: string;
+          qty: number | null;
+          line_total: number | null;
+          unit_price: number | null;
+        }) => {
+          const qty = Math.max(0, Math.floor(n(item.qty)));
+          const unitPrice = Math.max(0, n(item.unit_price));
+          const calculatedTotal = ceil4(unitPrice * qty);
+
+          return {
+            id: item.id,
+            qty,
+            // 항상 "개당 상품금액 × 남은 수량"으로 다시 계산한다.
+            // 저장된 line_total이 정상이라면 같은 값이며, 혹시 0이어도 unit_price와 수량으로 복구된다.
+            remaining_product_total: Math.max(
+              calculatedTotal,
+              Math.max(0, n(item.line_total)),
+            ),
+          };
+        },
+      )
       .filter((item) => item.qty > 0);
 
     // 기존 배분합을 그대로 유지한다. 배송비/관부과세 총액 자체를 바꾸는 게 아니라,
@@ -1295,9 +1365,20 @@ async function rebalanceSharedCostsAfterRefund(
     // 모두 환불되어 남은 재고가 없으면 비용을 억지로 상품에 남기지 않는다.
     if (remainingItems.length === 0 || totalAllocatedKRW === 0) continue;
 
+    // 공동 추가비용은 항상 상품금액과 남은 수량이 함께 반영된
+    // "개당 상품금액 × 남은 수량" 비율로 다시 나눈다.
+    // 수량만으로 따로 배분하지 않는다.
+    const reallocationWeights = remainingItems.map((item) =>
+      Math.max(0, item.remaining_product_total),
+    );
+
+    // 상품 가격 정보가 전혀 없는 비정상 데이터라면 잘못된 수량배분을 하지 않고
+    // 기존 비용을 상품 원가에 억지로 붙이지 않는다.
+    if (reallocationWeights.every((weight) => weight <= 0)) continue;
+
     const redistributedAmounts = distributeByWeightsCeilIntSigned(
       totalAllocatedKRW,
-      remainingItems.map((item) => item.qty),
+      reallocationWeights,
     );
 
     const ins = await supabase.from("cost_allocations").insert(
@@ -1560,6 +1641,7 @@ function ItemSelectionManager({
 
 export default function DocumentsPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [purchasePayments, setPurchasePayments] = useState<PurchasePaymentRow[]>([]);
   const [items, setItems] = useState<PurchaseItemRow[]>([]);
   const [costs, setCosts] = useState<PurchaseCostRow[]>([]);
   const [allocations, setAllocations] = useState<CostAllocationRow[]>([]);
@@ -1646,6 +1728,20 @@ export default function DocumentsPage() {
   const [fTotalForeign, setFTotalForeign] = useState("");
   const [fTotalKRW, setFTotalKRW] = useState("");
   const [fMemo, setFMemo] = useState("");
+  const [draftPayments, setDraftPayments] = useState<DraftPayment[]>([
+    {
+      key: crypto.randomUUID(),
+      payment_date: "",
+      payment_method: "카드",
+      card_name: "",
+      currency: "USD",
+      currency_custom: "",
+      foreign_amount: "",
+      krw_amount: "",
+      memo: "",
+    },
+  ]);
+  const [draftPurchaseCosts, setDraftPurchaseCosts] = useState<DraftPurchaseCost[]>([]);
   const [purchaseReceiptFile, setPurchaseReceiptFile] = useState<File | null>(
     null,
   );
@@ -2240,9 +2336,19 @@ export default function DocumentsPage() {
       });
   }, [vendors, ecType, vendorUsageCountMap]);
 
+  const paymentKRWSum = useMemo(
+    () => draftPayments.reduce((sum, row) => sum + Math.max(0, n(row.krw_amount)), 0),
+    [draftPayments],
+  );
+
+  const paymentPrimary = useMemo(
+    () => draftPayments.find((row) => n(row.krw_amount) > 0) ?? draftPayments[0] ?? null,
+    [draftPayments],
+  );
+
   const draftPreview = useMemo(
-    () => computeDraftPreviewRows(draftItems, n(fTotalForeign), n(fTotalKRW)),
-    [draftItems, fTotalForeign, fTotalKRW],
+    () => computeDraftPreviewRows(draftItems, n(fTotalForeign), paymentKRWSum),
+    [draftItems, fTotalForeign, paymentKRWSum],
   );
 
   const draftPreviewMap = useMemo(() => {
@@ -2377,13 +2483,20 @@ export default function DocumentsPage() {
     setMsg(null);
 
     try {
-      const [pRes, iRes, cRes, aRes, arRes, vRes, fRes] = await Promise.all([
+      const [pRes, ppRes, iRes, cRes, aRes, arRes, vRes, fRes] = await Promise.all([
         supabase
           .from("purchase")
           .select(
             "id,created_at,supplier,purchase_date,payment_met,card_name,currency,fx_rate,total_foreign,total_amount,memo",
           )
           .order("created_at", { ascending: false }),
+
+        supabase
+          .from("purchase_payments")
+          .select(
+            "id,created_at,purchase_id,payment_date,payment_method,card_name,currency,foreign_amount,krw_amount,fx_rate,memo",
+          )
+          .order("created_at", { ascending: true }),
 
         supabase
           .from("purchase_items")
@@ -2424,6 +2537,7 @@ export default function DocumentsPage() {
       ]);
 
       if (pRes.error) throw pRes.error;
+      if (ppRes.error) throw ppRes.error;
       if (iRes.error) throw iRes.error;
       if (cRes.error) throw cRes.error;
       if (aRes.error) throw aRes.error;
@@ -2432,6 +2546,7 @@ export default function DocumentsPage() {
       if (fRes.error) throw fRes.error;
 
       const p = (pRes.data ?? []) as PurchaseRow[];
+      const pp = (ppRes.data ?? []) as PurchasePaymentRow[];
       const it = (iRes.data ?? []) as PurchaseItemRow[];
       const cs = (cRes.data ?? []) as PurchaseCostRow[];
       const as = (aRes.data ?? []) as CostAllocationRow[];
@@ -2440,6 +2555,7 @@ export default function DocumentsPage() {
       const fs = (fRes.data ?? []) as FileRow[];
 
       setPurchases(p);
+      setPurchasePayments(pp);
       setItems(it);
       setCosts(cs);
       setAllocations(as);
@@ -2705,6 +2821,20 @@ export default function DocumentsPage() {
     setFTotalForeign("");
     setFTotalKRW("");
     setFMemo("");
+    setDraftPayments([
+      {
+        key: crypto.randomUUID(),
+        payment_date: "",
+        payment_method: "카드",
+        card_name: "",
+        currency: "USD",
+        currency_custom: "",
+        foreign_amount: "",
+        krw_amount: "",
+        memo: "",
+      },
+    ]);
+    setDraftPurchaseCosts([]);
     setPurchaseReceiptFile(null);
     setExistingPurchaseReceiptPath(null);
     setDraftItems([
@@ -2746,6 +2876,37 @@ export default function DocumentsPage() {
     setFTotalForeign(String(p.total_foreign ?? ""));
     setFTotalKRW(String(p.total_amount ?? ""));
     setFMemo(p.memo ?? "");
+    const existingPayments = purchasePayments.filter((row) => row.purchase_id === p.id);
+    setDraftPayments(
+      existingPayments.length > 0
+        ? existingPayments.map((row) => ({
+            key: row.id,
+            payment_date: row.payment_date ?? p.purchase_date ?? "",
+            payment_method: row.payment_method ?? "카드",
+            card_name: row.card_name ?? "",
+            currency: normalizeCurrencySelectValue(row.currency),
+            currency_custom:
+              normalizeCurrencySelectValue(row.currency) === "직접입력" ? row.currency ?? "" : "",
+            foreign_amount: String(row.foreign_amount ?? ""),
+            krw_amount: String(row.krw_amount ?? ""),
+            memo: row.memo ?? "",
+          }))
+        : [
+            {
+              key: crypto.randomUUID(),
+              payment_date: p.purchase_date ?? "",
+              payment_method: p.payment_met ?? "카드",
+              card_name: p.card_name ?? "",
+              currency: normalizeCurrencySelectValue(p.currency),
+              currency_custom:
+                normalizeCurrencySelectValue(p.currency) === "직접입력" ? p.currency ?? "" : "",
+              foreign_amount: String(p.total_foreign ?? ""),
+              krw_amount: String(p.total_amount ?? ""),
+              memo: "기존 결제정보 이전",
+            },
+          ],
+    );
+    setDraftPurchaseCosts([]);
     setExistingPurchaseReceiptPath(getPurchaseReceiptPath(p.id));
     setPurchaseReceiptFile(null);
 
@@ -2820,18 +2981,38 @@ export default function DocumentsPage() {
     setErr(null);
     setMsg(null);
 
-    const totalKRW = n(fTotalKRW);
+    const totalKRW = paymentKRWSum;
     const totalForeign = n(fTotalForeign);
     const cur = currencyValue(fCurrency, fCurrencyCustom);
     const fx = calcFxRate(totalKRW, totalForeign);
+    const validPayments = draftPayments.filter((row) => n(row.krw_amount) > 0);
 
     if (!cur) {
       setErr("통화를 선택하거나 직접 입력해줘.");
       return;
     }
-    if (totalKRW <= 0 || totalForeign <= 0 || fx <= 0) {
-      setErr("원화총액/외화총액을 둘 다 입력해야 환율을 자동 계산할 수 있어.");
+    if (validPayments.length === 0 || totalKRW <= 0) {
+      setErr("결제내역을 1건 이상 입력하고 원화 실결제금액을 넣어줘.");
       return;
+    }
+    if (totalForeign <= 0 || fx <= 0) {
+      setErr("상품 기준 외화 총액을 입력해줘.");
+      return;
+    }
+    for (const payment of validPayments) {
+      const paymentCurrency = currencyValue(payment.currency, payment.currency_custom);
+      if (!paymentCurrency) {
+        setErr("각 결제내역의 통화를 선택하거나 직접 입력해줘.");
+        return;
+      }
+      if (!payment.payment_date || payment.payment_date.length !== 10) {
+        setErr("각 결제내역의 결제일을 YYYY-MM-DD 형식으로 입력해줘.");
+        return;
+      }
+      if (normalizeCurrencyCode(paymentCurrency) !== "KRW" && n(payment.foreign_amount) <= 0) {
+        setErr("외화 결제는 외화 결제금액도 입력해줘.");
+        return;
+      }
     }
 
     const computed = computeDraftForeignTotals(draftItems, totalForeign);
@@ -2852,8 +3033,8 @@ export default function DocumentsPage() {
           .update({
             supplier: fSupplier || null,
             purchase_date: fPurchaseDate || null,
-            payment_met: fPaymentMet || null,
-            card_name: fCardName || null,
+            payment_met: paymentPrimary?.payment_method || null,
+            card_name: paymentPrimary?.card_name || null,
             currency: cur,
             fx_rate: fx,
             total_foreign: totalForeign,
@@ -2868,8 +3049,8 @@ export default function DocumentsPage() {
           .insert({
             supplier: fSupplier || null,
             purchase_date: fPurchaseDate || null,
-            payment_met: fPaymentMet || null,
-            card_name: fCardName || null,
+            payment_met: paymentPrimary?.payment_method || null,
+            card_name: paymentPrimary?.card_name || null,
             currency: cur,
             fx_rate: fx,
             total_foreign: totalForeign,
@@ -2885,6 +3066,36 @@ export default function DocumentsPage() {
 
       if (!purchaseId) throw new Error("매입 ID를 찾을 수 없어.");
 
+      const deletePayments = await supabase
+        .from("purchase_payments")
+        .delete()
+        .eq("purchase_id", purchaseId);
+      if (deletePayments.error) throw deletePayments.error;
+
+      const paymentRows = validPayments.map((payment) => {
+        const paymentCurrency = currencyValue(payment.currency, payment.currency_custom);
+        const foreignAmount =
+          normalizeCurrencyCode(paymentCurrency) === "KRW"
+            ? n(payment.krw_amount)
+            : n(payment.foreign_amount);
+        return {
+          purchase_id: purchaseId,
+          payment_date: payment.payment_date,
+          payment_method: payment.payment_method || null,
+          card_name: payment.card_name || null,
+          currency: paymentCurrency,
+          foreign_amount: foreignAmount,
+          krw_amount: n(payment.krw_amount),
+          fx_rate:
+            normalizeCurrencyCode(paymentCurrency) === "KRW"
+              ? 1
+              : calcFxRate(n(payment.krw_amount), foreignAmount),
+          memo: payment.memo || null,
+        };
+      });
+      const insertPayments = await supabase.from("purchase_payments").insert(paymentRows);
+      if (insertPayments.error) throw insertPayments.error;
+
       const prevItems = itemsByPurchase.get(purchaseId) ?? [];
       const prevIds = new Set(prevItems.map((x) => x.id));
       const nextIds = new Set(
@@ -2899,6 +3110,8 @@ export default function DocumentsPage() {
           .in("id", deleteIds);
         if (delRes.error) throw delRes.error;
       }
+
+      const savedPurchaseItemIds: string[] = [];
 
       for (let idx = 0; idx < cleaned.length; idx++) {
         const d = cleaned[idx];
@@ -2938,6 +3151,7 @@ export default function DocumentsPage() {
         }
 
         if (!savedId) throw new Error("상품 저장 ID를 찾을 수 없어.");
+        savedPurchaseItemIds.push(savedId);
 
         if (d.photoFile) {
           await upsertPurchaseFile({
@@ -2946,6 +3160,55 @@ export default function DocumentsPage() {
             file: d.photoFile,
             oldPath: d.existingPhotoPath ?? null,
           });
+        }
+      }
+
+      if (buyMode === "create" && draftPurchaseCosts.length > 0) {
+        const itemWeights = cleaned.map((row) => Math.max(0, row.foreign_total * fx));
+
+        for (const draftCost of draftPurchaseCosts) {
+          const costCurrency = currencyValue(draftCost.currency, draftCost.currency_custom);
+          const costKRW = Math.max(0, n(draftCost.krw_amount));
+          if (!draftCost.cost_type || !costCurrency || costKRW <= 0) continue;
+          if (!draftCost.cost_date || draftCost.cost_date.length !== 10) {
+            throw new Error("추가비용 날짜를 YYYY-MM-DD 형식으로 입력해줘.");
+          }
+          const foreignAmount =
+            normalizeCurrencyCode(costCurrency) === "KRW"
+              ? costKRW
+              : Math.max(0, n(draftCost.foreign_amount));
+          if (normalizeCurrencyCode(costCurrency) !== "KRW" && foreignAmount <= 0) {
+            throw new Error("외화 추가비용은 외화금액도 입력해줘.");
+          }
+
+          const costInsert = await supabase
+            .from("purchase_costs")
+            .insert({
+              purchase_id: purchaseId,
+              cost_type: draftCost.cost_type,
+              amount: foreignAmount,
+              currency: costCurrency,
+              fx_rate:
+                normalizeCurrencyCode(costCurrency) === "KRW"
+                  ? 1
+                  : calcFxRate(costKRW, foreignAmount),
+              memo: draftCost.memo || null,
+              vendor_name: draftCost.vendor_name || null,
+              cost_date: draftCost.cost_date,
+            })
+            .select("id")
+            .single();
+          if (costInsert.error) throw costInsert.error;
+
+          const allocated = distributeByWeightsCeilIntSigned(costKRW, itemWeights);
+          const allocationInsert = await supabase.from("cost_allocations").insert(
+            savedPurchaseItemIds.map((itemId, index) => ({
+              purchase_cost_id: costInsert.data.id,
+              purchase_item_id: itemId,
+              allocated_amount: allocated[index] ?? 0,
+            })),
+          );
+          if (allocationInsert.error) throw allocationInsert.error;
         }
       }
 
@@ -3029,7 +3292,7 @@ export default function DocumentsPage() {
       if (del.error) throw del.error;
 
       // 버튼을 따로 누를 필요 없이, 환불 취소로 수량이 되돌아간 경우에도
-      // 연결된 배송비·관부과세를 현재 수량 기준으로 자동 재배분한다.
+      // 연결된 공동 추가비용을 환불 후 남은 상품 총금액(개당 금액 × 남은 수량) 기준으로 자동 재배분한다.
       if (isRefund && affectedItemIds.length > 0) {
         await rebalanceSharedCostsAfterRefund(
           affectedItemIds,
@@ -4874,12 +5137,31 @@ export default function DocumentsPage() {
         </div>
       </div>
 
+      <style jsx global>{`
+        @media (min-width: 700px) and (max-width: 1180px) {
+          [data-tablet-role="purchase-buy-form"] [data-tablet-role="purchase-form-grid"] {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+          [data-tablet-role="purchase-buy-form"] input,
+          [data-tablet-role="purchase-buy-form"] select,
+          [data-tablet-role="purchase-buy-form"] textarea {
+            min-width: 0 !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          [data-tablet-role="purchase-buy-form"] button {
+            max-width: 100%;
+          }
+        }
+      `}</style>
+
       <SafeModal
         open={buyModalOpen}
         title={buyMode === "edit" ? "매입 수정" : "매입 등록 (안에 상품까지)"}
         onClose={requestCloseBuyModal}
       >
         <div
+          data-tablet-role="purchase-buy-form"
           onInputCapture={() => setBuyDirty(true)}
           onChangeCapture={() => setBuyDirty(true)}
         >
@@ -4903,7 +5185,7 @@ export default function DocumentsPage() {
             </button>
           </div>
 
-          <div style={styles.grid2}>
+          <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
             <div style={styles.field}>
               <div style={styles.label}>거래처(선택)</div>
               <select
@@ -4934,86 +5216,120 @@ export default function DocumentsPage() {
               />
             </div>
 
+            <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div>
+                  <div style={styles.label}>결제내역</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>카드·계좌·통화가 달라도 결제 건별로 입력해. 원화 실결제 합계가 상품에 자동 배분돼.</div>
+                </div>
+                <button
+                  type="button"
+                  style={styles.btn("ghost")}
+                  onClick={() => setDraftPayments((prev) => [...prev, {
+                    key: crypto.randomUUID(), payment_date: fPurchaseDate, payment_method: "카드", card_name: "",
+                    currency: fCurrency, currency_custom: fCurrencyCustom, foreign_amount: "", krw_amount: "", memo: "",
+                  }])}
+                >
+                  + 결제 추가
+                </button>
+              </div>
+
+              {draftPayments.map((payment, index) => (
+                <div key={payment.key} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, display: "grid", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <strong>결제 {index + 1}</strong>
+                    <button type="button" style={styles.btn("danger")} onClick={() => setDraftPayments((prev) => prev.length === 1 ? prev : prev.filter((row) => row.key !== payment.key))}>삭제</button>
+                  </div>
+                  <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
+                    <div style={styles.field}><div style={styles.label}>결제일</div><input style={styles.input} value={payment.payment_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_date: formatDateInput(e.target.value) } : row))} /></div>
+                    <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="기타">기타</option></select></div>
+                    <div style={styles.field}><div style={styles.label}>카드명·계좌(선택)</div><input style={styles.input} value={payment.card_name} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, card_name: e.target.value } : row))} placeholder="예: 신한 / 사업자계좌" /></div>
+                    <div style={styles.field}><div style={styles.label}>결제 통화</div><select style={styles.select} value={payment.currency} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{payment.currency === "직접입력" && <input style={styles.input} value={payment.currency_custom} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency_custom: e.target.value } : row))} placeholder="예: THB" />}</div>
+                    <div style={styles.field}><div style={styles.label}>외화 결제금액</div><input style={styles.input} value={payment.foreign_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, foreign_amount: e.target.value } : row))} placeholder="원화 결제면 비워도 됨" /></div>
+                    <div style={styles.field}><div style={styles.label}>원화 실결제금액</div><input style={styles.input} value={payment.krw_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, krw_amount: e.target.value } : row))} placeholder="카드 승인·이체된 원화" /></div>
+                    <div style={styles.field}><div style={styles.label}>개별 환율</div><input style={{ ...styles.input, background: "#f3f4f6" }} readOnly value={normalizeCurrencyCode(currencyValue(payment.currency, payment.currency_custom)) === "KRW" ? "1" : calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)) > 0 ? calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)).toFixed(4) : ""} /></div>
+                    <div style={styles.field}><div style={styles.label}>결제 메모</div><input style={styles.input} value={payment.memo} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, memo: e.target.value } : row))} /></div>
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ borderRadius: 14, background: "#f5f3ff", padding: 14, fontWeight: 900 }}>총 원화 실결제금액: {fmtKRW(paymentKRWSum)}</div>
+            </div>
+
             <div style={styles.field}>
-              <div style={styles.label}>결제수단(선택)</div>
-              <select
-                style={styles.select}
-                value={fPaymentMet}
-                onChange={(e) => setFPaymentMet(e.target.value)}
-              >
-                <option value="카드">카드</option>
-                <option value="현금">현금</option>
-                <option value="계좌이체">계좌이체</option>
-                <option value="기타">기타</option>
+              <div style={styles.label}>상품 기준 통화</div>
+              <select style={styles.select} value={fCurrency} onChange={(e) => setFCurrency(e.target.value)}>
+                {CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
+              {fCurrency === "직접입력" && <input style={styles.input} value={fCurrencyCustom} onChange={(e) => setFCurrencyCustom(e.target.value)} placeholder="예: THB" />}
+            </div>
+            <div style={styles.field}>
+              <div style={styles.label}>상품 외화 총액</div>
+              <input style={styles.input} value={fTotalForeign} onChange={(e) => setFTotalForeign(e.target.value)} placeholder="상품 가격 합계" />
+            </div>
+            <div style={styles.field}>
+              <div style={styles.label}>상품 배분용 평균환율</div>
+              <input style={{ ...styles.input, background: "#f3f4f6" }} readOnly value={calcFxRate(paymentKRWSum, n(fTotalForeign)) > 0 ? calcFxRate(paymentKRWSum, n(fTotalForeign)).toFixed(4) : ""} />
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>카드명(선택)</div>
-              <input
-                style={styles.input}
-                value={fCardName}
-                onChange={(e) => setFCardName(e.target.value)}
-                placeholder="예: 신한/토스/트래블카드"
-              />
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>통화</div>
-              <select
-                style={styles.select}
-                value={fCurrency}
-                onChange={(e) => setFCurrency(e.target.value)}
-              >
-                {CURRENCY_OPTIONS.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
+            {buyMode === "create" && (
+              <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div>
+                    <div style={styles.label}>추가비용 함께 등록(선택)</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>배송비·관부과세·기타비용을 매입 저장과 동시에 상품금액 비율로 배분해.</div>
+                  </div>
+                  <button type="button" style={styles.btn("ghost")} onClick={() => setDraftPurchaseCosts((prev) => [...prev, { key: crypto.randomUUID(), cost_type: "배송비(거래처)", currency: "KRW", currency_custom: "", foreign_amount: "", krw_amount: "", vendor_name: fSupplier, cost_date: fPurchaseDate, memo: "" }])}>+ 추가비용</button>
+                </div>
+                {draftPurchaseCosts.map((cost, index) => (
+                  <div key={cost.key} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, display: "grid", gap: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><strong>추가비용 {index + 1}</strong><button type="button" style={styles.btn("danger")} onClick={() => setDraftPurchaseCosts((prev) => prev.filter((row) => row.key !== cost.key))}>삭제</button></div>
+                    <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
+                      <div style={styles.field}><div style={styles.label}>종류</div><select style={styles.select} value={cost.cost_type} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, cost_type: e.target.value } : row))}>{COST_TYPE_OPTIONS.filter((x) => x !== "환불" && x !== "카드할인").map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+                      <div style={styles.field}><div style={styles.label}>날짜</div><input style={styles.input} value={cost.cost_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, cost_date: formatDateInput(e.target.value) } : row))} /></div>
+                      <div style={styles.field}><div style={styles.label}>통화</div><select style={styles.select} value={cost.currency} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{cost.currency === "직접입력" && <input style={styles.input} value={cost.currency_custom} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, currency_custom: e.target.value } : row))} />}</div>
+                      <div style={styles.field}><div style={styles.label}>외화금액</div><input style={styles.input} value={cost.foreign_amount} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, foreign_amount: e.target.value } : row))} placeholder="원화면 비워도 됨" /></div>
+                      <div style={styles.field}><div style={styles.label}>원화 실결제금액</div><input style={styles.input} value={cost.krw_amount} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, krw_amount: e.target.value } : row))} /></div>
+                      <div style={styles.field}>
+                        <div style={styles.label}>거래처·배송업체</div>
+                        <input
+                          style={styles.input}
+                          list={`draft-cost-vendors-${cost.key}`}
+                          value={cost.vendor_name}
+                          placeholder="목록에서 선택하거나 직접 입력"
+                          onChange={(e) =>
+                            setDraftPurchaseCosts((prev) =>
+                              prev.map((row) =>
+                                row.key === cost.key
+                                  ? { ...row, vendor_name: e.target.value }
+                                  : row,
+                              ),
+                            )
+                          }
+                        />
+                        <datalist id={`draft-cost-vendors-${cost.key}`}>
+                          {vendors
+                            .filter((vendor) => {
+                              if (!vendor.name?.trim()) return false;
+                              if (cost.cost_type === "배송비(거래처)" || cost.cost_type === "잔금") {
+                                return !!vendor.is_product_supplier;
+                              }
+                              if (cost.cost_type === "배송비(배대지)" || cost.cost_type === "관부과세") {
+                                return !!vendor.is_forwarder || !!vendor.is_carry_in;
+                              }
+                              return true;
+                            })
+                            .map((vendor) => (
+                              <option key={vendor.id} value={vendor.name ?? ""} />
+                            ))}
+                        </datalist>
+                      </div>
+                      <div style={{ ...styles.field, gridColumn: "1 / -1" }}><div style={styles.label}>메모</div><input style={styles.input} value={cost.memo} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, memo: e.target.value } : row))} /></div>
+                    </div>
+                  </div>
                 ))}
-              </select>
-              {fCurrency === "직접입력" && (
-                <input
-                  style={styles.input}
-                  value={fCurrencyCustom}
-                  onChange={(e) => setFCurrencyCustom(e.target.value)}
-                  placeholder="예: THB"
-                />
-              )}
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>외화 총액</div>
-              <input
-                style={styles.input}
-                value={fTotalForeign}
-                onChange={(e) => setFTotalForeign(e.target.value)}
-                placeholder="숫자만"
-              />
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>원화 총액(실결제)</div>
-              <input
-                style={styles.input}
-                value={fTotalKRW}
-                onChange={(e) => setFTotalKRW(e.target.value)}
-                placeholder="숫자만"
-              />
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>환율(자동 계산)</div>
-              <input
-                style={{ ...styles.input, background: "#f3f4f6" }}
-                readOnly
-                value={
-                  calcFxRate(n(fTotalKRW), n(fTotalForeign)) > 0
-                    ? calcFxRate(n(fTotalKRW), n(fTotalForeign)).toFixed(4)
-                    : ""
-                }
-                placeholder="자동 계산"
-              />
-            </div>
+              </div>
+            )}
 
             <div style={{ gridColumn: "1 / -1" }}>
               <div style={styles.label}>매입영수증</div>
@@ -5681,7 +5997,7 @@ export default function DocumentsPage() {
             {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
             <b>입력 금액대비 전체 자동보정</b>
             {cType === "환불"
-              ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 환불한 해당 상품의 남은 원가에만 더해지고, 더 많으면 그 상품 원가에서만 차감돼.\n배송비·관부과세는 환불 후 남은 상품 수량 기준으로 자동 재배분돼."
+              ? "\n[환불 처리]\n• 부분환불: 남은 수량의 원가만 다시 계산\n• 전체환불: 수량 0, 상품 원가에 차손·차익 미반영\n• 차손·차익: 전체환불이면 별도 손익으로만 기록\n\n[공동 추가비용 재배분]\n• 대상: 배송비·관부과세·잔금·기타·카드할인\n• 기준: 개당 상품금액 × 남은 수량\n• 전체환불 상품: 재배분 대상 제외\n• 수량만 기준으로 나누지 않음"
               : cType === "카드할인"
                 ? "\n※ 카드할인은 선택 상품 원가에서 자동 차감돼."
                 : ""}
@@ -6162,7 +6478,7 @@ export default function DocumentsPage() {
                 {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
                 <b>입력 금액대비 전체 자동보정</b>
                 {ecType === "환불"
-                  ? "\n※ 실제 환불금액이 원가보다 적으면 차손(+)이 환불한 해당 상품의 남은 원가에만 더해지고, 더 많으면 그 상품 원가에서만 차감돼.\n배송비·관부과세는 환불 후 남은 상품 수량 기준으로 자동 재배분돼."
+                  ? "\n[환불 처리]\n• 부분환불: 남은 수량의 원가만 다시 계산\n• 전체환불: 수량 0, 상품 원가에 차손·차익 미반영\n• 차손·차익: 전체환불이면 별도 손익으로만 기록\n\n[공동 추가비용 재배분]\n• 대상: 배송비·관부과세·잔금·기타·카드할인\n• 기준: 개당 상품금액 × 남은 수량\n• 전체환불 상품: 재배분 대상 제외\n• 수량만 기준으로 나누지 않음"
                   : ecType === "카드할인"
                     ? "\n※ 카드할인은 선택 상품 원가에서 자동 차감돼."
                     : ""}

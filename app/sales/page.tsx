@@ -1334,6 +1334,7 @@ export default function SalesPage() {
                           <td className="px-2 py-3 align-top">
                             <div className="text-sm font-bold text-slate-500">상품 없음</div>
                             <div data-tablet-role="sales-item-meta" className="mt-1 text-xs text-slate-500">{rowChannel} · {row.sale_date}</div>
+                            <div data-tablet-role="sales-item-memo" className="mt-1 whitespace-normal break-words text-xs font-medium text-slate-600">메모: {saleMemo}</div>
                           </td>
                           <td className="px-2 py-3 align-top">
                             <span
@@ -1439,6 +1440,12 @@ export default function SalesPage() {
                                 <div data-tablet-role="sales-item-meta" className="mt-1 text-xs text-slate-500">
                                   {rowChannel} · {row.sale_date}
                                 </div>
+                                <div
+                                  data-tablet-role="sales-item-memo"
+                                  className="mt-1 whitespace-normal break-words text-xs font-medium text-slate-600"
+                                >
+                                  메모: {saleMemo}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -1527,6 +1534,35 @@ export default function SalesPage() {
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        [data-page="sales"] [data-tablet-role="sales-item-memo"] {
+          display: none;
+        }
+        html[data-view-mode="tablet"] [data-page="sales"] [data-tablet-role="sales-item-memo"] {
+          display: block !important;
+          margin-top: 4px;
+          max-width: 100%;
+          color: #64748b;
+          font-size: 11px;
+          line-height: 1.35;
+          white-space: normal !important;
+          overflow-wrap: anywhere;
+        }
+
+        @media (min-width: 700px) and (max-width: 1279px) {
+          [data-page="sales"] [data-tablet-role="sales-item-memo"] {
+            display: block !important;
+            margin-top: 4px;
+            max-width: 100%;
+            color: #64748b;
+            font-size: 11px;
+            line-height: 1.35;
+            white-space: normal !important;
+            overflow-wrap: anywhere;
+          }
+        }
+      `}</style>
 
       <SafeModal
         open={open}
