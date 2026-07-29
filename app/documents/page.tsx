@@ -1156,24 +1156,10 @@ function resolveDraftForeignTotals(
     };
   }
 
-  // 3) 전부 입력했는데 총합이 안 맞음 → 입력금액대비 전체 보정
-  const enteredSum = round4(
-    rows.reduce((acc, row) => acc + row.foreign_total, 0),
-  );
-
-  if (Math.abs(enteredSum - total) <= 0.0001) {
-    return {
-      ok: true as const,
-      message: "",
-      rows,
-    };
-  }
-
-  const weights = rows.map((r) => Math.max(0, r.entered_foreign_total));
-  const distributed = distributeByWeightsCeil(total, weights);
-
-  distributed.forEach((value, idx) => {
-    rows[idx].foreign_total = value;
+  // 3) 전부 입력한 경우에는 인보이스 상품총액과 달라도 입력값을 그대로 유지한다.
+  // 차이는 상품금액을 억지로 보정하지 않고 배송비에서 더하거나 뺀다.
+  rows.forEach((row) => {
+    row.foreign_total = row.entered_foreign_total;
   });
 
   return {
@@ -1220,17 +1206,6 @@ function computeDraftForeignTotals(
     photoFile: r.photoFile,
     existingPhotoPath: r.existingPhotoPath,
   }));
-
-  const finalSum = round4(result.reduce((acc, x) => acc + x.foreign_total, 0));
-  const total = ceil4(totalForeign);
-
-  if (Math.abs(finalSum - total) > 0.01) {
-    return {
-      ok: false as const,
-      message: `자동 계산 후 상품 외화총합(${fmtNum(finalSum)})이 외화 총액(${fmtNum(total)})과 같아야 해.`,
-      rows: [],
-    };
-  }
 
   return { ok: true as const, message: "", rows: result };
 }
@@ -2520,57 +2495,6 @@ export default function DocumentsPage() {
     [draftPayments],
   );
 
-  const purchasePaymentComposition = useMemo(() => {
-    // 인보이스 상품총액은 "상품과 배송비를 나누는 기준"이다.
-    // 상품별 입력합계와 달라도 괜찮고, 상품별 원화배분은 상품 입력금액 비율로 처리한다.
-    const invoiceProductForeign = Math.max(0, n(fTotalForeign));
-    const actualCombinedForeign = fShippingIncluded
-      ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
-      : Math.max(0, paymentForeignSum || invoiceProductForeign);
-    const calculatedShippingForeign = fShippingIncluded
-      ? Math.max(
-          0,
-          round4(actualCombinedForeign - invoiceProductForeign),
-        )
-      : 0;
-    const totalKRW = Math.max(0, Math.round(paymentKRWSum));
-
-    if (
-      !fShippingIncluded ||
-      actualCombinedForeign <= 0 ||
-      invoiceProductForeign <= 0
-    ) {
-      return {
-        productForeign: invoiceProductForeign,
-        shippingForeign: 0,
-        combinedForeign: actualCombinedForeign || invoiceProductForeign,
-        productKRW: totalKRW,
-        shippingKRW: 0,
-        productFx: calcFxRate(totalKRW, invoiceProductForeign),
-      };
-    }
-
-    const productKRW = Math.round(
-      (totalKRW * invoiceProductForeign) / actualCombinedForeign,
-    );
-    const shippingKRW = totalKRW - productKRW;
-
-    return {
-      productForeign: invoiceProductForeign,
-      shippingForeign: calculatedShippingForeign,
-      combinedForeign: actualCombinedForeign,
-      productKRW,
-      shippingKRW,
-      productFx: calcFxRate(productKRW, invoiceProductForeign),
-    };
-  }, [
-    fTotalForeign,
-    fShippingIncluded,
-    fCombinedForeign,
-    paymentForeignSum,
-    paymentKRWSum,
-  ]);
-
   const enteredDraftItemForeignSum = useMemo(
     () =>
       round4(
@@ -2587,6 +2511,64 @@ export default function DocumentsPage() {
       ),
     [draftItems],
   );
+
+  const purchasePaymentComposition = useMemo(() => {
+    const invoiceProductForeign = Math.max(0, n(fTotalForeign));
+    const enteredProductForeign = Math.max(0, enteredDraftItemForeignSum);
+    const actualProductForeign =
+      enteredProductForeign > 0
+        ? enteredProductForeign
+        : invoiceProductForeign;
+    const actualCombinedForeign = fShippingIncluded
+      ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
+      : Math.max(0, paymentForeignSum || actualProductForeign);
+    // 인보이스와 상품입력합계의 차이는 상품을 보정하지 않고 배송비에서 흡수한다.
+    const calculatedShippingForeign = fShippingIncluded
+      ? Math.max(
+          0,
+          round4(actualCombinedForeign - actualProductForeign),
+        )
+      : 0;
+    const totalKRW = Math.max(0, Math.round(paymentKRWSum));
+
+    if (
+      !fShippingIncluded ||
+      actualCombinedForeign <= 0 ||
+      actualProductForeign <= 0
+    ) {
+      return {
+        invoiceProductForeign,
+        productForeign: actualProductForeign,
+        shippingForeign: 0,
+        combinedForeign: actualCombinedForeign || actualProductForeign,
+        productKRW: totalKRW,
+        shippingKRW: 0,
+        productFx: calcFxRate(totalKRW, actualProductForeign),
+      };
+    }
+
+    const productKRW = Math.round(
+      (totalKRW * actualProductForeign) / actualCombinedForeign,
+    );
+    const shippingKRW = totalKRW - productKRW;
+
+    return {
+      invoiceProductForeign,
+      productForeign: actualProductForeign,
+      shippingForeign: calculatedShippingForeign,
+      combinedForeign: actualCombinedForeign,
+      productKRW,
+      shippingKRW,
+      productFx: calcFxRate(productKRW, actualProductForeign),
+    };
+  }, [
+    fTotalForeign,
+    enteredDraftItemForeignSum,
+    fShippingIncluded,
+    fCombinedForeign,
+    paymentForeignSum,
+    paymentKRWSum,
+  ]);
 
   // 상품명·수량·개당 외화가격을 입력하면 상품 합계를 자동으로 계산하고,
   // 사용자가 직접 고치기 전까지 인보이스 상품총액과 결제 외화금액도 자동으로 맞춘다.
@@ -2649,9 +2631,13 @@ export default function DocumentsPage() {
     if (paymentForeignSum <= 0) return;
 
     const nextCombined = round4(paymentForeignSum);
+    const actualProductForeign =
+      enteredDraftItemForeignSum > 0
+        ? enteredDraftItemForeignSum
+        : Math.max(0, n(fTotalForeign));
     const nextShipping = Math.max(
       0,
-      round4(nextCombined - Math.max(0, n(fTotalForeign))),
+      round4(nextCombined - actualProductForeign),
     );
 
     if (Math.abs(n(fCombinedForeign) - nextCombined) > 0.0001) {
@@ -2664,6 +2650,7 @@ export default function DocumentsPage() {
     fShippingIncluded,
     paymentForeignSum,
     fTotalForeign,
+    enteredDraftItemForeignSum,
     fCombinedForeign,
     fShippingForeign,
   ]);
@@ -2704,10 +2691,18 @@ export default function DocumentsPage() {
     () =>
       computeDraftPreviewRows(
         draftItems,
-        n(fTotalForeign),
+        Math.max(
+          0,
+          enteredDraftItemForeignSum || n(fTotalForeign),
+        ),
         purchasePaymentComposition.productKRW,
       ),
-    [draftItems, fTotalForeign, purchasePaymentComposition.productKRW],
+    [
+      draftItems,
+      enteredDraftItemForeignSum,
+      fTotalForeign,
+      purchasePaymentComposition.productKRW,
+    ],
   );
 
   const draftPreviewMap = useMemo(() => {
@@ -3523,7 +3518,13 @@ export default function DocumentsPage() {
     setMsg(null);
 
     const totalKRW = Math.max(0, Math.round(paymentKRWSum));
-    const productForeign = Math.max(0, n(fTotalForeign));
+    const invoiceProductForeign = Math.max(0, n(fTotalForeign));
+    const productForeign = Math.max(
+      0,
+      purchasePaymentComposition.productForeign ||
+        enteredDraftItemForeignSum ||
+        invoiceProductForeign,
+    );
     const combinedForeign = fShippingIncluded
       ? Math.max(
           0,
@@ -3551,8 +3552,8 @@ export default function DocumentsPage() {
       setErr("결제내역을 1건 이상 입력하고 원화 실결제금액을 넣어줘.");
       return;
     }
-    if (productForeign <= 0 || fx <= 0) {
-      setErr("인보이스 상품 외화총액을 입력해줘.");
+    if (invoiceProductForeign <= 0 || productForeign <= 0 || fx <= 0) {
+      setErr("인보이스 상품 외화총액과 상품별 외화가격을 입력해줘.");
       return;
     }
     if (fShippingIncluded) {
@@ -3567,7 +3568,7 @@ export default function DocumentsPage() {
         0.01
       ) {
         setErr(
-          `인보이스 상품 외화총액(${fmtNum(
+          `상품입력 외화합계(${fmtNum(
             productForeign,
           )}) + 배송비 외화총액(${fmtNum(
             shippingForeign,
@@ -3686,7 +3687,7 @@ export default function DocumentsPage() {
               fShippingIncluded
                 ? {
                     enabled: true,
-                    product_foreign: productForeign,
+                    product_foreign: invoiceProductForeign,
                     shipping_foreign: shippingForeign,
                     total_foreign: combinedForeign,
                     product_krw: productKRW,
@@ -3717,7 +3718,7 @@ export default function DocumentsPage() {
               fShippingIncluded
                 ? {
                     enabled: true,
-                    product_foreign: productForeign,
+                    product_foreign: invoiceProductForeign,
                     shipping_foreign: shippingForeign,
                     total_foreign: combinedForeign,
                     product_krw: productKRW,
@@ -6342,7 +6343,7 @@ export default function DocumentsPage() {
                         style={{ ...styles.input, background: "#f3f4f6" }}
                         value={fShippingForeign}
                         readOnly
-                        placeholder="결제 외화합계 - 인보이스 상품총액"
+                        placeholder="결제 외화합계 - 상품리스트 입력합계"
                       />
                     </div>
 
@@ -6607,12 +6608,11 @@ export default function DocumentsPage() {
           >
             ① 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
             {"\n"}② 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
-            {"\n"}③ 상품리스트 합계와 인보이스 상품총액은 달라도 저장 가능하고, 차이는{" "}
-            <b>입력한 상품금액 비율대로 자동보정</b>돼.
+            {"\n"}③ 상품리스트 합계와 인보이스 상품총액이 달라도 상품가격은 건드리지 않고, 차이는{" "}
+            <b>배송비에서 자동으로 더하거나 빼서 맞춰</b>.
             {"\n"}④ 결제 외화합계는 배송비 포함 실제 송금액이고, 배송비 외화는{" "}
-            <b>결제 외화합계 - 인보이스 상품총액</b>으로 자동계산돼.
-            실제 원화는 인보이스 상품총액과 배송비 외화 비율로 나눈 뒤,
-            상품 원화와 배송비 원화를 각각 상품별 입력금액 비율로 배분해.
+            <b>결제 외화합계 - 상품리스트 입력합계</b>로 자동계산돼.
+            인보이스와 상품리스트 차이는 배송비가 흡수하고, 배송비 원화는 상품 수량 비율로 배분해.
             {"\n"}
             소수점 오차는 마지막 항목에서 정리돼.
           </div>
@@ -6646,7 +6646,7 @@ export default function DocumentsPage() {
                 인보이스 상품총액: <b>{fmtNum(n(fTotalForeign))}</b>
               </span>
               <span>
-                자동 조정차액:{" "}
+                배송비 반영차액:{" "}
                 <b>
                   {fmtNum(
                     round4(
