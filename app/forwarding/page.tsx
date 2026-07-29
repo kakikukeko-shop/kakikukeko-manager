@@ -227,9 +227,15 @@ export default function ForwardingCalculatorPage() {
 
       if (!cost || !item) return
 
+      const normalizedCostType = normalizeCostType(
+        cost.cost_type,
+      )
+
       if (
-        normalizeCostType(cost.cost_type) !==
-        '배송비(배대지)'
+        normalizedCostType !==
+          '배송비(배대지)' &&
+        normalizedCostType !==
+          '배송비(거래처)'
       ) {
         return
       }
@@ -402,7 +408,8 @@ export default function ForwardingCalculatorPage() {
             }}
           >
             거래처관리에서 배대지로 등록한 업체와
-            실제 배송비 기록을 기준으로 계산해.
+            배송비(배대지)·상품과 함께 결제한 배송비 기록을
+            기준으로 계산해.
           </p>
         </div>
 
@@ -656,11 +663,11 @@ export default function ForwardingCalculatorPage() {
                 }}
               >
                 선택한 배대지의 실제
-                ‘배송비(배대지)’ 배분
-                기록이 아직 없어.
-                매입관리에서 배송비를
-                등록한 뒤 다시 계산하면
-                예상값이 생겨.
+                배송비 배분 기록이 아직 없어.
+                ‘배송비(배대지)’뿐 아니라
+                상품값과 함께 결제해
+                ‘배송비(거래처)’로 저장된
+                기록도 함께 계산해.
               </div>
             ) : null}
 
