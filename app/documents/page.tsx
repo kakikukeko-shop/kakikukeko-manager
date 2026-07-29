@@ -509,6 +509,8 @@ async function restoreRefundAdjustedItemsFromMemo(
 
 const STORAGE_BUCKET = "purchase-files";
 const PURCHASE_DRAFT_STORAGE_KEY = "kakikukeko-purchase-draft-v2";
+const SHIPPING_REALLOCATION_DONE_KEY =
+  "kakikukeko-shipping-reallocation-by-quantity-v1";
 
 const CURRENCY_OPTIONS = [
   { value: "KRW", label: "KRW(원)" },
@@ -1784,6 +1786,11 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [shippingReallocationDone, setShippingReallocationDone] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.localStorage.getItem(SHIPPING_REALLOCATION_DONE_KEY) === "done",
+  );
 
   const [buyModalOpen, setBuyModalOpen] = useState(false);
   const [buyMode, setBuyMode] = useState<"create" | "edit">("create");
@@ -4079,6 +4086,11 @@ export default function DocumentsPage() {
         updatedCount += 1;
       }
 
+      window.localStorage.setItem(
+        SHIPPING_REALLOCATION_DONE_KEY,
+        "done",
+      );
+      setShippingReallocationDone(true);
       setMsg(
         `기존 배송비 수량대비 재배분 완료 · ${updatedCount}건 적용${
           skippedCount > 0 ? ` / ${skippedCount}건 제외` : ""
@@ -5232,14 +5244,16 @@ export default function DocumentsPage() {
           새로고침
         </button>
 
-        <button
-          style={styles.btn("ghost")}
-          onClick={reallocateAllExistingShippingCostsByQuantity}
-          disabled={loading}
-          title="기존 배송비(거래처/배대지)를 현재 상품 수량 기준으로 다시 배분"
-        >
-          기존 배송비 수량대비 재배분
-        </button>
+        {!shippingReallocationDone ? (
+          <button
+            style={styles.btn("ghost")}
+            onClick={reallocateAllExistingShippingCostsByQuantity}
+            disabled={loading}
+            title="기존 배송비(거래처/배대지)를 현재 상품 수량 기준으로 다시 배분"
+          >
+            기존 배송비 수량대비 재배분
+          </button>
+        ) : null}
 
         {legacyRefundRestoreCandidates.length > 0 ? (
           <button
