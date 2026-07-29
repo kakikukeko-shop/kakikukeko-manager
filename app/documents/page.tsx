@@ -508,6 +508,7 @@ async function restoreRefundAdjustedItemsFromMemo(
 }
 
 const STORAGE_BUCKET = "purchase-files";
+const PURCHASE_DRAFT_STORAGE_KEY = "kakikukeko-purchase-draft-v2";
 
 const CURRENCY_OPTIONS = [
   { value: "KRW", label: "KRW(원)" },
@@ -892,6 +893,25 @@ function signedCostAmountByType(costType: string, amount: number) {
   return normalized === "카드할인" ? -absolute : absolute;
 }
 
+function isShippingCostType(costType: string | null | undefined) {
+  const normalized = normalizeCostType(costType);
+  return (
+    normalized === "배송비(거래처)" ||
+    normalized === "배송비(배대지)"
+  );
+}
+
+function getCostAllocationWeights(
+  costType: string | null | undefined,
+  rows: Array<{ qty?: number | null; foreign_total?: number | null }>,
+) {
+  if (isShippingCostType(costType)) {
+    return rows.map((row) => Math.max(0, n(row.qty)));
+  }
+
+  return rows.map((row) => Math.max(0, n(row.foreign_total)));
+}
+
 type ResolvedCostForeignRow = {
   item_id: string;
   item_name: string;
@@ -1202,7 +1222,7 @@ function computeDraftForeignTotals(
   const finalSum = round4(result.reduce((acc, x) => acc + x.foreign_total, 0));
   const total = ceil4(totalForeign);
 
-  if (Math.abs(finalSum - total) > 0.0001) {
+  if (Math.abs(finalSum - total) > 0.01) {
     return {
       ok: false as const,
       message: `자동 계산 후 상품 외화총합(${fmtNum(finalSum)})이 외화 총액(${fmtNum(total)})과 같아야 해.`,
@@ -1353,7 +1373,7 @@ async function updateRefundAdjustedItems(
  * 1) 환불 상품의 상품금액은 "원래 상품 전체금액 - 환불 대상 상품금액"으로 줄어든다.
  * 2) 남은 수량이 있는 상품만 배분 대상에 포함한다.
  * 3) 각 상품의 "개당 상품금액 × 남은 수량"을 다시 계산한다.
- * 4) 그 금액 비율로 공동 추가비용 전체를 재배분한다. 수량만으로 따로 나누지 않는다.
+ * 4) 배송비는 남은 수량 비율로, 관부과세·잔금·기타는 남은 상품금액 비율로 재배분한다.
  *
  * 환불 차익/차손(cost_type=환불)은 다른 상품으로 퍼뜨리지 않고
  * 환불 처리한 해당 상품에만 유지한다.
@@ -1451,15 +1471,14 @@ async function rebalanceSharedCostsAfterRefund(
     // 모두 환불되어 남은 재고가 없으면 비용을 억지로 상품에 남기지 않는다.
     if (remainingItems.length === 0 || totalAllocatedKRW === 0) continue;
 
-    // 공동 추가비용은 항상 상품금액과 남은 수량이 함께 반영된
-    // "개당 상품금액 × 남은 수량" 비율로 다시 나눈다.
-    // 수량만으로 따로 배분하지 않는다.
-    const reallocationWeights = remainingItems.map((item) =>
-      Math.max(0, item.remaining_product_total),
-    );
+    // 배송비는 남은 상품 수량 비율로, 관부과세·잔금·기타·카드할인은
+    // 남은 상품금액 비율로 재배분한다.
+    const reallocationWeights = isShippingCostType(cost.cost_type)
+      ? remainingItems.map((item) => Math.max(0, item.qty))
+      : remainingItems.map((item) =>
+          Math.max(0, item.remaining_product_total),
+        );
 
-    // 상품 가격 정보가 전혀 없는 비정상 데이터라면 잘못된 수량배분을 하지 않고
-    // 기존 비용을 상품 원가에 억지로 붙이지 않는다.
     if (reallocationWeights.every((weight) => weight <= 0)) continue;
 
     const redistributedAmounts = distributeByWeightsCeilIntSigned(
@@ -1772,6 +1791,7 @@ export default function DocumentsPage() {
     null,
   );
   const [buyDirty, setBuyDirty] = useState(false);
+  const [buyDraftNotice, setBuyDraftNotice] = useState("");
 
   const [costModalOpen, setCostModalOpen] = useState(false);
   const [costDirty, setCostDirty] = useState(false);
@@ -2458,9 +2478,35 @@ export default function DocumentsPage() {
   }, [vendors, ecType, vendorUsageCountMap]);
 
   const paymentKRWSum = useMemo(
-    () => draftPayments.reduce((sum, row) => sum + Math.max(0, n(row.krw_amount)), 0),
+    () =>
+      draftPayments.reduce(
+        (sum, row) => sum + Math.max(0, n(row.krw_amount)),
+        0,
+      ),
     [draftPayments],
   );
+
+  const paymentForeignSum = useMemo(() => {
+    const productCurrency = normalizeCurrencyCode(
+      currencyValue(fCurrency, fCurrencyCustom),
+    );
+
+    return round4(
+      draftPayments.reduce((sum, row) => {
+        const paymentCurrency = normalizeCurrencyCode(
+          currencyValue(row.currency, row.currency_custom),
+        );
+        if (!productCurrency || paymentCurrency !== productCurrency) return sum;
+
+        return (
+          sum +
+          (paymentCurrency === "KRW"
+            ? Math.max(0, n(row.krw_amount))
+            : Math.max(0, n(row.foreign_amount)))
+        );
+      }, 0),
+    );
+  }, [draftPayments, fCurrency, fCurrencyCustom]);
 
   const paymentPrimary = useMemo(
     () => draftPayments.find((row) => n(row.krw_amount) > 0) ?? draftPayments[0] ?? null,
@@ -2468,44 +2514,53 @@ export default function DocumentsPage() {
   );
 
   const purchasePaymentComposition = useMemo(() => {
-    const productForeign = Math.max(0, n(fTotalForeign));
-    const shippingForeign = fShippingIncluded
-      ? Math.max(0, n(fShippingForeign))
+    // 인보이스 상품총액은 "상품과 배송비를 나누는 기준"이다.
+    // 상품별 입력합계와 달라도 괜찮고, 상품별 원화배분은 상품 입력금액 비율로 처리한다.
+    const invoiceProductForeign = Math.max(0, n(fTotalForeign));
+    const actualCombinedForeign = fShippingIncluded
+      ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
+      : Math.max(0, paymentForeignSum || invoiceProductForeign);
+    const calculatedShippingForeign = fShippingIncluded
+      ? Math.max(
+          0,
+          round4(actualCombinedForeign - invoiceProductForeign),
+        )
       : 0;
-    const combinedForeign = fShippingIncluded
-      ? Math.max(0, n(fCombinedForeign))
-      : productForeign;
     const totalKRW = Math.max(0, Math.round(paymentKRWSum));
 
-    if (!fShippingIncluded || combinedForeign <= 0 || shippingForeign <= 0) {
+    if (
+      !fShippingIncluded ||
+      actualCombinedForeign <= 0 ||
+      invoiceProductForeign <= 0
+    ) {
       return {
-        productForeign,
+        productForeign: invoiceProductForeign,
         shippingForeign: 0,
-        combinedForeign: productForeign,
+        combinedForeign: actualCombinedForeign || invoiceProductForeign,
         productKRW: totalKRW,
         shippingKRW: 0,
-        productFx: calcFxRate(totalKRW, productForeign),
+        productFx: calcFxRate(totalKRW, invoiceProductForeign),
       };
     }
 
     const productKRW = Math.round(
-      (totalKRW * productForeign) / combinedForeign,
+      (totalKRW * invoiceProductForeign) / actualCombinedForeign,
     );
     const shippingKRW = totalKRW - productKRW;
 
     return {
-      productForeign,
-      shippingForeign,
-      combinedForeign,
+      productForeign: invoiceProductForeign,
+      shippingForeign: calculatedShippingForeign,
+      combinedForeign: actualCombinedForeign,
       productKRW,
       shippingKRW,
-      productFx: calcFxRate(productKRW, productForeign),
+      productFx: calcFxRate(productKRW, invoiceProductForeign),
     };
   }, [
     fTotalForeign,
     fShippingIncluded,
-    fShippingForeign,
     fCombinedForeign,
+    paymentForeignSum,
     paymentKRWSum,
   ]);
 
@@ -2580,6 +2635,62 @@ export default function DocumentsPage() {
     fShippingIncluded,
     fCombinedForeign,
     fTotalForeign,
+  ]);
+
+  useEffect(() => {
+    if (!fShippingIncluded) return;
+    if (paymentForeignSum <= 0) return;
+
+    const nextCombined = round4(paymentForeignSum);
+    const nextShipping = Math.max(
+      0,
+      round4(nextCombined - Math.max(0, n(fTotalForeign))),
+    );
+
+    if (Math.abs(n(fCombinedForeign) - nextCombined) > 0.0001) {
+      setFCombinedForeign(String(nextCombined));
+    }
+    if (Math.abs(n(fShippingForeign) - nextShipping) > 0.0001) {
+      setFShippingForeign(String(nextShipping));
+    }
+  }, [
+    fShippingIncluded,
+    paymentForeignSum,
+    fTotalForeign,
+    fCombinedForeign,
+    fShippingForeign,
+  ]);
+
+  useEffect(() => {
+    if (!buyModalOpen || !buyDirty) return;
+    const timer = window.setTimeout(() => {
+      savePurchaseDraft(false);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [
+    buyModalOpen,
+    buyDirty,
+    buyMode,
+    editingPurchaseId,
+    fSupplier,
+    fPurchaseDate,
+    fPaymentMet,
+    fCardName,
+    fCurrency,
+    fCurrencyCustom,
+    fTotalForeign,
+    fTotalForeignManuallyEdited,
+    manualPaymentForeignKeys,
+    fShippingIncluded,
+    fShippingForeign,
+    fCombinedForeign,
+    fShippingVendor,
+    fTotalKRW,
+    fMemo,
+    draftPayments,
+    draftPurchaseCosts,
+    draftItems,
+    existingPurchaseReceiptPath,
   ]);
 
   const draftPreview = useMemo(
@@ -3051,6 +3162,146 @@ export default function DocumentsPage() {
     setCostEditDirty(true);
   }
 
+  function getSerializablePurchaseDraft() {
+    return {
+      version: 2,
+      saved_at: new Date().toISOString(),
+      buyMode,
+      editingPurchaseId,
+      fSupplier,
+      fPurchaseDate,
+      fPaymentMet,
+      fCardName,
+      fCurrency,
+      fCurrencyCustom,
+      fTotalForeign,
+      fTotalForeignManuallyEdited,
+      manualPaymentForeignKeys,
+      fShippingIncluded,
+      fShippingForeign,
+      fCombinedForeign,
+      fShippingVendor,
+      fTotalKRW,
+      fMemo,
+      draftPayments,
+      draftPurchaseCosts,
+      draftItems: draftItems.map((item) => ({
+        ...item,
+        photoFile: null,
+      })),
+      existingPurchaseReceiptPath,
+    };
+  }
+
+  function savePurchaseDraft(showNotice = true) {
+    try {
+      window.localStorage.setItem(
+        PURCHASE_DRAFT_STORAGE_KEY,
+        JSON.stringify(getSerializablePurchaseDraft()),
+      );
+      if (showNotice) {
+        setBuyDraftNotice(
+          `임시저장 완료 · ${new Date().toLocaleTimeString("ko-KR")}`,
+        );
+      }
+    } catch (e: any) {
+      setErr(`임시저장 실패: ${e?.message ?? String(e)}`);
+    }
+  }
+
+  function loadPurchaseDraft() {
+    try {
+      const raw = window.localStorage.getItem(PURCHASE_DRAFT_STORAGE_KEY);
+      if (!raw) {
+        setBuyDraftNotice("불러올 임시저장이 없어.");
+        return;
+      }
+
+      const draft = JSON.parse(raw);
+      setBuyMode(draft.buyMode === "edit" ? "edit" : "create");
+      setEditingPurchaseId(draft.editingPurchaseId ?? null);
+      setFSupplier(draft.fSupplier ?? "");
+      setFPurchaseDate(draft.fPurchaseDate ?? "");
+      setFPaymentMet(draft.fPaymentMet ?? "카드");
+      setFCardName(draft.fCardName ?? "");
+      setFCurrency(draft.fCurrency ?? "USD");
+      setFCurrencyCustom(draft.fCurrencyCustom ?? "");
+      setFTotalForeign(String(draft.fTotalForeign ?? ""));
+      setFTotalForeignManuallyEdited(!!draft.fTotalForeignManuallyEdited);
+      setManualPaymentForeignKeys(
+        Array.isArray(draft.manualPaymentForeignKeys)
+          ? draft.manualPaymentForeignKeys
+          : [],
+      );
+      setFShippingIncluded(!!draft.fShippingIncluded);
+      setFShippingForeign(String(draft.fShippingForeign ?? ""));
+      setFCombinedForeign(String(draft.fCombinedForeign ?? ""));
+      setFShippingVendor(draft.fShippingVendor ?? "");
+      setFTotalKRW(String(draft.fTotalKRW ?? ""));
+      setFMemo(draft.fMemo ?? "");
+      setDraftPayments(
+        Array.isArray(draft.draftPayments) && draft.draftPayments.length > 0
+          ? draft.draftPayments
+          : [
+              {
+                key: crypto.randomUUID(),
+                payment_date: "",
+                payment_method: "카드",
+                card_name: "",
+                currency: "USD",
+                currency_custom: "",
+                foreign_amount: "",
+                krw_amount: "",
+                memo: "",
+              },
+            ],
+      );
+      setDraftPurchaseCosts(
+        Array.isArray(draft.draftPurchaseCosts)
+          ? draft.draftPurchaseCosts
+          : [],
+      );
+      setDraftItems(
+        Array.isArray(draft.draftItems) && draft.draftItems.length > 0
+          ? draft.draftItems.map((item: DraftItem) => ({
+              ...item,
+              key: item.key || crypto.randomUUID(),
+              foreign_unit_price: item.foreign_unit_price ?? "",
+              photoFile: null,
+            }))
+          : [
+              {
+                key: crypto.randomUUID(),
+                item_name: "",
+                qty: "1",
+                foreign_unit_price: "",
+                foreign_total: "",
+                memo: "",
+                is_preorder: false,
+                product_type: "기타",
+                photoFile: null,
+                existingPhotoPath: null,
+              },
+            ],
+      );
+      setExistingPurchaseReceiptPath(draft.existingPurchaseReceiptPath ?? null);
+      setPurchaseReceiptFile(null);
+      setBuyDirty(true);
+      setBuyDraftNotice(
+        draft.saved_at
+          ? `임시저장 불러옴 · ${new Date(draft.saved_at).toLocaleString("ko-KR")}`
+          : "임시저장 불러옴",
+      );
+    } catch (e: any) {
+      setErr(`임시저장 불러오기 실패: ${e?.message ?? String(e)}`);
+    }
+  }
+
+  function deletePurchaseDraft() {
+    window.localStorage.removeItem(PURCHASE_DRAFT_STORAGE_KEY);
+    setBuyDraftNotice("임시저장을 삭제했어.");
+  }
+
   function resetBuyForm() {
     setBuyMode("create");
     setEditingPurchaseId(null);
@@ -3100,6 +3351,7 @@ export default function DocumentsPage() {
       },
     ]);
     setBuyDirty(false);
+    setBuyDraftNotice("");
   }
 
   function openCreatePurchaseModal() {
@@ -3265,17 +3517,24 @@ export default function DocumentsPage() {
 
     const totalKRW = Math.max(0, Math.round(paymentKRWSum));
     const productForeign = Math.max(0, n(fTotalForeign));
-    const shippingForeign = fShippingIncluded
-      ? Math.max(0, n(fShippingForeign))
-      : 0;
     const combinedForeign = fShippingIncluded
-      ? Math.max(0, n(fCombinedForeign))
+      ? Math.max(
+          0,
+          purchasePaymentComposition.combinedForeign ||
+            paymentForeignSum ||
+            n(fCombinedForeign),
+        )
       : productForeign;
+    const shippingForeign = fShippingIncluded
+      ? Math.max(0, round4(combinedForeign - productForeign))
+      : 0;
     const productKRW = purchasePaymentComposition.productKRW;
     const shippingKRW = purchasePaymentComposition.shippingKRW;
     const cur = currencyValue(fCurrency, fCurrencyCustom);
     const fx = purchasePaymentComposition.productFx;
-    const validPayments = draftPayments.filter((row) => n(row.krw_amount) > 0);
+    const validPayments = draftPayments.filter(
+      (row) => n(row.krw_amount) > 0,
+    );
 
     if (!cur) {
       setErr("통화를 선택하거나 직접 입력해줘.");
@@ -3298,10 +3557,10 @@ export default function DocumentsPage() {
       }
       if (
         Math.abs(productForeign + shippingForeign - combinedForeign) >
-        0.0001
+        0.01
       ) {
         setErr(
-          `상품 외화총액(${fmtNum(
+          `인보이스 상품 외화총액(${fmtNum(
             productForeign,
           )}) + 배송비 외화총액(${fmtNum(
             shippingForeign,
@@ -3310,6 +3569,24 @@ export default function DocumentsPage() {
         return;
       }
     }
+
+    const expectedPaymentForeign = fShippingIncluded
+      ? combinedForeign
+      : productForeign;
+    if (
+      paymentForeignSum > 0 &&
+      Math.abs(paymentForeignSum - expectedPaymentForeign) > 0.01
+    ) {
+      setErr(
+        `결제내역 외화합계(${fmtNum(
+          paymentForeignSum,
+        )})가 실제 총 결제 외화총액(${fmtNum(
+          expectedPaymentForeign,
+        )})과 달라. 배송비를 같이 결제했다면 결제내역에는 배송비까지 포함된 실제 송금액을 적어줘.`,
+      );
+      return;
+    }
+
     for (const payment of validPayments) {
       const paymentCurrency = currencyValue(payment.currency, payment.currency_custom);
       if (!paymentCurrency) {
@@ -3602,7 +3879,7 @@ export default function DocumentsPage() {
 
         const shippingAllocated = distributeByWeightsCeilIntSigned(
           shippingKRW,
-          cleaned.map((row) => Math.max(0, row.foreign_total)),
+          cleaned.map((row) => Math.max(0, row.qty)),
         );
 
         const shippingAllocationInsert = await supabase
@@ -3619,9 +3896,12 @@ export default function DocumentsPage() {
       }
 
       if (buyMode === "create" && draftPurchaseCosts.length > 0) {
-        const itemWeights = cleaned.map((row) => Math.max(0, row.foreign_total * fx));
-
         for (const draftCost of draftPurchaseCosts) {
+          const itemWeights = isShippingCostType(draftCost.cost_type)
+            ? cleaned.map((row) => Math.max(0, row.qty))
+            : cleaned.map((row) =>
+                Math.max(0, row.foreign_total * fx),
+              );
           const costCurrency = currencyValue(draftCost.currency, draftCost.currency_custom);
           const costKRW = Math.max(0, n(draftCost.krw_amount));
           if (!draftCost.cost_type || !costCurrency || costKRW <= 0) continue;
@@ -3691,8 +3971,119 @@ export default function DocumentsPage() {
                 4,
               )})`,
       );
+      window.localStorage.removeItem(PURCHASE_DRAFT_STORAGE_KEY);
       setBuyModalOpen(false);
       resetBuyForm();
+      await refreshAll();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function reallocateAllExistingShippingCostsByQuantity() {
+    const shippingCosts = costs.filter((cost) =>
+      isShippingCostType(cost.cost_type),
+    );
+
+    if (shippingCosts.length === 0) {
+      setMsg("수량대비로 다시 배분할 기존 배송비가 없어.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `기존 배송비 ${shippingCosts.length}건을 현재 남아 있는 상품 수량 기준으로 전부 다시 배분할까?\n\n관부과세와 다른 추가비용은 건드리지 않아.`,
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    setErr(null);
+    setMsg(null);
+
+    try {
+      let updatedCount = 0;
+      let skippedCount = 0;
+
+      for (const cost of shippingCosts) {
+        const oldAllocationRows = allocations.filter(
+          (allocation) => allocation.purchase_cost_id === cost.id,
+        );
+
+        let targetItems: PurchaseItemRow[] = [];
+
+        if (oldAllocationRows.length > 0) {
+          const linkedItemIds = new Set(
+            oldAllocationRows.map((row) => row.purchase_item_id),
+          );
+          targetItems = items.filter(
+            (item) =>
+              linkedItemIds.has(item.id) &&
+              Math.max(0, Math.floor(n(item.qty))) > 0,
+          );
+        } else if (cost.purchase_id) {
+          targetItems = items.filter(
+            (item) =>
+              item.purchase_id === cost.purchase_id &&
+              Math.max(0, Math.floor(n(item.qty))) > 0,
+          );
+        }
+
+        if (targetItems.length === 0) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const allocatedTotalKRW = Math.round(
+          oldAllocationRows.reduce(
+            (sum, row) => sum + n(row.allocated_amount),
+            0,
+          ),
+        );
+
+        const storedCostKRW =
+          normalizeCurrencyCode(cost.currency) === "KRW"
+            ? Math.round(Math.abs(n(cost.amount)))
+            : Math.round(Math.abs(n(cost.amount)) * Math.max(0, n(cost.fx_rate)));
+
+        const totalShippingKRW =
+          allocatedTotalKRW !== 0 ? allocatedTotalKRW : storedCostKRW;
+
+        if (totalShippingKRW === 0) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const distributed = distributeByWeightsCeilIntSigned(
+          totalShippingKRW,
+          targetItems.map((item) =>
+            Math.max(0, Math.floor(n(item.qty))),
+          ),
+        );
+
+        const del = await supabase
+          .from("cost_allocations")
+          .delete()
+          .eq("purchase_cost_id", cost.id);
+        if (del.error) throw del.error;
+
+        const ins = await supabase.from("cost_allocations").insert(
+          targetItems.map((item, index) => ({
+            purchase_cost_id: cost.id,
+            purchase_item_id: item.id,
+            allocated_amount: distributed[index] ?? 0,
+          })),
+        );
+        if (ins.error) throw ins.error;
+
+        updatedCount += 1;
+      }
+
+      setMsg(
+        `기존 배송비 수량대비 재배분 완료 · ${updatedCount}건 적용${
+          skippedCount > 0 ? ` / ${skippedCount}건 제외` : ""
+        }`,
+      );
       await refreshAll();
     } catch (e: any) {
       setErr(e?.message ?? String(e));
@@ -3951,9 +4342,11 @@ export default function DocumentsPage() {
       n(ecTotalForeign),
     );
     const allocationItems = chosen;
-    const allocationWeights = resolvedForeign.ok
-      ? resolvedForeign.rows.map((row) => row.foreign_total)
-      : [];
+    const allocationWeights = isShippingCostType(ecType)
+      ? chosen.map((item) => Math.max(0, n(item.qty)))
+      : resolvedForeign.ok
+        ? resolvedForeign.rows.map((row) => row.foreign_total)
+        : [];
     const signedCostKRW =
       ecType === "환불"
         ? refundInfoEdit.adjustmentKRW
@@ -4021,7 +4414,11 @@ export default function DocumentsPage() {
         }
       }
     }
-    if (ecType !== "환불" && !resolvedForeign.ok) {
+    if (
+      ecType !== "환불" &&
+      !isShippingCostType(ecType) &&
+      !resolvedForeign.ok
+    ) {
       setErr(resolvedForeign.message);
       return;
     }
@@ -4432,15 +4829,21 @@ export default function DocumentsPage() {
       n(cTotalForeign),
     );
     const allocationItems = chosen;
-    const allocationWeights = resolvedForeign.ok
-      ? resolvedForeign.rows.map((row) => row.foreign_total)
-      : [];
+    const allocationWeights = isShippingCostType(cType)
+      ? chosen.map((item) => Math.max(0, n(item.qty)))
+      : resolvedForeign.ok
+        ? resolvedForeign.rows.map((row) => row.foreign_total)
+        : [];
     const signedCostKRW =
       cType === "환불"
         ? refundInfo.adjustmentKRW
         : signedCostAmountByType(cType, costKRW);
 
-    if (cType !== "환불" && !resolvedForeign.ok) {
+    if (
+      cType !== "환불" &&
+      !isShippingCostType(cType) &&
+      !resolvedForeign.ok
+    ) {
       setErr(resolvedForeign.message);
       return;
     }
@@ -4827,6 +5230,15 @@ export default function DocumentsPage() {
           disabled={loading}
         >
           새로고침
+        </button>
+
+        <button
+          style={styles.btn("ghost")}
+          onClick={reallocateAllExistingShippingCostsByQuantity}
+          disabled={loading}
+          title="기존 배송비(거래처/배대지)를 현재 상품 수량 기준으로 다시 배분"
+        >
+          기존 배송비 수량대비 재배분
         </button>
 
         {legacyRefundRestoreCandidates.length > 0 ? (
@@ -5698,6 +6110,27 @@ export default function DocumentsPage() {
               marginBottom: 14,
             }}
           >
+            <button
+              type="button"
+              style={styles.btn("ghost")}
+              onClick={() => savePurchaseDraft(true)}
+            >
+              임시저장
+            </button>
+            <button
+              type="button"
+              style={styles.btn("ghost")}
+              onClick={loadPurchaseDraft}
+            >
+              불러오기
+            </button>
+            <button
+              type="button"
+              style={styles.btn("danger")}
+              onClick={deletePurchaseDraft}
+            >
+              임시삭제
+            </button>
             <button style={styles.btn("ghost")} onClick={requestCloseBuyModal}>
               닫기
             </button>
@@ -5709,6 +6142,23 @@ export default function DocumentsPage() {
               {buyMode === "edit" ? "수정 저장" : "저장"}
             </button>
           </div>
+
+          {buyDraftNotice ? (
+            <div
+              style={{
+                marginBottom: 12,
+                border: "1px solid #ddd6fe",
+                background: "#f5f3ff",
+                color: "#5b21b6",
+                borderRadius: 12,
+                padding: "9px 12px",
+                fontSize: 12,
+                fontWeight: 900,
+              }}
+            >
+              {buyDraftNotice}
+            </div>
+          ) : null}
 
           <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
             <div style={styles.field}>
@@ -5770,7 +6220,7 @@ export default function DocumentsPage() {
                     <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="기타">기타</option></select></div>
                     <div style={styles.field}><div style={styles.label}>카드명·계좌(선택)</div><input style={styles.input} value={payment.card_name} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, card_name: e.target.value } : row))} placeholder="예: 신한 / 사업자계좌" /></div>
                     <div style={styles.field}><div style={styles.label}>결제 통화</div><select style={styles.select} value={payment.currency} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{payment.currency === "직접입력" && <input style={styles.input} value={payment.currency_custom} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency_custom: e.target.value } : row))} placeholder="예: THB" />}</div>
-                    <div style={styles.field}><div style={styles.label}>외화 결제금액</div><input
+                    <div style={styles.field}><div style={styles.label}>외화 결제금액(배송비 포함 실제 송금액)</div><input
                       style={styles.input}
                       value={payment.foreign_amount}
                       onChange={(e) => {
@@ -5807,7 +6257,7 @@ export default function DocumentsPage() {
               {fCurrency === "직접입력" && <input style={styles.input} value={fCurrencyCustom} onChange={(e) => setFCurrencyCustom(e.target.value)} placeholder="예: THB" />}
             </div>
             <div style={styles.field}>
-              <div style={styles.label}>인보이스 상품 외화총액</div>
+              <div style={styles.label}>인보이스 상품 외화총액(상품·배송비 구분 기준)</div>
               <input
                 style={styles.input}
                 value={fTotalForeign}
@@ -5873,67 +6323,22 @@ export default function DocumentsPage() {
                 <>
                   <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
                     <div style={styles.field}>
-                      <div style={styles.label}>배송비 외화총액</div>
+                      <div style={styles.label}>배송비 외화총액(자동계산)</div>
                       <input
-                        style={styles.input}
+                        style={{ ...styles.input, background: "#f3f4f6" }}
                         value={fShippingForeign}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setFShippingForeign(value);
-                          if (n(fCombinedForeign) > 0) {
-                            setFTotalForeign(
-                              String(
-                                Math.max(
-                                  0,
-                                  round4(
-                                    n(fCombinedForeign) - n(value),
-                                  ),
-                                ),
-                              ),
-                            );
-                          } else if (n(fTotalForeign) > 0) {
-                            setFCombinedForeign(
-                              String(
-                                round4(
-                                  n(fTotalForeign) + n(value),
-                                ),
-                              ),
-                            );
-                          }
-                        }}
-                        placeholder="비워두고 총 결제 외화총액 입력 가능"
+                        readOnly
+                        placeholder="결제 외화합계 - 인보이스 상품총액"
                       />
                     </div>
 
                     <div style={styles.field}>
-                      <div style={styles.label}>총 결제 외화총액</div>
+                      <div style={styles.label}>총 결제 외화총액(결제내역 외화합계)</div>
                       <input
-                        style={styles.input}
+                        style={{ ...styles.input, background: "#f3f4f6" }}
                         value={fCombinedForeign}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setFCombinedForeign(value);
-                          if (n(fTotalForeign) > 0) {
-                            setFShippingForeign(
-                              String(
-                                Math.max(
-                                  0,
-                                  round4(n(value) - n(fTotalForeign)),
-                                ),
-                              ),
-                            );
-                          } else if (n(fShippingForeign) > 0) {
-                            setFTotalForeign(
-                              String(
-                                Math.max(
-                                  0,
-                                  round4(n(value) - n(fShippingForeign)),
-                                ),
-                              ),
-                            );
-                          }
-                        }}
-                        placeholder="실제로 송금한 외화 총액"
+                        readOnly
+                        placeholder="위 결제내역의 외화합계"
                       />
                     </div>
                   </div>
@@ -5980,8 +6385,10 @@ export default function DocumentsPage() {
                       합계: <b>{fmtKRW(paymentKRWSum)}</b>
                     </div>
                     <div style={{ color: "#6b7280", fontSize: 12 }}>
-                      실제 총 원화 결제액을 외화 비율로 나누고, 마지막
-                      1원까지 배송비에 맞춰.
+                      결제 외화합계에서 인보이스 상품총액을 빼 배송비
+                      외화를 계산해. 실제 원화총액은 인보이스 상품총액과
+                      배송비 외화 비율로 나누고, 상품 원화는 상품별 입력금액
+                      비율로 다시 배분해.
                     </div>
                   </div>
                 </>
@@ -6011,7 +6418,7 @@ export default function DocumentsPage() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                   <div>
                     <div style={styles.label}>추가비용 함께 등록(선택)</div>
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>배송비·관부과세·기타비용을 매입 저장과 동시에 상품금액 비율로 배분해.</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>배송비는 수량 비율로, 관부과세·기타비용은 상품금액 비율로 배분해.</div>
                   </div>
                   <button type="button" style={styles.btn("ghost")} onClick={() => setDraftPurchaseCosts((prev) => [...prev, { key: crypto.randomUUID(), cost_type: "배송비(거래처)", currency: "KRW", currency_custom: "", foreign_amount: "", krw_amount: "", vendor_name: fSupplier, cost_date: fPurchaseDate, memo: "" }])}>+ 추가비용</button>
                 </div>
@@ -6186,11 +6593,12 @@ export default function DocumentsPage() {
           >
             ① 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
             {"\n"}② 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
-            {"\n"}③ 자동 입력된 값은 직접 수정할 수 있고, 인보이스와 차이가 나면{" "}
+            {"\n"}③ 상품리스트 합계와 인보이스 상품총액은 달라도 저장 가능하고, 차이는{" "}
             <b>입력한 상품금액 비율대로 자동보정</b>돼.
-            {"\n"}④ 상품값과 배송비를 같이 결제했다면 실제 총 원화를 먼저{" "}
-            <b>상품값 원화와 배송비 원화로 외화금액 비율대로 나누고</b>,
-            배송비 원화는 다시 상품별 상품금액 비율로 자동배분돼.
+            {"\n"}④ 결제 외화합계는 배송비 포함 실제 송금액이고, 배송비 외화는{" "}
+            <b>결제 외화합계 - 인보이스 상품총액</b>으로 자동계산돼.
+            실제 원화는 인보이스 상품총액과 배송비 외화 비율로 나눈 뒤,
+            상품 원화와 배송비 원화를 각각 상품별 입력금액 비율로 배분해.
             {"\n"}
             소수점 오차는 마지막 항목에서 정리돼.
           </div>
