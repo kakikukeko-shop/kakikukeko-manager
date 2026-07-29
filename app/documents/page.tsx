@@ -2015,6 +2015,28 @@ export default function DocumentsPage() {
     [visibleItems],
   );
 
+  const visibleSelectableItemIds = useMemo(
+    () =>
+      visibleItems
+        .filter((item) => Math.max(0, n(item.qty)) > 0)
+        .map((item) => item.id),
+    [visibleItems],
+  );
+
+  const allVisibleItemsSelected = useMemo(
+    () =>
+      visibleSelectableItemIds.length > 0 &&
+      visibleSelectableItemIds.every((id) => selectedItemIds.includes(id)),
+    [visibleSelectableItemIds, selectedItemIds],
+  );
+
+  const someVisibleItemsSelected = useMemo(
+    () =>
+      visibleSelectableItemIds.some((id) => selectedItemIds.includes(id)) &&
+      !allVisibleItemsSelected,
+    [visibleSelectableItemIds, selectedItemIds, allVisibleItemsSelected],
+  );
+
   const searchedSortedPurchases = useMemo(() => {
     const q = purchaseSearch.trim().toLowerCase();
 
@@ -3006,6 +3028,20 @@ export default function DocumentsPage() {
 
   function clearSelection() {
     setSelectedItemIds([]);
+  }
+
+  function toggleAllVisibleItems() {
+    setSelectedItemIds((prev) => {
+      const visibleSet = new Set(visibleSelectableItemIds);
+
+      if (allVisibleItemsSelected) {
+        return prev.filter((id) => !visibleSet.has(id));
+      }
+
+      const next = new Set(prev);
+      visibleSelectableItemIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
   }
 
   function resetCostForm() {
@@ -5668,7 +5704,39 @@ export default function DocumentsPage() {
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    <th style={{ ...styles.th, width: 44 }}>선택</th>
+                    <th style={{ ...styles.th, width: 52 }}>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          cursor:
+                            visibleSelectableItemIds.length > 0
+                              ? "pointer"
+                              : "default",
+                        }}
+                        title="현재 화면에 보이는 상품 전체 선택/해제"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allVisibleItemsSelected}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someVisibleItemsSelected;
+                          }}
+                          disabled={visibleSelectableItemIds.length === 0}
+                          onChange={toggleAllVisibleItems}
+                          style={{
+                            width: 16,
+                            height: 16,
+                            cursor:
+                              visibleSelectableItemIds.length > 0
+                                ? "pointer"
+                                : "default",
+                          }}
+                        />
+                        <span>전체</span>
+                      </label>
+                    </th>
                     <th style={styles.th}>상품</th>
                     <th style={{ ...styles.th, width: 70 }}>수량</th>
                     <th
@@ -6080,8 +6148,8 @@ export default function DocumentsPage() {
             vertical-align: top !important;
           }
 
-          html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(1) { width: 5% !important; }
-          html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(2) { width: 52% !important; }
+          html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(1) { width: 7% !important; }
+          html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(2) { width: 50% !important; }
           html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(3) { width: 7% !important; }
           html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(5) { width: 14% !important; }
           html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-role="documents-table-wrap"] th:nth-child(6) { width: 9% !important; }
