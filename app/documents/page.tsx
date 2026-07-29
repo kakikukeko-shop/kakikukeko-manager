@@ -137,6 +137,7 @@ type DraftItem = {
   key: string;
   item_name: string;
   qty: string;
+  foreign_unit_price: string;
   foreign_total: string;
   memo: string;
   is_preorder: boolean;
@@ -727,6 +728,76 @@ function formatCustomsDetailInline(memo: string | null | undefined) {
   if (n(parsed.customsFee) > 0)
     parts.push(`통관수수료 ${fmtKRW(n(parsed.customsFee))}`);
   return parts.join(" / ");
+}
+
+
+const COMBINED_PAYMENT_META_HEADER = "[상품배송비 함께결제]";
+const INCLUDED_SHIPPING_MEMO_HEADER = "[상품과 함께 결제한 배송비]";
+
+type CombinedPaymentMeta = {
+  enabled: boolean;
+  product_foreign: number;
+  shipping_foreign: number;
+  total_foreign: number;
+  product_krw: number;
+  shipping_krw: number;
+  shipping_vendor: string;
+};
+
+function parseCombinedPaymentMeta(
+  raw: string | null | undefined,
+): CombinedPaymentMeta | null {
+  const text = String(raw ?? "");
+  const markerIndex = text.indexOf(COMBINED_PAYMENT_META_HEADER);
+  if (markerIndex < 0) return null;
+
+  const after = text
+    .slice(markerIndex + COMBINED_PAYMENT_META_HEADER.length)
+    .trimStart();
+  const firstLine = after.split("\n")[0]?.trim();
+  if (!firstLine) return null;
+
+  try {
+    const parsed = JSON.parse(firstLine);
+    return {
+      enabled: !!parsed?.enabled,
+      product_foreign: Math.max(0, n(parsed?.product_foreign)),
+      shipping_foreign: Math.max(0, n(parsed?.shipping_foreign)),
+      total_foreign: Math.max(0, n(parsed?.total_foreign)),
+      product_krw: Math.max(0, Math.round(n(parsed?.product_krw))),
+      shipping_krw: Math.max(0, Math.round(n(parsed?.shipping_krw))),
+      shipping_vendor: String(parsed?.shipping_vendor ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function stripCombinedPaymentMeta(raw: string | null | undefined) {
+  const text = String(raw ?? "").trim();
+  const markerIndex = text.indexOf(COMBINED_PAYMENT_META_HEADER);
+  if (markerIndex < 0) return text;
+
+  const before = text.slice(0, markerIndex).trim();
+  const after = text
+    .slice(markerIndex + COMBINED_PAYMENT_META_HEADER.length)
+    .trimStart();
+  const lines = after.split("\n");
+  lines.shift();
+  const rest = lines.join("\n").trim();
+
+  return [before, rest].filter(Boolean).join("\n\n").trim();
+}
+
+function buildCombinedPaymentMemo(
+  baseMemo: string,
+  meta: CombinedPaymentMeta | null,
+) {
+  const cleaned = stripCombinedPaymentMeta(baseMemo);
+  if (!meta?.enabled) return cleaned || null;
+
+  const detail = `${COMBINED_PAYMENT_META_HEADER}\n${JSON.stringify(meta)}`;
+  return cleaned ? `${detail}\n\n${cleaned}` : detail;
 }
 
 function normalizeName(v?: string | null) {
@@ -1741,6 +1812,15 @@ export default function DocumentsPage() {
   const [fCurrency, setFCurrency] = useState("USD");
   const [fCurrencyCustom, setFCurrencyCustom] = useState("");
   const [fTotalForeign, setFTotalForeign] = useState("");
+  const [fTotalForeignManuallyEdited, setFTotalForeignManuallyEdited] =
+    useState(false);
+  const [manualPaymentForeignKeys, setManualPaymentForeignKeys] = useState<
+    string[]
+  >([]);
+  const [fShippingIncluded, setFShippingIncluded] = useState(false);
+  const [fShippingForeign, setFShippingForeign] = useState("");
+  const [fCombinedForeign, setFCombinedForeign] = useState("");
+  const [fShippingVendor, setFShippingVendor] = useState("");
   const [fTotalKRW, setFTotalKRW] = useState("");
   const [fMemo, setFMemo] = useState("");
   const [draftPayments, setDraftPayments] = useState<DraftPayment[]>([
@@ -1767,6 +1847,7 @@ export default function DocumentsPage() {
       key: crypto.randomUUID(),
       item_name: "",
       qty: "1",
+      foreign_unit_price: "",
       foreign_total: "",
       memo: "",
       is_preorder: false,
@@ -2370,9 +2451,129 @@ export default function DocumentsPage() {
     [draftPayments],
   );
 
+  const purchasePaymentComposition = useMemo(() => {
+    const productForeign = Math.max(0, n(fTotalForeign));
+    const shippingForeign = fShippingIncluded
+      ? Math.max(0, n(fShippingForeign))
+      : 0;
+    const combinedForeign = fShippingIncluded
+      ? Math.max(0, n(fCombinedForeign))
+      : productForeign;
+    const totalKRW = Math.max(0, Math.round(paymentKRWSum));
+
+    if (!fShippingIncluded || combinedForeign <= 0 || shippingForeign <= 0) {
+      return {
+        productForeign,
+        shippingForeign: 0,
+        combinedForeign: productForeign,
+        productKRW: totalKRW,
+        shippingKRW: 0,
+        productFx: calcFxRate(totalKRW, productForeign),
+      };
+    }
+
+    const productKRW = Math.round(
+      (totalKRW * productForeign) / combinedForeign,
+    );
+    const shippingKRW = totalKRW - productKRW;
+
+    return {
+      productForeign,
+      shippingForeign,
+      combinedForeign,
+      productKRW,
+      shippingKRW,
+      productFx: calcFxRate(productKRW, productForeign),
+    };
+  }, [
+    fTotalForeign,
+    fShippingIncluded,
+    fShippingForeign,
+    fCombinedForeign,
+    paymentKRWSum,
+  ]);
+
+  const enteredDraftItemForeignSum = useMemo(
+    () =>
+      round4(
+        draftItems.reduce((sum, item) => {
+          // 상품명 입력 전이라도 수량과 개당 외화가격을 적으면
+          // 인보이스 상품총액과 결제 외화금액이 바로 자동계산되게 한다.
+          const qty = Math.max(0, n(item.qty));
+          const unit = Math.max(0, n(item.foreign_unit_price));
+          const enteredTotal = Math.max(0, n(item.foreign_total));
+          const lineTotal =
+            unit > 0 ? round4(qty * unit) : enteredTotal;
+          return sum + lineTotal;
+        }, 0),
+      ),
+    [draftItems],
+  );
+
+  // 상품명·수량·개당 외화가격을 입력하면 상품 합계를 자동으로 계산하고,
+  // 사용자가 직접 고치기 전까지 인보이스 상품총액과 결제 외화금액도 자동으로 맞춘다.
+  useEffect(() => {
+    if (fTotalForeignManuallyEdited) return;
+    if (enteredDraftItemForeignSum <= 0) return;
+
+    const nextProductForeign = String(enteredDraftItemForeignSum);
+    setFTotalForeign(nextProductForeign);
+
+    if (fShippingIncluded) {
+      const shipping = Math.max(0, n(fShippingForeign));
+      setFCombinedForeign(String(round4(enteredDraftItemForeignSum + shipping)));
+    } else {
+      setFCombinedForeign(nextProductForeign);
+    }
+  }, [
+    enteredDraftItemForeignSum,
+    fTotalForeignManuallyEdited,
+    fShippingIncluded,
+    fShippingForeign,
+  ]);
+
+  useEffect(() => {
+    if (draftPayments.length !== 1) return;
+    const payment = draftPayments[0];
+    if (manualPaymentForeignKeys.includes(payment.key)) return;
+
+    const paymentCurrency = currencyValue(
+      payment.currency,
+      payment.currency_custom,
+    );
+    if (normalizeCurrencyCode(paymentCurrency) === "KRW") return;
+
+    const autoForeign = fShippingIncluded
+      ? Math.max(0, n(fCombinedForeign))
+      : Math.max(0, n(fTotalForeign));
+    if (autoForeign <= 0) return;
+
+    const nextValue = String(round4(autoForeign));
+    if (payment.foreign_amount === nextValue) return;
+
+    setDraftPayments((prev) =>
+      prev.map((row) =>
+        row.key === payment.key
+          ? { ...row, foreign_amount: nextValue }
+          : row,
+      ),
+    );
+  }, [
+    draftPayments,
+    manualPaymentForeignKeys,
+    fShippingIncluded,
+    fCombinedForeign,
+    fTotalForeign,
+  ]);
+
   const draftPreview = useMemo(
-    () => computeDraftPreviewRows(draftItems, n(fTotalForeign), paymentKRWSum),
-    [draftItems, fTotalForeign, paymentKRWSum],
+    () =>
+      computeDraftPreviewRows(
+        draftItems,
+        n(fTotalForeign),
+        purchasePaymentComposition.productKRW,
+      ),
+    [draftItems, fTotalForeign, purchasePaymentComposition.productKRW],
   );
 
   const draftPreviewMap = useMemo(() => {
@@ -2844,6 +3045,12 @@ export default function DocumentsPage() {
     setFCurrency("USD");
     setFCurrencyCustom("");
     setFTotalForeign("");
+    setFTotalForeignManuallyEdited(false);
+    setManualPaymentForeignKeys([]);
+    setFShippingIncluded(false);
+    setFShippingForeign("");
+    setFCombinedForeign("");
+    setFShippingVendor("");
     setFTotalKRW("");
     setFMemo("");
     setDraftPayments([
@@ -2867,6 +3074,7 @@ export default function DocumentsPage() {
         key: crypto.randomUUID(),
         item_name: "",
         qty: "1",
+        foreign_unit_price: "",
         foreign_total: "",
         memo: "",
         is_preorder: false,
@@ -2899,9 +3107,34 @@ export default function DocumentsPage() {
         ? (p.currency ?? "")
         : "",
     );
-    setFTotalForeign(String(p.total_foreign ?? ""));
+    const combinedMeta = parseCombinedPaymentMeta(p.memo);
+    setFShippingIncluded(!!combinedMeta?.enabled);
+    setFTotalForeignManuallyEdited(true);
+    setManualPaymentForeignKeys(
+      purchasePayments
+        .filter((row) => row.purchase_id === p.id)
+        .map((row) => row.id),
+    );
+    setFTotalForeign(
+      String(
+        combinedMeta?.enabled
+          ? combinedMeta.product_foreign
+          : p.total_foreign ?? "",
+      ),
+    );
+    setFShippingForeign(
+      combinedMeta?.enabled ? String(combinedMeta.shipping_foreign) : "",
+    );
+    setFCombinedForeign(
+      combinedMeta?.enabled
+        ? String(combinedMeta.total_foreign)
+        : String(p.total_foreign ?? ""),
+    );
+    setFShippingVendor(
+      combinedMeta?.shipping_vendor || p.supplier || "",
+    );
     setFTotalKRW(String(p.total_amount ?? ""));
-    setFMemo(p.memo ?? "");
+    setFMemo(stripCombinedPaymentMeta(p.memo));
     const existingPayments = purchasePayments.filter((row) => row.purchase_id === p.id);
     setDraftPayments(
       existingPayments.length > 0
@@ -2943,6 +3176,10 @@ export default function DocumentsPage() {
             key: it.id,
             item_name: it.item_name ?? "",
             qty: String(it.qty ?? 1),
+            foreign_unit_price: String(
+              it.foreign_unit_price ??
+                (n(it.qty) > 0 ? ceil4(n(it.foreign_total) / n(it.qty)) : ""),
+            ),
             foreign_total: String(it.foreign_total ?? ""),
             memo: it.memo ?? "",
             is_preorder: !!it.is_preorder,
@@ -2958,6 +3195,7 @@ export default function DocumentsPage() {
               key: crypto.randomUUID(),
               item_name: "",
               qty: "1",
+              foreign_unit_price: "",
               foreign_total: "",
               memo: "",
               is_preorder: false,
@@ -3009,10 +3247,18 @@ export default function DocumentsPage() {
     setErr(null);
     setMsg(null);
 
-    const totalKRW = paymentKRWSum;
-    const totalForeign = n(fTotalForeign);
+    const totalKRW = Math.max(0, Math.round(paymentKRWSum));
+    const productForeign = Math.max(0, n(fTotalForeign));
+    const shippingForeign = fShippingIncluded
+      ? Math.max(0, n(fShippingForeign))
+      : 0;
+    const combinedForeign = fShippingIncluded
+      ? Math.max(0, n(fCombinedForeign))
+      : productForeign;
+    const productKRW = purchasePaymentComposition.productKRW;
+    const shippingKRW = purchasePaymentComposition.shippingKRW;
     const cur = currencyValue(fCurrency, fCurrencyCustom);
-    const fx = calcFxRate(totalKRW, totalForeign);
+    const fx = purchasePaymentComposition.productFx;
     const validPayments = draftPayments.filter((row) => n(row.krw_amount) > 0);
 
     if (!cur) {
@@ -3023,9 +3269,30 @@ export default function DocumentsPage() {
       setErr("결제내역을 1건 이상 입력하고 원화 실결제금액을 넣어줘.");
       return;
     }
-    if (totalForeign <= 0 || fx <= 0) {
-      setErr("상품 기준 외화 총액을 입력해줘.");
+    if (productForeign <= 0 || fx <= 0) {
+      setErr("인보이스 상품 외화총액을 입력해줘.");
       return;
+    }
+    if (fShippingIncluded) {
+      if (shippingForeign <= 0 || combinedForeign <= 0) {
+        setErr(
+          "함께 결제한 배송비 외화총액과 총 결제 외화총액을 입력해줘.",
+        );
+        return;
+      }
+      if (
+        Math.abs(productForeign + shippingForeign - combinedForeign) >
+        0.0001
+      ) {
+        setErr(
+          `상품 외화총액(${fmtNum(
+            productForeign,
+          )}) + 배송비 외화총액(${fmtNum(
+            shippingForeign,
+          )})이 총 결제 외화총액(${fmtNum(combinedForeign)})과 달라.`,
+        );
+        return;
+      }
     }
     for (const payment of validPayments) {
       const paymentCurrency = currencyValue(payment.currency, payment.currency_custom);
@@ -3082,7 +3349,7 @@ export default function DocumentsPage() {
             }))
             .filter((d) => d.item_name.length > 0),
         }
-      : computeDraftForeignTotals(draftItems, totalForeign);
+      : computeDraftForeignTotals(draftItems, productForeign);
 
     if (!computed.ok) {
       setErr(computed.message);
@@ -3109,10 +3376,25 @@ export default function DocumentsPage() {
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
-            fx_rate: fx,
-            total_foreign: totalForeign,
+            fx_rate: fShippingIncluded
+              ? calcFxRate(totalKRW, combinedForeign)
+              : fx,
+            total_foreign: combinedForeign,
             total_amount: totalKRW,
-            memo: fMemo || null,
+            memo: buildCombinedPaymentMemo(
+              fMemo,
+              fShippingIncluded
+                ? {
+                    enabled: true,
+                    product_foreign: productForeign,
+                    shipping_foreign: shippingForeign,
+                    total_foreign: combinedForeign,
+                    product_krw: productKRW,
+                    shipping_krw: shippingKRW,
+                    shipping_vendor: fShippingVendor.trim(),
+                  }
+                : null,
+            ),
           })
           .eq("id", editingPurchaseId);
         if (updP.error) throw updP.error;
@@ -3125,10 +3407,25 @@ export default function DocumentsPage() {
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
-            fx_rate: fx,
-            total_foreign: totalForeign,
+            fx_rate: fShippingIncluded
+              ? calcFxRate(totalKRW, combinedForeign)
+              : fx,
+            total_foreign: combinedForeign,
             total_amount: totalKRW,
-            memo: fMemo || null,
+            memo: buildCombinedPaymentMemo(
+              fMemo,
+              fShippingIncluded
+                ? {
+                    enabled: true,
+                    product_foreign: productForeign,
+                    shipping_foreign: shippingForeign,
+                    total_foreign: combinedForeign,
+                    product_krw: productKRW,
+                    shipping_krw: shippingKRW,
+                    shipping_vendor: fShippingVendor.trim(),
+                  }
+                : null,
+            ),
           })
           .select("id")
           .single();
@@ -3248,6 +3545,63 @@ export default function DocumentsPage() {
         }
       }
 
+      const previousIncludedShippingCosts = costs.filter(
+        (cost) =>
+          cost.purchase_id === purchaseId &&
+          normalizeCostType(cost.cost_type) === "배송비(거래처)" &&
+          String(cost.memo ?? "").includes(INCLUDED_SHIPPING_MEMO_HEADER),
+      );
+
+      for (const oldCost of previousIncludedShippingCosts) {
+        const delAlloc = await supabase
+          .from("cost_allocations")
+          .delete()
+          .eq("purchase_cost_id", oldCost.id);
+        if (delAlloc.error) throw delAlloc.error;
+
+        const delCost = await supabase
+          .from("purchase_costs")
+          .delete()
+          .eq("id", oldCost.id);
+        if (delCost.error) throw delCost.error;
+      }
+
+      if (fShippingIncluded && shippingForeign > 0 && shippingKRW > 0) {
+        const shippingCost = await supabase
+          .from("purchase_costs")
+          .insert({
+            purchase_id: purchaseId,
+            cost_type: "배송비(거래처)",
+            amount: shippingForeign,
+            currency: cur,
+            fx_rate: calcFxRate(shippingKRW, shippingForeign),
+            memo: `${INCLUDED_SHIPPING_MEMO_HEADER}
+상품값과 같은 결제로 지급`,
+            vendor_name: fShippingVendor.trim() || fSupplier || null,
+            cost_date: fPurchaseDate || null,
+          })
+          .select("id")
+          .single();
+        if (shippingCost.error) throw shippingCost.error;
+
+        const shippingAllocated = distributeByWeightsCeilIntSigned(
+          shippingKRW,
+          cleaned.map((row) => Math.max(0, row.foreign_total)),
+        );
+
+        const shippingAllocationInsert = await supabase
+          .from("cost_allocations")
+          .insert(
+            savedPurchaseItemIds.map((itemId, index) => ({
+              purchase_cost_id: shippingCost.data.id,
+              purchase_item_id: itemId,
+              allocated_amount: shippingAllocated[index] ?? 0,
+            })),
+          );
+        if (shippingAllocationInsert.error)
+          throw shippingAllocationInsert.error;
+      }
+
       if (buyMode === "create" && draftPurchaseCosts.length > 0) {
         const itemWeights = cleaned.map((row) => Math.max(0, row.foreign_total * fx));
 
@@ -3311,7 +3665,15 @@ export default function DocumentsPage() {
           ? isRefundedPurchaseEdit
             ? "매입 수정 완료 · 환불 후 남은 상품금액 기준으로 저장했어."
             : "매입 수정 완료"
-          : `매입 저장 완료 (상품 외화합계 일치 / 환율 ${fx.toFixed(4)})`,
+          : fShippingIncluded
+            ? `매입 저장 완료 · 상품 ${fmtKRW(
+                productKRW,
+              )} / 배송비 ${fmtKRW(
+                shippingKRW,
+              )}로 실제 결제액을 남김없이 나눴어.`
+            : `매입 저장 완료 (상품 외화합계 자동보정 / 환율 ${fx.toFixed(
+                4,
+              )})`,
       );
       setBuyModalOpen(false);
       resetBuyForm();
@@ -5295,6 +5657,10 @@ export default function DocumentsPage() {
           [data-tablet-role="purchase-buy-form"] button {
             max-width: 100%;
           }
+
+          [data-tablet-role="purchase-buy-form"] [data-tablet-role="purchase-item-input-grid"] {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
         }
       `}</style>
 
@@ -5388,7 +5754,25 @@ export default function DocumentsPage() {
                     <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="기타">기타</option></select></div>
                     <div style={styles.field}><div style={styles.label}>카드명·계좌(선택)</div><input style={styles.input} value={payment.card_name} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, card_name: e.target.value } : row))} placeholder="예: 신한 / 사업자계좌" /></div>
                     <div style={styles.field}><div style={styles.label}>결제 통화</div><select style={styles.select} value={payment.currency} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{payment.currency === "직접입력" && <input style={styles.input} value={payment.currency_custom} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency_custom: e.target.value } : row))} placeholder="예: THB" />}</div>
-                    <div style={styles.field}><div style={styles.label}>외화 결제금액</div><input style={styles.input} value={payment.foreign_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, foreign_amount: e.target.value } : row))} placeholder="원화 결제면 비워도 됨" /></div>
+                    <div style={styles.field}><div style={styles.label}>외화 결제금액</div><input
+                      style={styles.input}
+                      value={payment.foreign_amount}
+                      onChange={(e) => {
+                        setManualPaymentForeignKeys((prev) =>
+                          prev.includes(payment.key)
+                            ? prev
+                            : [...prev, payment.key],
+                        );
+                        setDraftPayments((prev) =>
+                          prev.map((row) =>
+                            row.key === payment.key
+                              ? { ...row, foreign_amount: e.target.value }
+                              : row,
+                          ),
+                        );
+                      }}
+                      placeholder="상품 입력 시 자동계산 / 직접 수정 가능"
+                    /></div>
                     <div style={styles.field}><div style={styles.label}>원화 실결제금액</div><input style={styles.input} value={payment.krw_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, krw_amount: e.target.value } : row))} placeholder="카드 승인·이체된 원화" /></div>
                     <div style={styles.field}><div style={styles.label}>개별 환율</div><input style={{ ...styles.input, background: "#f3f4f6" }} readOnly value={normalizeCurrencyCode(currencyValue(payment.currency, payment.currency_custom)) === "KRW" ? "1" : calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)) > 0 ? calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)).toFixed(4) : ""} /></div>
                     <div style={styles.field}><div style={styles.label}>결제 메모</div><input style={styles.input} value={payment.memo} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, memo: e.target.value } : row))} /></div>
@@ -5407,12 +5791,193 @@ export default function DocumentsPage() {
               {fCurrency === "직접입력" && <input style={styles.input} value={fCurrencyCustom} onChange={(e) => setFCurrencyCustom(e.target.value)} placeholder="예: THB" />}
             </div>
             <div style={styles.field}>
-              <div style={styles.label}>상품 외화 총액</div>
-              <input style={styles.input} value={fTotalForeign} onChange={(e) => setFTotalForeign(e.target.value)} placeholder="상품 가격 합계" />
+              <div style={styles.label}>인보이스 상품 외화총액</div>
+              <input
+                style={styles.input}
+                value={fTotalForeign}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setFTotalForeignManuallyEdited(true);
+                  setFTotalForeign(value);
+                  if (fShippingIncluded && n(fCombinedForeign) > 0) {
+                    setFShippingForeign(
+                      String(
+                        Math.max(
+                          0,
+                          round4(n(fCombinedForeign) - n(value)),
+                        ),
+                      ),
+                    );
+                  }
+                }}
+                placeholder="상품 입력 시 자동계산 / 직접 수정 가능"
+              />
             </div>
+
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                border: "1px solid #ddd6fe",
+                borderRadius: 14,
+                padding: 12,
+                background: "#faf8ff",
+                display: "grid",
+                gap: 10,
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontWeight: 900,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={fShippingIncluded}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setFShippingIncluded(checked);
+                    if (checked) {
+                      setFShippingVendor((prev) => prev || fSupplier);
+                      if (!fCombinedForeign && fTotalForeign) {
+                        setFCombinedForeign(fTotalForeign);
+                      }
+                    } else {
+                      setFShippingForeign("");
+                      setFCombinedForeign(fTotalForeign);
+                    }
+                  }}
+                />
+                상품값과 배송비를 한 번에 결제
+              </label>
+
+              {fShippingIncluded ? (
+                <>
+                  <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
+                    <div style={styles.field}>
+                      <div style={styles.label}>배송비 외화총액</div>
+                      <input
+                        style={styles.input}
+                        value={fShippingForeign}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setFShippingForeign(value);
+                          if (n(fCombinedForeign) > 0) {
+                            setFTotalForeign(
+                              String(
+                                Math.max(
+                                  0,
+                                  round4(
+                                    n(fCombinedForeign) - n(value),
+                                  ),
+                                ),
+                              ),
+                            );
+                          } else if (n(fTotalForeign) > 0) {
+                            setFCombinedForeign(
+                              String(
+                                round4(
+                                  n(fTotalForeign) + n(value),
+                                ),
+                              ),
+                            );
+                          }
+                        }}
+                        placeholder="비워두고 총 결제 외화총액 입력 가능"
+                      />
+                    </div>
+
+                    <div style={styles.field}>
+                      <div style={styles.label}>총 결제 외화총액</div>
+                      <input
+                        style={styles.input}
+                        value={fCombinedForeign}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setFCombinedForeign(value);
+                          if (n(fTotalForeign) > 0) {
+                            setFShippingForeign(
+                              String(
+                                Math.max(
+                                  0,
+                                  round4(n(value) - n(fTotalForeign)),
+                                ),
+                              ),
+                            );
+                          } else if (n(fShippingForeign) > 0) {
+                            setFTotalForeign(
+                              String(
+                                Math.max(
+                                  0,
+                                  round4(n(value) - n(fShippingForeign)),
+                                ),
+                              ),
+                            );
+                          }
+                        }}
+                        placeholder="실제로 송금한 외화 총액"
+                      />
+                    </div>
+                  </div>
+
+                  <div style={styles.field}>
+                    <div style={styles.label}>배송비 거래처</div>
+                    <input
+                      style={styles.input}
+                      value={fShippingVendor}
+                      onChange={(e) => setFShippingVendor(e.target.value)}
+                      placeholder="예: 상품거래처 또는 배송업체"
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      background: "#ede9fe",
+                      padding: 12,
+                      display: "grid",
+                      gap: 4,
+                      fontSize: 13,
+                    }}
+                  >
+                    <div>
+                      상품 원화:{" "}
+                      <b>{fmtKRW(purchasePaymentComposition.productKRW)}</b>
+                    </div>
+                    <div>
+                      배송비 원화:{" "}
+                      <b>{fmtKRW(purchasePaymentComposition.shippingKRW)}</b>
+                    </div>
+                    <div>
+                      합계: <b>{fmtKRW(paymentKRWSum)}</b>
+                    </div>
+                    <div style={{ color: "#6b7280", fontSize: 12 }}>
+                      실제 총 원화 결제액을 외화 비율로 나누고, 마지막
+                      1원까지 배송비에 맞춰.
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  배송비를 따로 결제했다면 아래 추가비용에서 별도로
+                  등록해.
+                </div>
+              )}
+            </div>
+
             <div style={styles.field}>
               <div style={styles.label}>상품 배분용 평균환율</div>
-              <input style={{ ...styles.input, background: "#f3f4f6" }} readOnly value={calcFxRate(paymentKRWSum, n(fTotalForeign)) > 0 ? calcFxRate(paymentKRWSum, n(fTotalForeign)).toFixed(4) : ""} />
+              <input
+                style={{ ...styles.input, background: "#f3f4f6" }}
+                readOnly
+                value={
+                  purchasePaymentComposition.productFx > 0
+                    ? purchasePaymentComposition.productFx.toFixed(4)
+                    : ""
+                }
+              />
             </div>
 
             {buyMode === "create" && (
@@ -5575,6 +6140,7 @@ export default function DocumentsPage() {
                     key: crypto.randomUUID(),
                     item_name: "",
                     qty: "1",
+                    foreign_unit_price: "",
                     foreign_total: "",
                     memo: "",
                     is_preorder: false,
@@ -5592,12 +6158,15 @@ export default function DocumentsPage() {
           <div
             style={{ ...styles.small, marginTop: 6, whiteSpace: "pre-line" }}
           >
-            ① 상품 외화금액이 전부 비어 있으면 <b>수량대비 자동배분</b>
-            {"\n"}② 일부만 입력하면 <b>남은 금액만 빈 칸에 수량대비 자동배분</b>
-            {"\n"}③ 전부 입력했는데 외화 총액과 안 맞으면{" "}
-            <b>입력한 금액대비로 전체 자동보정</b>
+            ① 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
+            {"\n"}② 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
+            {"\n"}③ 자동 입력된 값은 직접 수정할 수 있고, 인보이스와 차이가 나면{" "}
+            <b>입력한 상품금액 비율대로 자동보정</b>돼.
+            {"\n"}④ 상품값과 배송비를 같이 결제했다면 실제 총 원화를 먼저{" "}
+            <b>상품값 원화와 배송비 원화로 외화금액 비율대로 나누고</b>,
+            배송비 원화는 다시 상품별 상품금액 비율로 자동배분돼.
             {"\n"}
-            소수점은 <b>무조건 올림</b> 처리돼.
+            소수점 오차는 마지막 항목에서 정리돼.
           </div>
 
           <div
@@ -5622,11 +6191,25 @@ export default function DocumentsPage() {
               }}
             >
               <span>
-                미리보기 외화합계:{" "}
-                <b>{fmtNum(draftPreview.previewForeignSum)}</b>
+                상품리스트 입력합계:{" "}
+                <b>{fmtNum(enteredDraftItemForeignSum)}</b>
               </span>
               <span>
-                외화 총액: <b>{fmtNum(n(fTotalForeign))}</b>
+                인보이스 상품총액: <b>{fmtNum(n(fTotalForeign))}</b>
+              </span>
+              <span>
+                자동 조정차액:{" "}
+                <b>
+                  {fmtNum(
+                    round4(
+                      n(fTotalForeign) - enteredDraftItemForeignSum,
+                    ),
+                  )}
+                </b>
+              </span>
+              <span>
+                저장될 외화합계:{" "}
+                <b>{fmtNum(draftPreview.previewForeignSum)}</b>
               </span>
               <span>
                 차이:{" "}
@@ -5694,7 +6277,10 @@ export default function DocumentsPage() {
                     </button>
                   </div>
 
-                  <div style={{ ...styles.grid2, marginTop: 10 }}>
+                  <div
+                    data-tablet-role="purchase-item-input-grid"
+                    style={{ ...styles.grid2, marginTop: 10 }}
+                  >
                     <div style={styles.field}>
                       <div style={styles.label}>상품명</div>
                       <input
@@ -5744,33 +6330,90 @@ export default function DocumentsPage() {
                       <input
                         style={styles.input}
                         value={d.qty}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const nextQty = e.target.value;
                           setDraftItems((prev) =>
-                            prev.map((x) =>
-                              x.key === d.key
-                                ? { ...x, qty: e.target.value }
-                                : x,
-                            ),
-                          )
-                        }
+                            prev.map((x) => {
+                              if (x.key !== d.key) return x;
+                              const unit = Math.max(
+                                0,
+                                n(x.foreign_unit_price),
+                              );
+                              return {
+                                ...x,
+                                qty: nextQty,
+                                foreign_total:
+                                  unit > 0
+                                    ? String(round4(n(nextQty) * unit))
+                                    : x.foreign_total,
+                              };
+                            }),
+                          );
+                        }}
                       />
                     </div>
 
                     <div style={styles.field}>
-                      <div style={styles.label}>상품 외화 총액</div>
+                      <div style={styles.label}>개당 외화가격</div>
                       <input
                         style={styles.input}
-                        value={d.foreign_total}
-                        onChange={(e) =>
+                        value={d.foreign_unit_price}
+                        onChange={(e) => {
+                          const nextUnit = e.target.value;
                           setDraftItems((prev) =>
                             prev.map((x) =>
                               x.key === d.key
-                                ? { ...x, foreign_total: e.target.value }
+                                ? {
+                                    ...x,
+                                    foreign_unit_price: nextUnit,
+                                    foreign_total:
+                                      n(nextUnit) > 0
+                                        ? String(
+                                            round4(
+                                              Math.max(0, n(x.qty)) *
+                                                n(nextUnit),
+                                            ),
+                                          )
+                                        : "",
+                                  }
                                 : x,
                             ),
-                          )
-                        }
-                        placeholder="비우면 자동배분 / 전부 입력 후 합계 안 맞으면 비례보정"
+                          );
+                        }}
+                        placeholder="예: 1600"
+                      />
+                    </div>
+
+                    <div style={styles.field}>
+                      <div style={styles.label}>
+                        상품 외화 총액(자동계산·수정 가능)
+                      </div>
+                      <input
+                        style={styles.input}
+                        value={d.foreign_total}
+                        onChange={(e) => {
+                          const nextTotal = e.target.value;
+                          setDraftItems((prev) =>
+                            prev.map((x) =>
+                              x.key === d.key
+                                ? {
+                                    ...x,
+                                    foreign_total: nextTotal,
+                                    foreign_unit_price:
+                                      n(x.qty) > 0 && n(nextTotal) >= 0
+                                        ? String(
+                                            round4(
+                                              n(nextTotal) /
+                                                Math.max(1, n(x.qty)),
+                                            ),
+                                          )
+                                        : x.foreign_unit_price,
+                                  }
+                                : x,
+                            ),
+                          );
+                        }}
+                        placeholder="수량 × 개당가격으로 자동계산"
                       />
                     </div>
 
