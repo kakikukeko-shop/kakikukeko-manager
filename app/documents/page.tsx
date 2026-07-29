@@ -2393,6 +2393,22 @@ export default function DocumentsPage() {
       });
   }, [vendors, vendorUsageCountMap]);
 
+  const includedShippingVendorOptions = useMemo(() => {
+    return vendors
+      .filter(
+        (v) =>
+          !!v.name?.trim() &&
+          (!!v.is_product_supplier || !!v.is_forwarder || !!v.is_carry_in),
+      )
+      .sort((a, b) => {
+        const usageDiff =
+          (vendorUsageCountMap.get(normalizeName(b.name)) ?? 0) -
+          (vendorUsageCountMap.get(normalizeName(a.name)) ?? 0);
+        if (usageDiff !== 0) return usageDiff;
+        return (a.name ?? "").localeCompare(b.name ?? "", "ko-KR");
+      });
+  }, [vendors, vendorUsageCountMap]);
+
   const costVendorOptions = useMemo(() => {
     let filtered = vendors;
 
@@ -5924,12 +5940,22 @@ export default function DocumentsPage() {
 
                   <div style={styles.field}>
                     <div style={styles.label}>배송비 거래처</div>
-                    <input
-                      style={styles.input}
+                    <select
+                      style={styles.select}
                       value={fShippingVendor}
                       onChange={(e) => setFShippingVendor(e.target.value)}
-                      placeholder="예: 상품거래처 또는 배송업체"
-                    />
+                    >
+                      <option value="">선택 안함</option>
+                      {includedShippingVendorOptions.map((vendor) => (
+                        <option key={vendor.id} value={vendor.name ?? ""}>
+                          {vendor.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      거래처관리에서 상품거래처·배대지·휴대품반입으로
+                      등록한 업체가 표시돼.
+                    </div>
                   </div>
 
                   <div
