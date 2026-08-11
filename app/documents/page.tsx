@@ -1941,6 +1941,36 @@ export default function DocumentsPage() {
     return map;
   }, [items]);
 
+  const editingPurchase = useMemo(
+    () =>
+      editingPurchaseId
+        ? purchases.find((purchase) => purchase.id === editingPurchaseId) ?? null
+        : null,
+    [editingPurchaseId, purchases],
+  );
+
+  const editingPurchaseHasRefund = useMemo(() => {
+    if (buyMode !== "edit" || !editingPurchaseId) return false;
+
+    const purchaseItemIds = new Set(
+      (itemsByPurchase.get(editingPurchaseId) ?? []).map((item) => item.id),
+    );
+
+    return costs.some((cost) => {
+      if (normalizeCostType(cost.cost_type) !== "환불") return false;
+      if (cost.purchase_id === editingPurchaseId) return true;
+
+      return parseRefundMeta(cost.memo).items.some((meta) =>
+        purchaseItemIds.has(meta.item_id),
+      );
+    });
+  }, [buyMode, editingPurchaseId, itemsByPurchase, costs]);
+
+  const editingCombinedPaymentMeta = useMemo(
+    () => parseCombinedPaymentMeta(editingPurchase?.memo),
+    [editingPurchase],
+  );
+
   const arrivedQtyByItem = useMemo(() => {
     const map = new Map<string, number>();
     for (const row of arrivals) {
@@ -2543,7 +2573,58 @@ export default function DocumentsPage() {
         : invoiceProductForeign;
     const actualCombinedForeign = fShippingIncluded
       ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
-      : Math.max(0, paymentForeignSum || actualProductForeign);
+      : editingPurchaseHasRefund
+        ? Math.max(
+            0,
+            paymentForeignSum ||
+              n(editingPurchase?.total_foreign) ||
+              actualProductForeign,
+          )
+        : Math.max(0, paymentForeignSum || actualProductForeign);
+
+    // 환불된 매입은 현재 남은 상품금액과 최초 결제금액이 달라지는 게 정상이다.
+    // 이 경우 배송비/원화배분/평균환율은 환불 전 원결제 기준을 유지한다.
+    if (editingPurchaseHasRefund) {
+      const originalShippingForeign = fShippingIncluded
+        ? Math.max(
+            0,
+            n(fShippingForeign) ||
+              n(editingCombinedPaymentMeta?.shipping_foreign),
+          )
+        : 0;
+      const totalKRW = Math.max(0, Math.round(paymentKRWSum));
+      const originalProductForeign = Math.max(
+        0,
+        n(editingCombinedPaymentMeta?.product_foreign) ||
+          invoiceProductForeign ||
+          actualProductForeign,
+      );
+      const originalShippingKRW = fShippingIncluded
+        ? Math.max(0, Math.round(n(editingCombinedPaymentMeta?.shipping_krw)))
+        : 0;
+      const originalProductKRW = fShippingIncluded
+        ? Math.max(
+            0,
+            Math.round(
+              n(editingCombinedPaymentMeta?.product_krw) ||
+                Math.max(0, totalKRW - originalShippingKRW),
+            ),
+          )
+        : totalKRW;
+
+      return {
+        invoiceProductForeign,
+        productForeign: actualProductForeign,
+        shippingForeign: originalShippingForeign,
+        combinedForeign: actualCombinedForeign,
+        productKRW: originalProductKRW,
+        shippingKRW: originalShippingKRW,
+        productFx:
+          calcFxRate(originalProductKRW, originalProductForeign) ||
+          Math.max(0, n(editingPurchase?.fx_rate)),
+      };
+    }
+
     // 인보이스와 상품입력합계의 차이는 상품을 보정하지 않고 배송비에서 흡수한다.
     const calculatedShippingForeign = fShippingIncluded
       ? Math.max(
@@ -2587,9 +2668,13 @@ export default function DocumentsPage() {
     fTotalForeign,
     enteredDraftItemForeignSum,
     fShippingIncluded,
+    fShippingForeign,
     fCombinedForeign,
     paymentForeignSum,
     paymentKRWSum,
+    editingPurchaseHasRefund,
+    editingCombinedPaymentMeta,
+    editingPurchase,
   ]);
 
   // 상품명·수량·개당 외화가격을 입력하면 상품 합계를 자동으로 계산하고,
@@ -2650,6 +2735,7 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (!fShippingIncluded) return;
+    if (editingPurchaseHasRefund) return;
     if (paymentForeignSum <= 0) return;
 
     const nextCombined = round4(paymentForeignSum);
@@ -2670,6 +2756,7 @@ export default function DocumentsPage() {
     }
   }, [
     fShippingIncluded,
+    editingPurchaseHasRefund,
     paymentForeignSum,
     fTotalForeign,
     enteredDraftItemForeignSum,
@@ -2709,23 +2796,28 @@ export default function DocumentsPage() {
     existingPurchaseReceiptPath,
   ]);
 
-  const draftPreview = useMemo(
-    () =>
-      computeDraftPreviewRows(
-        draftItems,
-        Math.max(
-          0,
-          enteredDraftItemForeignSum || n(fTotalForeign),
-        ),
-        purchasePaymentComposition.productKRW,
-      ),
-    [
+  const draftPreview = useMemo(() => {
+    const previewForeign = Math.max(
+      0,
+      enteredDraftItemForeignSum || n(fTotalForeign),
+    );
+    const previewKRW = editingPurchaseHasRefund
+      ? previewForeign * purchasePaymentComposition.productFx
+      : purchasePaymentComposition.productKRW;
+
+    return computeDraftPreviewRows(
       draftItems,
-      enteredDraftItemForeignSum,
-      fTotalForeign,
-      purchasePaymentComposition.productKRW,
-    ],
-  );
+      previewForeign,
+      previewKRW,
+    );
+  }, [
+    draftItems,
+    enteredDraftItemForeignSum,
+    fTotalForeign,
+    editingPurchaseHasRefund,
+    purchasePaymentComposition.productKRW,
+    purchasePaymentComposition.productFx,
+  ]);
 
   const draftPreviewMap = useMemo(() => {
     const map = new Map<string, DraftPreviewRow>();
@@ -3553,6 +3645,14 @@ export default function DocumentsPage() {
     setErr(null);
     setMsg(null);
 
+    const isRefundedPurchaseEdit = editingPurchaseHasRefund;
+    const currentEditingPurchase = editingPurchaseId
+      ? purchaseMap.get(editingPurchaseId) ?? null
+      : null;
+    const currentCombinedMeta = isRefundedPurchaseEdit
+      ? parseCombinedPaymentMeta(currentEditingPurchase?.memo)
+      : null;
+
     const totalKRW = Math.max(0, Math.round(paymentKRWSum));
     const invoiceProductForeign = Math.max(0, n(fTotalForeign));
     const productForeign = Math.max(
@@ -3568,9 +3668,21 @@ export default function DocumentsPage() {
             paymentForeignSum ||
             n(fCombinedForeign),
         )
-      : productForeign;
+      : isRefundedPurchaseEdit
+        ? Math.max(
+            0,
+            paymentForeignSum ||
+              n(currentEditingPurchase?.total_foreign) ||
+              productForeign,
+          )
+        : productForeign;
     const shippingForeign = fShippingIncluded
-      ? Math.max(0, round4(combinedForeign - productForeign))
+      ? isRefundedPurchaseEdit
+        ? Math.max(
+            0,
+            n(fShippingForeign) || n(currentCombinedMeta?.shipping_foreign),
+          )
+        : Math.max(0, round4(combinedForeign - productForeign))
       : 0;
     const productKRW = purchasePaymentComposition.productKRW;
     const shippingKRW = purchasePaymentComposition.shippingKRW;
@@ -3592,7 +3704,10 @@ export default function DocumentsPage() {
       setErr("인보이스 상품 외화총액과 상품별 외화가격을 입력해줘.");
       return;
     }
-    if (fShippingIncluded) {
+
+    // 환불이 없는 일반 매입만 현재 상품합계와 결제총액의 일치를 검사한다.
+    // 환불된 매입은 원결제금액과 현재 남은 상품합계가 달라지는 것이 정상이다.
+    if (fShippingIncluded && !isRefundedPurchaseEdit) {
       if (shippingForeign <= 0 || combinedForeign <= 0) {
         setErr(
           "함께 결제한 배송비 외화총액과 총 결제 외화총액을 입력해줘.",
@@ -3618,6 +3733,7 @@ export default function DocumentsPage() {
       ? combinedForeign
       : productForeign;
     if (
+      !isRefundedPurchaseEdit &&
       paymentForeignSum > 0 &&
       Math.abs(paymentForeignSum - expectedPaymentForeign) > 0.01
     ) {
@@ -3632,7 +3748,10 @@ export default function DocumentsPage() {
     }
 
     for (const payment of validPayments) {
-      const paymentCurrency = currencyValue(payment.currency, payment.currency_custom);
+      const paymentCurrency = currencyValue(
+        payment.currency,
+        payment.currency_custom,
+      );
       if (!paymentCurrency) {
         setErr("각 결제내역의 통화를 선택하거나 직접 입력해줘.");
         return;
@@ -3641,31 +3760,14 @@ export default function DocumentsPage() {
         setErr("각 결제내역의 결제일을 YYYY-MM-DD 형식으로 입력해줘.");
         return;
       }
-      if (normalizeCurrencyCode(paymentCurrency) !== "KRW" && n(payment.foreign_amount) <= 0) {
+      if (
+        normalizeCurrencyCode(paymentCurrency) !== "KRW" &&
+        n(payment.foreign_amount) <= 0
+      ) {
         setErr("외화 결제는 외화 결제금액도 입력해줘.");
         return;
       }
     }
-
-    const editingPurchaseItems = editingPurchaseId
-      ? itemsByPurchase.get(editingPurchaseId) ?? []
-      : [];
-    const editingPurchaseItemIds = new Set(
-      editingPurchaseItems.map((item) => item.id),
-    );
-
-    // 환불 이력이 있는 매입은 상품 수량과 외화총액이 최초 매입 당시와 달라지는 게 정상이다.
-    // 그래서 매입 수정 시에는 최초 상품 외화총액과 현재 남은 상품 외화총액의 일치를 강제하지 않는다.
-    const isRefundedPurchaseEdit =
-      buyMode === "edit" &&
-      !!editingPurchaseId &&
-      costs.some((cost) => {
-        if (normalizeCostType(cost.cost_type) !== "환불") return false;
-        if (cost.purchase_id === editingPurchaseId) return true;
-        return parseRefundMeta(cost.memo).items.some((meta) =>
-          editingPurchaseItemIds.has(meta.item_id),
-        );
-      });
 
     const computed = isRefundedPurchaseEdit
       ? {
@@ -3700,6 +3802,52 @@ export default function DocumentsPage() {
 
     const cleaned = computed.rows;
 
+    const totalForeignToSave = isRefundedPurchaseEdit
+      ? Math.max(
+          0,
+          paymentForeignSum ||
+            n(currentEditingPurchase?.total_foreign) ||
+            combinedForeign,
+        )
+      : combinedForeign;
+    const purchaseFxToSave = isRefundedPurchaseEdit
+      ? calcFxRate(totalKRW, totalForeignToSave) ||
+        Math.max(0, n(currentEditingPurchase?.fx_rate))
+      : fShippingIncluded
+        ? calcFxRate(totalKRW, combinedForeign)
+        : fx;
+    const combinedMetaToSave = fShippingIncluded
+      ? isRefundedPurchaseEdit && currentCombinedMeta?.enabled
+        ? {
+            ...currentCombinedMeta,
+            product_foreign: invoiceProductForeign || currentCombinedMeta.product_foreign,
+            shipping_foreign:
+              Math.max(0, n(fShippingForeign)) ||
+              currentCombinedMeta.shipping_foreign,
+            total_foreign: totalForeignToSave,
+            shipping_vendor:
+              fShippingVendor.trim() || currentCombinedMeta.shipping_vendor,
+          }
+        : {
+            enabled: true,
+            product_foreign: invoiceProductForeign,
+            shipping_foreign: shippingForeign,
+            total_foreign: totalForeignToSave,
+            product_krw: productKRW,
+            shipping_krw: shippingKRW,
+            shipping_vendor: fShippingVendor.trim(),
+          }
+      : null;
+    const historicalProductFx = isRefundedPurchaseEdit
+      ? calcFxRate(
+          Math.max(0, n(currentCombinedMeta?.product_krw)) || productKRW,
+          Math.max(0, n(currentCombinedMeta?.product_foreign)) ||
+            invoiceProductForeign,
+        ) ||
+        Math.max(0, n(currentEditingPurchase?.fx_rate)) ||
+        fx
+      : fx;
+
     setLoading(true);
     try {
       let purchaseId = editingPurchaseId;
@@ -3713,25 +3861,10 @@ export default function DocumentsPage() {
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
-            fx_rate: fShippingIncluded
-              ? calcFxRate(totalKRW, combinedForeign)
-              : fx,
-            total_foreign: combinedForeign,
+            fx_rate: purchaseFxToSave,
+            total_foreign: totalForeignToSave,
             total_amount: totalKRW,
-            memo: buildCombinedPaymentMemo(
-              fMemo,
-              fShippingIncluded
-                ? {
-                    enabled: true,
-                    product_foreign: invoiceProductForeign,
-                    shipping_foreign: shippingForeign,
-                    total_foreign: combinedForeign,
-                    product_krw: productKRW,
-                    shipping_krw: shippingKRW,
-                    shipping_vendor: fShippingVendor.trim(),
-                  }
-                : null,
-            ),
+            memo: buildCombinedPaymentMemo(fMemo, combinedMetaToSave),
           })
           .eq("id", editingPurchaseId);
         if (updP.error) throw updP.error;
@@ -3833,7 +3966,16 @@ export default function DocumentsPage() {
           q > 0
             ? ceil4(ft / q)
             : Math.max(0, n(previousItem?.foreign_unit_price));
-        const lineKRW = q > 0 ? ceil4(ft * fx) : 0;
+        const previousItemFx =
+          previousItem &&
+          n(previousItem.foreign_unit_price) > 0 &&
+          n(previousItem.unit_price) > 0
+            ? n(previousItem.unit_price) / n(previousItem.foreign_unit_price)
+            : 0;
+        const itemFx = isRefundedPurchaseEdit
+          ? previousItemFx || historicalProductFx
+          : fx;
+        const lineKRW = q > 0 ? ceil4(ft * itemFx) : 0;
         const unitKRW =
           q > 0
             ? ceil4(lineKRW / q)
@@ -3882,61 +4024,63 @@ export default function DocumentsPage() {
         }
       }
 
-      const previousIncludedShippingCosts = costs.filter(
-        (cost) =>
-          cost.purchase_id === purchaseId &&
-          normalizeCostType(cost.cost_type) === "배송비(거래처)" &&
-          String(cost.memo ?? "").includes(INCLUDED_SHIPPING_MEMO_HEADER),
-      );
-
-      for (const oldCost of previousIncludedShippingCosts) {
-        const delAlloc = await supabase
-          .from("cost_allocations")
-          .delete()
-          .eq("purchase_cost_id", oldCost.id);
-        if (delAlloc.error) throw delAlloc.error;
-
-        const delCost = await supabase
-          .from("purchase_costs")
-          .delete()
-          .eq("id", oldCost.id);
-        if (delCost.error) throw delCost.error;
-      }
-
-      if (fShippingIncluded && shippingForeign > 0 && shippingKRW > 0) {
-        const shippingCost = await supabase
-          .from("purchase_costs")
-          .insert({
-            purchase_id: purchaseId,
-            cost_type: "배송비(거래처)",
-            amount: shippingForeign,
-            currency: cur,
-            fx_rate: calcFxRate(shippingKRW, shippingForeign),
-            memo: `${INCLUDED_SHIPPING_MEMO_HEADER}
-상품값과 같은 결제로 지급`,
-            vendor_name: fShippingVendor.trim() || fSupplier || null,
-            cost_date: fPurchaseDate || null,
-          })
-          .select("id")
-          .single();
-        if (shippingCost.error) throw shippingCost.error;
-
-        const shippingAllocated = distributeByWeightsCeilIntSigned(
-          shippingKRW,
-          cleaned.map((row) => Math.max(0, row.qty)),
+      if (!isRefundedPurchaseEdit) {
+        const previousIncludedShippingCosts = costs.filter(
+          (cost) =>
+            cost.purchase_id === purchaseId &&
+            normalizeCostType(cost.cost_type) === "배송비(거래처)" &&
+            String(cost.memo ?? "").includes(INCLUDED_SHIPPING_MEMO_HEADER),
         );
-
-        const shippingAllocationInsert = await supabase
-          .from("cost_allocations")
-          .insert(
-            savedPurchaseItemIds.map((itemId, index) => ({
-              purchase_cost_id: shippingCost.data.id,
-              purchase_item_id: itemId,
-              allocated_amount: shippingAllocated[index] ?? 0,
-            })),
+  
+        for (const oldCost of previousIncludedShippingCosts) {
+          const delAlloc = await supabase
+            .from("cost_allocations")
+            .delete()
+            .eq("purchase_cost_id", oldCost.id);
+          if (delAlloc.error) throw delAlloc.error;
+  
+          const delCost = await supabase
+            .from("purchase_costs")
+            .delete()
+            .eq("id", oldCost.id);
+          if (delCost.error) throw delCost.error;
+        }
+  
+        if (fShippingIncluded && shippingForeign > 0 && shippingKRW > 0) {
+          const shippingCost = await supabase
+            .from("purchase_costs")
+            .insert({
+              purchase_id: purchaseId,
+              cost_type: "배송비(거래처)",
+              amount: shippingForeign,
+              currency: cur,
+              fx_rate: calcFxRate(shippingKRW, shippingForeign),
+              memo: `${INCLUDED_SHIPPING_MEMO_HEADER}
+  상품값과 같은 결제로 지급`,
+              vendor_name: fShippingVendor.trim() || fSupplier || null,
+              cost_date: fPurchaseDate || null,
+            })
+            .select("id")
+            .single();
+          if (shippingCost.error) throw shippingCost.error;
+  
+          const shippingAllocated = distributeByWeightsCeilIntSigned(
+            shippingKRW,
+            cleaned.map((row) => Math.max(0, row.qty)),
           );
-        if (shippingAllocationInsert.error)
-          throw shippingAllocationInsert.error;
+  
+          const shippingAllocationInsert = await supabase
+            .from("cost_allocations")
+            .insert(
+              savedPurchaseItemIds.map((itemId, index) => ({
+                purchase_cost_id: shippingCost.data.id,
+                purchase_item_id: itemId,
+                allocated_amount: shippingAllocated[index] ?? 0,
+              })),
+            );
+          if (shippingAllocationInsert.error)
+            throw shippingAllocationInsert.error;
+        }
       }
 
       if (buyMode === "create" && draftPurchaseCosts.length > 0) {
@@ -4003,7 +4147,7 @@ export default function DocumentsPage() {
       setMsg(
         buyMode === "edit"
           ? isRefundedPurchaseEdit
-            ? "매입 수정 완료 · 환불 후 남은 상품금액 기준으로 저장했어."
+            ? "매입 수정 완료 · 최초 결제내역은 유지하고 환불 후 남은 상품만 수정했어."
             : "매입 수정 완료"
           : fShippingIncluded
             ? `매입 저장 완료 · 상품 ${fmtKRW(
