@@ -77,30 +77,60 @@ export default function AppHeader() {
           maxWidth: 1680,
           margin: '0 auto',
           padding: '14px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 16,
-          flexWrap: 'wrap',
+          display: 'grid',
+          gap: 12,
         }}
       >
-        <Link
-          data-app-logo
-          href="/"
+        <div
+          data-app-header-top
           style={{
-            textDecoration: 'none',
-            fontSize: 20,
-            fontWeight: 900,
-            color: '#4338ca',
-            whiteSpace: 'nowrap',
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            justifyContent: 'space-between',
+            gap: 12,
+            minWidth: 0,
           }}
         >
-          <span style={{ fontSize: 22 }}>🧸</span>
-          <span>카키쿠케코 상점</span>
-        </Link>
+          <Link
+            data-app-logo
+            href="/"
+            style={{
+              textDecoration: 'none',
+              fontSize: 20,
+              fontWeight: 900,
+              color: '#4338ca',
+              whiteSpace: 'nowrap',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
+            <span style={{ fontSize: 22 }}>🧸</span>
+            <span>카키쿠케코 상점</span>
+          </Link>
+
+          <button
+            data-mobile-logout
+            type="button"
+            onClick={handleLogout}
+            style={{
+              display: 'none',
+              padding: '8px 11px',
+              borderRadius: 12,
+              border: '1px solid #ef4444',
+              background: '#fff',
+              color: '#ef4444',
+              fontSize: 12,
+              fontWeight: 800,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            로그아웃
+          </button>
+        </div>
 
         <div
           data-app-header-actions
@@ -108,8 +138,8 @@ export default function AppHeader() {
             display: 'flex',
             alignItems: 'center',
             gap: 12,
-            flexWrap: 'wrap',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
+            minWidth: 0,
           }}
         >
           <nav
@@ -118,6 +148,7 @@ export default function AppHeader() {
               display: 'flex',
               gap: 8,
               flexWrap: 'wrap',
+              minWidth: 0,
             }}
           >
             {MENUS.map((menu) => {
@@ -150,6 +181,7 @@ export default function AppHeader() {
                     boxShadow: active
                       ? '0 8px 20px rgba(124,58,237,0.18)'
                       : 'none',
+                    flexShrink: 0,
                   }}
                 >
                   {menu.label}
@@ -158,54 +190,125 @@ export default function AppHeader() {
             })}
           </nav>
 
-          <button
-            data-view-toggle
-            type="button"
-            onClick={toggleViewMode}
-            aria-pressed={viewMode === 'tablet'}
+          <div
+            data-desktop-actions
             style={{
-              padding: '10px 14px',
-              borderRadius: 14,
-              border: '1px solid #0f766e',
-              background:
-                viewMode === 'tablet'
-                  ? '#0f766e'
-                  : '#fff',
-              color:
-                viewMode === 'tablet'
-                  ? '#fff'
-                  : '#0f766e',
-              fontSize: 14,
-              fontWeight: 800,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              flexShrink: 0,
             }}
           >
-            {viewMode === 'tablet'
-              ? '🖥️ PC 버전'
-              : '📱 태블릿 버전'}
-          </button>
+            <button
+              data-view-toggle
+              type="button"
+              onClick={toggleViewMode}
+              aria-pressed={viewMode === 'tablet'}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 14,
+                border: '1px solid #0f766e',
+                background:
+                  viewMode === 'tablet'
+                    ? '#0f766e'
+                    : '#fff',
+                color:
+                  viewMode === 'tablet'
+                    ? '#fff'
+                    : '#0f766e',
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {viewMode === 'tablet'
+                ? '🖥️ PC 버전'
+                : '📱 태블릿 버전'}
+            </button>
 
-          <button
-            data-logout-button
-            type="button"
-            onClick={handleLogout}
-            style={{
-              padding: '10px 14px',
-              borderRadius: 14,
-              border: '1px solid #ef4444',
-              background: '#fff',
-              color: '#ef4444',
-              fontSize: 14,
-              fontWeight: 800,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            로그아웃
-          </button>
+            <button
+              data-logout-button
+              type="button"
+              onClick={handleLogout}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 14,
+                border: '1px solid #ef4444',
+                background: '#fff',
+                color: '#ef4444',
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              로그아웃
+            </button>
+          </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        @media (max-width: 699px) {
+          [data-app-header-inner] {
+            padding: 12px 14px !important;
+            gap: 10px !important;
+          }
+
+          [data-app-header-top] {
+            width: 100% !important;
+          }
+
+          [data-app-logo] {
+            font-size: 18px !important;
+          }
+
+          [data-app-logo] > span:first-child {
+            font-size: 20px !important;
+          }
+
+          [data-mobile-logout] {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+          }
+
+          [data-desktop-actions] {
+            display: none !important;
+          }
+
+          [data-app-header-actions] {
+            display: block !important;
+            width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          [data-app-nav] {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            gap: 7px !important;
+            padding-bottom: 2px !important;
+            scrollbar-width: none !important;
+            -webkit-overflow-scrolling: touch !important;
+          }
+
+          [data-app-nav]::-webkit-scrollbar {
+            display: none !important;
+          }
+
+          [data-app-nav] a {
+            padding: 9px 12px !important;
+            font-size: 13px !important;
+            border-radius: 12px !important;
+            flex: 0 0 auto !important;
+          }
+        }
+      `}</style>
     </header>
   )
 }
