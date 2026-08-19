@@ -5648,7 +5648,7 @@ export default function DocumentsPage() {
   return (
     <div style={styles.page} data-page="documents">
       <div style={styles.topbar} data-mobile-role="documents-topbar">
-        <div style={styles.title}>매입관리</div>
+        <div style={styles.title} data-mobile-role="documents-page-title">매입관리</div>
 
         <button style={styles.btn("primary")} onClick={openCreatePurchaseModal}>
           + 매입 등록(안에 상품까지)
@@ -5674,17 +5674,6 @@ export default function DocumentsPage() {
         >
           새로고침
         </button>
-
-        {!shippingReallocationDone ? (
-          <button
-            style={styles.btn("ghost")}
-            onClick={reallocateAllExistingShippingCostsByQuantity}
-            disabled={loading}
-            title="기존 배송비(거래처/배대지)를 현재 상품 수량 기준으로 다시 배분"
-          >
-            기존 배송비 수량대비 재배분
-          </button>
-        ) : null}
 
         {legacyRefundRestoreCandidates.length > 0 ? (
           <button
@@ -5775,7 +5764,10 @@ export default function DocumentsPage() {
             </div>
           </div>
 
-          <div style={{ display: "grid", gap: 8 }}>
+          <div
+            data-mobile-role="documents-purchase-controls"
+            style={{ display: "grid", gap: 8 }}
+          >
             <input
               style={styles.input}
               value={purchaseSearch}
@@ -6950,25 +6942,31 @@ export default function DocumentsPage() {
             top: 0 !important;
             z-index: 45 !important;
             display: flex !important;
+            flex-direction: row !important;
             flex-wrap: nowrap !important;
             gap: 8px !important;
             width: calc(100% + 20px) !important;
+            max-width: none !important;
             margin: -10px -10px 10px -10px !important;
-            padding: 10px !important;
+            padding: 8px 10px !important;
             overflow-x: auto !important;
             overflow-y: hidden !important;
+            overscroll-behavior-x: contain;
+            scroll-snap-type: x proximity;
             align-items: center !important;
             background: rgba(247, 247, 251, 0.98) !important;
             border-bottom: 1px solid #e5e7eb !important;
             backdrop-filter: blur(8px);
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
+            touch-action: pan-x;
           }
 
           [data-page="documents"] [data-mobile-role="documents-topbar"]::-webkit-scrollbar {
             display: none;
           }
 
+          [data-page="documents"] [data-mobile-role="documents-page-title"],
           [data-page="documents"] [data-mobile-role="documents-topbar"] > div:first-child {
             display: none !important;
           }
@@ -6977,10 +6975,12 @@ export default function DocumentsPage() {
             flex: 0 0 auto !important;
             width: auto !important;
             min-width: max-content !important;
-            padding: 9px 12px !important;
+            max-width: none !important;
+            padding: 9px 13px !important;
             white-space: nowrap !important;
             line-height: 1.2 !important;
             font-size: 13px !important;
+            scroll-snap-align: start;
           }
 
           [data-page="documents"] [data-mobile-role="documents-selection-summary"] {
@@ -6992,6 +6992,10 @@ export default function DocumentsPage() {
             gap: 6px !important;
             align-items: center !important;
             padding: 0 !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"] > span {
+            display: none !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-selection-summary"] > span {
@@ -7069,6 +7073,25 @@ export default function DocumentsPage() {
             font-size: 16px !important;
           }
 
+          /* 매입목록: 검색 + 정렬 + 보기 필터를 한 줄 */
+          [data-page="documents"] [data-mobile-role="documents-purchase-controls"] {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1.6fr) minmax(105px, 0.8fr) minmax(120px, 0.9fr) !important;
+            gap: 6px !important;
+            align-items: center !important;
+            width: 100% !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-purchase-controls"] input,
+          [data-page="documents"] [data-mobile-role="documents-purchase-controls"] select {
+            width: 100% !important;
+            min-width: 0 !important;
+            height: 44px !important;
+            min-height: 44px !important;
+            padding: 8px 9px !important;
+            font-size: 14px !important;
+          }
+
           /* 매입 카드: 버튼이 내용 폭을 잡아먹지 않게 */
           [data-page="documents"] [data-tablet-role="documents-sidebar"] button {
             flex-shrink: 0 !important;
@@ -7078,15 +7101,24 @@ export default function DocumentsPage() {
           [data-page="documents"] [data-mobile-role="documents-item-controls"] {
             width: 100% !important;
             display: grid !important;
-            grid-template-columns: minmax(0, 1fr) !important;
-            gap: 8px !important;
+            grid-template-columns: minmax(0, 1.6fr) minmax(120px, 0.9fr) !important;
+            gap: 6px !important;
+            align-items: center !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-item-controls"] input,
           [data-page="documents"] [data-mobile-role="documents-item-controls"] select {
             width: 100% !important;
             min-width: 0 !important;
-            font-size: 16px !important;
+            height: 44px !important;
+            min-height: 44px !important;
+            padding: 8px 9px !important;
+            font-size: 14px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-item-controls"] > div {
+            grid-column: 1 / -1 !important;
+            font-size: 12px !important;
           }
 
           /* 좁은 화면에서는 기존 가로표 대신 동일 기능의 카드 목록 */
