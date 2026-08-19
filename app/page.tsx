@@ -802,6 +802,7 @@ export default function DashboardPage() {
     <div style={{ display: 'grid', gap: 18 }} data-page="dashboard">
       <section
         data-tablet-role="dashboard-hero"
+        data-mobile-role="dashboard-hero"
         style={{
           background: '#fff',
           border: '1px solid #e5e7eb',
@@ -816,6 +817,7 @@ export default function DashboardPage() {
       >
         <div style={{ minWidth: 0 }}>
           <div
+            data-mobile-role="dashboard-title"
             style={{
               fontSize: 28,
               fontWeight: 900,
@@ -827,6 +829,7 @@ export default function DashboardPage() {
           </div>
 
           <div
+            data-mobile-role="dashboard-subtitle"
             style={{
               fontSize: 15,
               color: '#4b5563',
@@ -838,6 +841,7 @@ export default function DashboardPage() {
         </div>
 
         <div
+          data-mobile-role="dashboard-backup"
           style={{
             border: '1px solid #e5e7eb',
             borderRadius: 20,
@@ -895,6 +899,7 @@ export default function DashboardPage() {
       ) : null}
 
       <section
+        data-mobile-role="dashboard-sales-cards"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -904,6 +909,7 @@ export default function DashboardPage() {
         {salesCards.map((card) => (
           <button
             key={card.key}
+            data-mobile-role="dashboard-metric-card"
             type="button"
             onClick={() => {
               setSelectedMetric(card.key)
@@ -960,6 +966,7 @@ export default function DashboardPage() {
       </section>
 
       <section
+        data-mobile-role="dashboard-purchase-cards"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -969,6 +976,7 @@ export default function DashboardPage() {
         {purchaseCards.map((card) => (
           <button
             key={card.key}
+            data-mobile-role="dashboard-metric-card"
             type="button"
             onClick={() => {
               setSelectedMetric(card.key)
@@ -1038,6 +1046,7 @@ export default function DashboardPage() {
       </section>
 
       <section
+        data-mobile-role="dashboard-nav-cards"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
@@ -1054,6 +1063,7 @@ export default function DashboardPage() {
             }}
           >
             <div
+              data-mobile-role="dashboard-nav-card"
               style={{
                 background: '#fff',
                 border: '1px solid #e5e7eb',
@@ -1105,6 +1115,155 @@ export default function DashboardPage() {
           </Link>
         ))}
       </section>
+
+
+      <style jsx global>{`
+        @media (max-width: 699px) {
+          [data-page="dashboard"] {
+            gap: 10px !important;
+            width: 100% !important;
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+          }
+
+          [data-page="dashboard"] * {
+            box-sizing: border-box;
+            min-width: 0;
+          }
+
+          /* 상단 대시보드 소개는 모바일에서 최대한 얇게 */
+          [data-page="dashboard"] [data-mobile-role="dashboard-hero"] {
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 8px !important;
+            padding: 12px !important;
+            border-radius: 16px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-title"] {
+            font-size: 20px !important;
+            margin-bottom: 2px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-subtitle"] {
+            font-size: 12px !important;
+            line-height: 1.45 !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-backup"] {
+            padding: 10px !important;
+            border-radius: 14px !important;
+            gap: 8px !important;
+            align-items: flex-start !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-backup"] > div:first-child > div:first-child {
+            font-size: 14px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-backup"] > div:first-child > div:last-child {
+            font-size: 10px !important;
+            line-height: 1.35 !important;
+          }
+
+          /* 매출/매입 요약카드: 한 줄에 두 개 */
+          [data-page="dashboard"] [data-mobile-role="dashboard-sales-cards"],
+          [data-page="dashboard"] [data-mobile-role="dashboard-purchase-cards"] {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-metric-card"] {
+            padding: 11px !important;
+            border-radius: 15px !important;
+            min-height: 104px !important;
+            box-shadow: none !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-metric-card"] > div:first-child {
+            font-size: 10px !important;
+            padding: 3px 7px !important;
+            margin-bottom: 7px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-metric-card"] > div:nth-child(2) {
+            font-size: 18px !important;
+            line-height: 1.2 !important;
+            overflow-wrap: anywhere !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-metric-card"] > div:nth-last-child(1) {
+            margin-top: 6px !important;
+            font-size: 10px !important;
+          }
+
+          /* 환불 카드의 보조금액 */
+          [data-page="dashboard"] [data-mobile-role="dashboard-purchase-cards"]
+          [data-mobile-role="dashboard-metric-card"] > div:nth-child(3) {
+            font-size: 10px !important;
+            line-height: 1.35 !important;
+            margin-top: 5px !important;
+            overflow-wrap: anywhere !important;
+          }
+
+          /* 페이지 이동 카드도 두 개씩, 설명은 줄여서 높이 절약 */
+          [data-page="dashboard"] [data-mobile-role="dashboard-nav-cards"] {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] {
+            min-height: 0 !important;
+            padding: 12px !important;
+            border-radius: 15px !important;
+            box-shadow: none !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:first-child {
+            font-size: 15px !important;
+            margin-bottom: 6px !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:nth-child(2) {
+            font-size: 11px !important;
+            line-height: 1.4 !important;
+            display: -webkit-box !important;
+            -webkit-line-clamp: 3 !important;
+            -webkit-box-orient: vertical !important;
+            overflow: hidden !important;
+          }
+
+          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:last-child {
+            margin-top: 9px !important;
+            padding: 7px 9px !important;
+            border-radius: 9px !important;
+            font-size: 11px !important;
+          }
+
+          /* iPhone에서 모달이 화면 밖으로 나가지 않게 */
+          [role="dialog"] {
+            width: calc(100vw - 16px) !important;
+            max-width: calc(100vw - 16px) !important;
+            max-height: calc(100dvh - 24px) !important;
+            overflow: auto !important;
+          }
+
+          [role="dialog"] > * {
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          [role="dialog"] a,
+          [role="dialog"] button {
+            max-width: 100% !important;
+          }
+        }
+
+        @media (min-width: 700px) and (max-width: 1180px) {
+          [data-page="dashboard"] [data-tablet-role="dashboard-hero"] {
+            grid-template-columns: minmax(0, 1fr) 360px !important;
+          }
+        }
+      `}</style>
 
       <SafeModal
         open={metricModalOpen}
