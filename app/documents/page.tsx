@@ -6460,17 +6460,17 @@ export default function DocumentsPage() {
                       data-mobile-role="documents-item-card"
                       style={{
                         ...styles.card,
-                        padding: 12,
+                        padding: 10,
                         display: "grid",
-                        gap: 10,
+                        gap: 8,
                         boxShadow: "none",
                       }}
                     >
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "28px 58px minmax(0, 1fr)",
-                          gap: 10,
+                          gridTemplateColumns: "24px minmax(0, 1fr)",
+                          gap: 8,
                           alignItems: "start",
                         }}
                       >
@@ -6491,72 +6491,86 @@ export default function DocumentsPage() {
                           }}
                         />
 
-                        {itemPhotoMap.get(it.id) ? (
-                          <img
-                            src={itemPhotoMap.get(it.id)}
-                            alt={it.item_name ?? "상품"}
-                            onClick={() => openItemDetail(it)}
-                            style={{
-                              width: 58,
-                              height: 58,
-                              objectFit: "cover",
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              background: "#f3f4f6",
-                              cursor: "pointer",
-                            }}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => openItemDetail(it)}
-                            style={{
-                              width: 58,
-                              height: 58,
-                              borderRadius: 12,
-                              border: "1px solid #ddd",
-                              background: "#f3f4f6",
-                              color: "#888",
-                              fontSize: 11,
-                              cursor: "pointer",
-                            }}
-                          >
-                            사진
-                            <br />
-                            없음
-                          </button>
-                        )}
-
                         <div style={{ minWidth: 0 }}>
-                          <button
-                            type="button"
-                            onClick={() => openItemDetail(it)}
+                          <div
                             style={{
-                              border: "none",
-                              background: "transparent",
-                              padding: 0,
-                              color: "#111",
-                              textAlign: "left",
-                              fontWeight: 900,
-                              fontSize: 15,
-                              lineHeight: 1.35,
-                              cursor: "pointer",
-                              width: "100%",
-                              wordBreak: "break-word",
+                              display: "grid",
+                              gridTemplateColumns: "52px minmax(0, 1fr)",
+                              gap: 8,
+                              alignItems: "start",
                             }}
                           >
-                            {it.item_name ?? "(이름 없음)"}
-                          </button>
+                            {itemPhotoMap.get(it.id) ? (
+                              <img
+                                src={itemPhotoMap.get(it.id)}
+                                alt={it.item_name ?? "상품"}
+                                onClick={() => openItemDetail(it)}
+                                style={{
+                                  width: 52,
+                                  height: 52,
+                                  objectFit: "cover",
+                                  borderRadius: 10,
+                                  border: "1px solid #ddd",
+                                  background: "#f3f4f6",
+                                  cursor: "pointer",
+                                }}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => openItemDetail(it)}
+                                style={{
+                                  width: 52,
+                                  height: 52,
+                                  borderRadius: 10,
+                                  border: "1px solid #ddd",
+                                  background: "#f3f4f6",
+                                  color: "#888",
+                                  fontSize: 10,
+                                  cursor: "pointer",
+                                  padding: 0,
+                                }}
+                              >
+                                사진
+                                <br />
+                                없음
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => openItemDetail(it)}
+                              style={{
+                                border: "none",
+                                background: "transparent",
+                                padding: 0,
+                                color: "#111",
+                                textAlign: "left",
+                                fontWeight: 900,
+                                fontSize: 13,
+                                lineHeight: 1.3,
+                                cursor: "pointer",
+                                width: "100%",
+                                wordBreak: "break-word",
+                                display: "-webkit-box",
+                                WebkitLineClamp: 3,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }}
+                            >
+                              {it.item_name ?? "(이름 없음)"}
+                            </button>
+                          </div>
 
                           <div
                             style={{
                               display: "flex",
-                              gap: 5,
+                              gap: 4,
                               flexWrap: "wrap",
                               marginTop: 6,
                             }}
                           >
-                            <span style={styles.badge("gray")}>
+                            <span style={{ ...styles.badge("gray"), fontSize: 10, padding: "2px 6px" }}>
                               {it.product_type ?? "기타"}
                             </span>
                             {refundPendingItemIds.has(it.id) ? (
@@ -6566,6 +6580,8 @@ export default function DocumentsPage() {
                                   background: "#fef3c7",
                                   color: "#92400e",
                                   border: "1px solid #f59e0b",
+                                  fontSize: 10,
+                                  padding: "2px 6px",
                                 }}
                               >
                                 환불 진행중
@@ -6573,17 +6589,27 @@ export default function DocumentsPage() {
                             ) : null}
                             {refundStatus ? (
                               <span
-                                style={styles.badge(
-                                  refundStatus === "전체환불"
-                                    ? "gray"
-                                    : "orange",
-                                )}
+                                style={{
+                                  ...styles.badge(
+                                    refundStatus === "전체환불"
+                                      ? "gray"
+                                      : "orange",
+                                  ),
+                                  fontSize: 10,
+                                  padding: "2px 6px",
+                                }}
                               >
                                 {refundStatus}
                               </span>
                             ) : null}
                             {isUnreceived ? (
-                              <span style={styles.badge("orange")}>
+                              <span
+                                style={{
+                                  ...styles.badge("orange"),
+                                  fontSize: 10,
+                                  padding: "2px 6px",
+                                }}
+                              >
                                 미입고 {fmtNum(unreceivedQty)}개
                               </span>
                             ) : null}
@@ -6595,45 +6621,29 @@ export default function DocumentsPage() {
                         style={{
                           display: "grid",
                           gridTemplateColumns: "1fr 1fr",
-                          gap: 8,
-                          fontSize: 12,
+                          gap: "7px 8px",
+                          fontSize: 11,
                         }}
                       >
                         <div>
-                          <div style={{ color: "#6b7280" }}>거래처</div>
-                          <b>{parentPurchase?.supplier ?? "(거래처 없음)"}</b>
-                        </div>
-                        <div>
-                          <div style={{ color: "#6b7280" }}>결제일</div>
-                          <b>{fmtDate(parentPurchase?.purchase_date)}</b>
-                        </div>
-                        <div>
                           <div style={{ color: "#6b7280" }}>수량</div>
-                          <b>
+                          <b style={{ fontSize: 13 }}>
                             {fmtNum(n(it.qty))}
                             {isFullyRefunded ? " (환불완료)" : ""}
                           </b>
                         </div>
                         <div>
-                          <div style={{ color: "#6b7280" }}>외화총액</div>
-                          <b>
-                            {fmtNum(n(it.foreign_total))}{" "}
-                            {parentPurchase?.currency ?? ""}
-                          </b>
+                          <div style={{ color: "#6b7280" }}>원화합계</div>
+                          <b style={{ fontSize: 13 }}>{fmtKRW(lineTotal)}</b>
                         </div>
                         <div>
-                          <div style={{ color: "#6b7280" }}>상품 원화합계</div>
-                          <b>{fmtKRW(lineTotal)}</b>
+                          <div style={{ color: "#6b7280" }}>추가비용</div>
+                          <b style={{ fontSize: 13 }}>{fmtKRW(allocSum)}</b>
                         </div>
                         <div>
-                          <div style={{ color: "#6b7280" }}>추가비용 배분</div>
-                          <b>{fmtKRW(allocSum)}</b>
-                        </div>
-                        <div style={{ gridColumn: "1 / -1" }}>
                           <div style={{ color: "#6b7280" }}>최종단가</div>
-                          <b>
+                          <b style={{ fontSize: 13 }}>
                             {isFullyRefunded ? "-" : fmtKRW(finalUnit)}
-                            {!isFullyRefunded ? " (배분 포함)" : ""}
                           </b>
                         </div>
                       </div>
@@ -6657,6 +6667,8 @@ export default function DocumentsPage() {
                                 ...styles.badge("purple"),
                                 border: "none",
                                 cursor: "pointer",
+                                fontSize: 10,
+                                padding: "5px 7px",
                               }}
                             >
                               {badge.label} 수정
@@ -6671,7 +6683,8 @@ export default function DocumentsPage() {
                         style={{
                           ...styles.smallBtn,
                           width: "100%",
-                          padding: "9px 10px",
+                          padding: "8px 8px",
+                          fontSize: 11,
                         }}
                       >
                         상품 상세 보기
@@ -7128,8 +7141,14 @@ export default function DocumentsPage() {
 
           [data-page="documents"] [data-mobile-role="documents-mobile-items"] {
             display: grid !important;
-            gap: 10px !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
             width: 100% !important;
+            align-items: start !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-mobile-select-all"] {
+            grid-column: 1 / -1 !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-mobile-select-all"] {
@@ -7140,6 +7159,11 @@ export default function DocumentsPage() {
             width: 100% !important;
             min-width: 0 !important;
             overflow: hidden !important;
+            border-radius: 14px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-item-card"] button {
+            min-width: 0 !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-cost-action"] {
