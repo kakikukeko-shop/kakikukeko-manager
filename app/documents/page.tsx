@@ -6523,6 +6523,7 @@ export default function DocumentsPage() {
                               gridTemplateColumns: "52px minmax(0, 1fr)",
                               gap: 8,
                               alignItems: "start",
+                              marginLeft: -32,
                             }}
                           >
                             {itemPhotoMap.get(it.id) ? (
@@ -6568,6 +6569,7 @@ export default function DocumentsPage() {
                                 gap: 4,
                                 flexWrap: "wrap",
                                 alignContent: "flex-start",
+                                minWidth: 0,
                               }}
                             >
                               <span style={{ ...styles.badge("gray"), fontSize: 10, padding: "2px 6px" }}>
