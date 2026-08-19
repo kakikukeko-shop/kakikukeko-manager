@@ -335,34 +335,6 @@ function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
   }
 }
 
-const navCards = [
-  {
-    href: '/documents',
-    title: '매입관리',
-    desc: '매입 등록, 상품 입력, 추가비용 자동분배',
-  },
-  {
-    href: '/products',
-    title: '상품 / 재고관리',
-    desc: '입고완료, 현재재고, 판매가, 상태 관리',
-  },
-  {
-    href: '/sales',
-    title: '매출관리',
-    desc: '판매등록, 실제배송비, 실입금액, 실이익금액 관리',
-  },
-  {
-    href: '/vendors',
-    title: '거래처관리',
-    desc: '매입처, 배대지, 반입처 등 거래처 관리',
-  },
-  {
-    href: '/evidence',
-    title: '증빙서류관리',
-    desc: '상품사진, 영수증, 통관서류, 비용증빙 관리',
-  },
-]
-
 export default function DashboardPage() {
   const [sales, setSales] = useState<SaleSummaryRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseSummaryRow[]>([])
@@ -1045,77 +1017,6 @@ export default function DashboardPage() {
         ))}
       </section>
 
-      <section
-        data-mobile-role="dashboard-nav-cards"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-          gap: 16,
-        }}
-      >
-        {navCards.map((card) => (
-          <Link
-            key={card.href}
-            href={card.href}
-            style={{
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            <div
-              data-mobile-role="dashboard-nav-card"
-              style={{
-                background: '#fff',
-                border: '1px solid #e5e7eb',
-                borderRadius: 22,
-                padding: 20,
-                minHeight: 150,
-                boxShadow: '0 10px 24px rgba(124, 58, 237, 0.05)',
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 20,
-                  fontWeight: 900,
-                  color: '#111827',
-                  marginBottom: 10,
-                }}
-              >
-                {card.title}
-              </div>
-
-              <div
-                style={{
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                  color: '#4b5563',
-                  fontWeight: 600,
-                }}
-              >
-                {card.desc}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 18,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '10px 14px',
-                  borderRadius: 12,
-                  background: '#7c3aed',
-                  color: '#fff',
-                  fontWeight: 800,
-                  fontSize: 14,
-                }}
-              >
-                들어가기 →
-              </div>
-            </div>
-          </Link>
-        ))}
-      </section>
-
 
       <style jsx global>{`
         @media (max-width: 699px) {
@@ -1205,39 +1106,6 @@ export default function DashboardPage() {
             overflow-wrap: anywhere !important;
           }
 
-          /* 페이지 이동 카드도 두 개씩, 설명은 줄여서 높이 절약 */
-          [data-page="dashboard"] [data-mobile-role="dashboard-nav-cards"] {
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            gap: 8px !important;
-          }
-
-          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] {
-            min-height: 0 !important;
-            padding: 12px !important;
-            border-radius: 15px !important;
-            box-shadow: none !important;
-          }
-
-          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:first-child {
-            font-size: 15px !important;
-            margin-bottom: 6px !important;
-          }
-
-          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:nth-child(2) {
-            font-size: 11px !important;
-            line-height: 1.4 !important;
-            display: -webkit-box !important;
-            -webkit-line-clamp: 3 !important;
-            -webkit-box-orient: vertical !important;
-            overflow: hidden !important;
-          }
-
-          [data-page="dashboard"] [data-mobile-role="dashboard-nav-card"] > div:last-child {
-            margin-top: 9px !important;
-            padding: 7px 9px !important;
-            border-radius: 9px !important;
-            font-size: 11px !important;
-          }
 
           /* iPhone에서 모달이 화면 밖으로 나가지 않게 */
           [role="dialog"] {
