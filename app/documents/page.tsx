@@ -5647,7 +5647,7 @@ export default function DocumentsPage() {
 
   return (
     <div style={styles.page} data-page="documents">
-      <div style={styles.topbar}>
+      <div style={styles.topbar} data-mobile-role="documents-topbar">
         <div style={styles.title}>매입관리</div>
 
         <button style={styles.btn("primary")} onClick={openCreatePurchaseModal}>
@@ -5698,6 +5698,7 @@ export default function DocumentsPage() {
         ) : null}
 
         <div
+          data-mobile-role="documents-selection-summary"
           style={{
             marginLeft: "auto",
             display: "flex",
@@ -6051,6 +6052,7 @@ export default function DocumentsPage() {
               </div>
 
               <div
+                data-mobile-role="documents-item-controls"
                 style={{
                   display: "flex",
                   gap: 10,
@@ -6107,7 +6109,7 @@ export default function DocumentsPage() {
             </div>
 
             <div
-              data-tablet-role="documents-table-wrap"
+              data-tablet-role="documents-table-wrap" data-mobile-role="documents-desktop-table"
               ref={productTableWrapRef}
               style={{
                 maxHeight: 350,
@@ -6400,7 +6402,291 @@ export default function DocumentsPage() {
               </table>
             </div>
 
+            {/* 휴대폰 전용 상품 카드 목록.
+                PC/태블릿 표와 같은 데이터/이벤트를 사용하므로 기능은 동일하다. */}
             <div
+              data-mobile-role="documents-mobile-items"
+              style={{ display: "none" }}
+            >
+              <label
+                data-mobile-role="documents-mobile-select-all"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontWeight: 900,
+                  cursor:
+                    visibleSelectableItemIds.length > 0 ? "pointer" : "default",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allVisibleItemsSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleItemsSelected;
+                  }}
+                  disabled={visibleSelectableItemIds.length === 0}
+                  onChange={toggleAllVisibleItems}
+                  style={{ width: 20, height: 20 }}
+                />
+                현재 보이는 상품 전체 선택
+              </label>
+
+              {sortedVisibleItems.length === 0 ? (
+                <div style={{ ...styles.card, padding: 14 }}>
+                  <span style={styles.small}>조건에 맞는 상품이 없어.</span>
+                </div>
+              ) : (
+                sortedVisibleItems.map((it) => {
+                  const checked = selectedItemIds.includes(it.id);
+                  const lineTotal = n(it.line_total);
+                  const allocSum = allocationSumByItem.get(it.id) ?? 0;
+                  const refundStatus = itemRefundStatusMap.get(it.id);
+                  const isFullyRefunded =
+                    refundStatus === "전체환불" || n(it.qty) <= 0;
+                  const finalUnit = isFullyRefunded
+                    ? 0
+                    : ceilInt(
+                        (lineTotal + allocSum) / Math.max(1, n(it.qty)),
+                      );
+                  const parentPurchase = purchaseMap.get(it.purchase_id);
+                  const arrivedQty = Math.max(
+                    0,
+                    arrivedQtyByItem.get(it.id) ?? 0,
+                  );
+                  const unreceivedQty = Math.max(0, n(it.qty) - arrivedQty);
+                  const isUnreceived = !isFullyRefunded && unreceivedQty > 0;
+
+                  return (
+                    <div
+                      key={`mobile-${it.id}`}
+                      data-mobile-role="documents-item-card"
+                      style={{
+                        ...styles.card,
+                        padding: 12,
+                        display: "grid",
+                        gap: 10,
+                        boxShadow: "none",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "28px 58px minmax(0, 1fr)",
+                          gap: 10,
+                          alignItems: "start",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={isFullyRefunded}
+                          onChange={() => {
+                            if (!isFullyRefunded) toggleSelectedItem(it.id);
+                          }}
+                          style={{
+                            width: 20,
+                            height: 20,
+                            marginTop: 4,
+                            cursor: isFullyRefunded
+                              ? "not-allowed"
+                              : "pointer",
+                          }}
+                        />
+
+                        {itemPhotoMap.get(it.id) ? (
+                          <img
+                            src={itemPhotoMap.get(it.id)}
+                            alt={it.item_name ?? "상품"}
+                            onClick={() => openItemDetail(it)}
+                            style={{
+                              width: 58,
+                              height: 58,
+                              objectFit: "cover",
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              background: "#f3f4f6",
+                              cursor: "pointer",
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openItemDetail(it)}
+                            style={{
+                              width: 58,
+                              height: 58,
+                              borderRadius: 12,
+                              border: "1px solid #ddd",
+                              background: "#f3f4f6",
+                              color: "#888",
+                              fontSize: 11,
+                              cursor: "pointer",
+                            }}
+                          >
+                            사진
+                            <br />
+                            없음
+                          </button>
+                        )}
+
+                        <div style={{ minWidth: 0 }}>
+                          <button
+                            type="button"
+                            onClick={() => openItemDetail(it)}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              padding: 0,
+                              color: "#111",
+                              textAlign: "left",
+                              fontWeight: 900,
+                              fontSize: 15,
+                              lineHeight: 1.35,
+                              cursor: "pointer",
+                              width: "100%",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {it.item_name ?? "(이름 없음)"}
+                          </button>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 5,
+                              flexWrap: "wrap",
+                              marginTop: 6,
+                            }}
+                          >
+                            <span style={styles.badge("gray")}>
+                              {it.product_type ?? "기타"}
+                            </span>
+                            {refundPendingItemIds.has(it.id) ? (
+                              <span
+                                style={{
+                                  ...styles.badge("purple"),
+                                  background: "#fef3c7",
+                                  color: "#92400e",
+                                  border: "1px solid #f59e0b",
+                                }}
+                              >
+                                환불 진행중
+                              </span>
+                            ) : null}
+                            {refundStatus ? (
+                              <span
+                                style={styles.badge(
+                                  refundStatus === "전체환불"
+                                    ? "gray"
+                                    : "orange",
+                                )}
+                              >
+                                {refundStatus}
+                              </span>
+                            ) : null}
+                            {isUnreceived ? (
+                              <span style={styles.badge("orange")}>
+                                미입고 {fmtNum(unreceivedQty)}개
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: 8,
+                          fontSize: 12,
+                        }}
+                      >
+                        <div>
+                          <div style={{ color: "#6b7280" }}>거래처</div>
+                          <b>{parentPurchase?.supplier ?? "(거래처 없음)"}</b>
+                        </div>
+                        <div>
+                          <div style={{ color: "#6b7280" }}>결제일</div>
+                          <b>{fmtDate(parentPurchase?.purchase_date)}</b>
+                        </div>
+                        <div>
+                          <div style={{ color: "#6b7280" }}>수량</div>
+                          <b>
+                            {fmtNum(n(it.qty))}
+                            {isFullyRefunded ? " (환불완료)" : ""}
+                          </b>
+                        </div>
+                        <div>
+                          <div style={{ color: "#6b7280" }}>외화총액</div>
+                          <b>
+                            {fmtNum(n(it.foreign_total))}{" "}
+                            {parentPurchase?.currency ?? ""}
+                          </b>
+                        </div>
+                        <div>
+                          <div style={{ color: "#6b7280" }}>상품 원화합계</div>
+                          <b>{fmtKRW(lineTotal)}</b>
+                        </div>
+                        <div>
+                          <div style={{ color: "#6b7280" }}>추가비용 배분</div>
+                          <b>{fmtKRW(allocSum)}</b>
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
+                          <div style={{ color: "#6b7280" }}>최종단가</div>
+                          <b>
+                            {isFullyRefunded ? "-" : fmtKRW(finalUnit)}
+                            {!isFullyRefunded ? " (배분 포함)" : ""}
+                          </b>
+                        </div>
+                      </div>
+
+                      {(itemCostBadgeMap.get(it.id) ?? []).length > 0 ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            flexWrap: "wrap",
+                            paddingTop: 8,
+                            borderTop: "1px solid #f0f0f5",
+                          }}
+                        >
+                          {(itemCostBadgeMap.get(it.id) ?? []).map((badge) => (
+                            <button
+                              key={`mobile-cost-${badge.costId}`}
+                              type="button"
+                              onClick={() => openCostEditorById(badge.costId)}
+                              style={{
+                                ...styles.badge("purple"),
+                                border: "none",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {badge.label} 수정
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        onClick={() => openItemDetail(it)}
+                        style={{
+                          ...styles.smallBtn,
+                          width: "100%",
+                          padding: "9px 10px",
+                        }}
+                      >
+                        상품 상세 보기
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div
+              data-mobile-role="documents-cost-action"
               style={{
                 marginTop: 10,
                 display: "flex",
@@ -6627,6 +6913,249 @@ export default function DocumentsPage() {
           [data-tablet-role="purchase-cost-form"] button {
             max-width: 100% !important;
             white-space: normal !important;
+          }
+
+        }
+
+        /* -------------------------------------------------------
+           휴대폰 전용
+           기능을 빼지 않고 레이아웃만 모바일 카드형으로 변경
+        ------------------------------------------------------- */
+        @media (max-width: 699px) {
+          html, body {
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+          }
+
+          [data-page="documents"] {
+            width: 100% !important;
+            max-width: 100vw !important;
+            padding: 10px !important;
+            overflow-x: hidden !important;
+            box-sizing: border-box !important;
+          }
+
+          [data-page="documents"] * {
+            box-sizing: border-box;
+          }
+
+          /* 매입관리 자체 상단 버튼 */
+          [data-page="documents"] [data-mobile-role="documents-topbar"] {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+            width: 100% !important;
+            align-items: stretch !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-topbar"] > div:first-child {
+            grid-column: 1 / -1 !important;
+            font-size: 22px !important;
+            margin: 0 0 2px 0 !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-topbar"] > button {
+            width: 100% !important;
+            min-width: 0 !important;
+            padding: 10px 8px !important;
+            white-space: normal !important;
+            line-height: 1.25 !important;
+            font-size: 13px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"] {
+            grid-column: 1 / -1 !important;
+            margin-left: 0 !important;
+            width: 100% !important;
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) auto !important;
+            gap: 8px !important;
+            align-items: center !important;
+            padding: 8px 0 2px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"] > span {
+            min-width: 0 !important;
+            font-size: 12px !important;
+            line-height: 1.45 !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"] > button {
+            width: auto !important;
+          }
+
+          /* 매입목록 + 상품목록은 휴대폰에서 세로로 */
+          [data-page="documents"] [data-tablet-layout="documents-main"] {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 12px !important;
+            width: 100% !important;
+          }
+
+          [data-page="documents"] [data-tablet-role="documents-sidebar"] {
+            position: static !important;
+            top: auto !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            padding: 10px !important;
+          }
+
+          [data-page="documents"] [data-tablet-role="documents-sidebar"] > div:nth-last-child(1) {
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: 420px !important;
+            overflow-y: auto !important;
+          }
+
+          [data-page="documents"] [data-tablet-role="documents-sidebar"] input,
+          [data-page="documents"] [data-tablet-role="documents-sidebar"] select {
+            width: 100% !important;
+            min-width: 0 !important;
+            font-size: 16px !important;
+          }
+
+          /* 매입 카드: 버튼이 내용 폭을 잡아먹지 않게 */
+          [data-page="documents"] [data-tablet-role="documents-sidebar"] button {
+            flex-shrink: 0 !important;
+          }
+
+          /* 상품검색/정렬 */
+          [data-page="documents"] [data-mobile-role="documents-item-controls"] {
+            width: 100% !important;
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) !important;
+            gap: 8px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-item-controls"] input,
+          [data-page="documents"] [data-mobile-role="documents-item-controls"] select {
+            width: 100% !important;
+            min-width: 0 !important;
+            font-size: 16px !important;
+          }
+
+          /* 좁은 화면에서는 기존 가로표 대신 동일 기능의 카드 목록 */
+          [data-page="documents"] [data-mobile-role="documents-desktop-table"] {
+            display: none !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-mobile-items"] {
+            display: grid !important;
+            gap: 10px !important;
+            width: 100% !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-mobile-select-all"] {
+            padding: 8px 2px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-item-card"] {
+            width: 100% !important;
+            min-width: 0 !important;
+            overflow: hidden !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-cost-action"] {
+            justify-content: stretch !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-cost-action"] button {
+            width: 100% !important;
+            white-space: normal !important;
+          }
+
+          /* 일반 카드/선택상품 카드가 화면 밖으로 나가지 않게 */
+          [data-page="documents"] > div,
+          [data-page="documents"] [data-tablet-layout="documents-main"] > div,
+          [data-page="documents"] [data-tablet-layout="documents-main"] > div > div {
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          [data-page="documents"] [data-tablet-role="documents-product-name"] {
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+          }
+
+          /* 매입/추가비용/환불 모달 내부 */
+          [data-tablet-role="purchase-buy-form"],
+          [data-tablet-role="purchase-cost-form"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            overflow-x: hidden !important;
+          }
+
+          [data-tablet-role="purchase-buy-form"] *,
+          [data-tablet-role="purchase-cost-form"] * {
+            box-sizing: border-box !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          [data-tablet-role="purchase-buy-form"] [data-tablet-role="purchase-form-grid"],
+          [data-tablet-role="purchase-buy-form"] [data-tablet-role="purchase-item-input-grid"],
+          [data-tablet-role="purchase-cost-form"] > div {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          [data-tablet-role="purchase-buy-form"] input,
+          [data-tablet-role="purchase-buy-form"] select,
+          [data-tablet-role="purchase-buy-form"] textarea,
+          [data-tablet-role="purchase-cost-form"] input,
+          [data-tablet-role="purchase-cost-form"] select,
+          [data-tablet-role="purchase-cost-form"] textarea {
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            font-size: 16px !important; /* iOS 입력 시 자동 확대 방지 */
+          }
+
+          [data-tablet-role="purchase-buy-form"] button,
+          [data-tablet-role="purchase-cost-form"] button {
+            max-width: 100% !important;
+            white-space: normal !important;
+          }
+
+          /* 모달 컴포넌트가 role=dialog를 쓰는 경우 화면 안에 고정 */
+          [role="dialog"] {
+            max-width: calc(100vw - 16px) !important;
+            width: calc(100vw - 16px) !important;
+            max-height: calc(100dvh - 24px) !important;
+            overflow: auto !important;
+          }
+
+          [role="dialog"] > * {
+            max-width: 100% !important;
+            min-width: 0 !important;
+          }
+
+          /* 모달 안의 표는 기능 보존을 위해 가로스크롤 허용 */
+          [role="dialog"] table {
+            min-width: 640px;
+          }
+
+          [role="dialog"] table:has(input),
+          [role="dialog"] table:has(select) {
+            display: table;
+          }
+
+          /* 파일 업로드/메모 */
+          [data-page="documents"] input[type="file"] {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+
+          /* 터치 영역 확보 */
+          [data-page="documents"] button,
+          [data-page="documents"] select,
+          [data-page="documents"] input {
+            min-height: 42px;
+          }
+
+          [data-page="documents"] input[type="checkbox"] {
+            min-height: 0 !important;
           }
         }
       `}</style>
