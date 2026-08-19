@@ -5819,6 +5819,7 @@ export default function DocumentsPage() {
           </div>
 
           <div
+            data-mobile-role="documents-purchase-scroller"
             style={{
               display: "flex",
               flexDirection: "column",
@@ -5853,6 +5854,7 @@ export default function DocumentsPage() {
               return (
                 <div
                   key={p.id}
+                  data-mobile-role="documents-purchase-card"
                   style={styles.purchaseCard(active)}
                   onClick={() => setSelectedPurchaseId(p.id)}
                 >
@@ -6024,7 +6026,10 @@ export default function DocumentsPage() {
             })}
           </div>
         </div>
-        <div style={{ display: "grid", gap: 14, minWidth: 0 }}>
+        <div
+          data-mobile-role="documents-product-panel"
+          style={{ display: "grid", gap: 14, minWidth: 0 }}
+        >
           <div style={styles.card}>
             <div
               style={{
@@ -6939,49 +6944,66 @@ export default function DocumentsPage() {
             box-sizing: border-box;
           }
 
-          /* 매입관리 자체 상단 버튼 */
+          /* 매입관리 액션바: 휴대폰에서 한 줄 가로 스크롤 + 상단 고정 */
           [data-page="documents"] [data-mobile-role="documents-topbar"] {
-            display: grid !important;
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 45 !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
             gap: 8px !important;
-            width: 100% !important;
-            align-items: stretch !important;
+            width: calc(100% + 20px) !important;
+            margin: -10px -10px 10px -10px !important;
+            padding: 10px !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            align-items: center !important;
+            background: rgba(247, 247, 251, 0.98) !important;
+            border-bottom: 1px solid #e5e7eb !important;
+            backdrop-filter: blur(8px);
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-topbar"]::-webkit-scrollbar {
+            display: none;
           }
 
           [data-page="documents"] [data-mobile-role="documents-topbar"] > div:first-child {
-            grid-column: 1 / -1 !important;
-            font-size: 22px !important;
-            margin: 0 0 2px 0 !important;
+            display: none !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-topbar"] > button {
-            width: 100% !important;
-            min-width: 0 !important;
-            padding: 10px 8px !important;
-            white-space: normal !important;
-            line-height: 1.25 !important;
+            flex: 0 0 auto !important;
+            width: auto !important;
+            min-width: max-content !important;
+            padding: 9px 12px !important;
+            white-space: nowrap !important;
+            line-height: 1.2 !important;
             font-size: 13px !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-selection-summary"] {
-            grid-column: 1 / -1 !important;
+            flex: 0 0 auto !important;
             margin-left: 0 !important;
-            width: 100% !important;
-            display: grid !important;
-            grid-template-columns: minmax(0, 1fr) auto !important;
-            gap: 8px !important;
+            width: auto !important;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            gap: 6px !important;
             align-items: center !important;
-            padding: 8px 0 2px !important;
+            padding: 0 !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-selection-summary"] > span {
-            min-width: 0 !important;
+            min-width: max-content !important;
             font-size: 12px !important;
-            line-height: 1.45 !important;
+            line-height: 1.2 !important;
+            white-space: nowrap !important;
           }
 
           [data-page="documents"] [data-mobile-role="documents-selection-summary"] > button {
             width: auto !important;
+            min-width: max-content !important;
           }
 
           /* 매입목록 + 상품목록은 휴대폰에서 세로로 */
@@ -6998,13 +7020,46 @@ export default function DocumentsPage() {
             width: 100% !important;
             min-width: 0 !important;
             padding: 10px !important;
+            gap: 8px !important;
           }
 
-          [data-page="documents"] [data-tablet-role="documents-sidebar"] > div:nth-last-child(1) {
+          /* 매입카드를 가로 캐러셀처럼 보여서 상품목록도 같은 화면에 바로 보이게 */
+          [data-page="documents"] [data-mobile-role="documents-purchase-scroller"] {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 8px !important;
             height: auto !important;
             min-height: 0 !important;
-            max-height: 420px !important;
-            overflow-y: auto !important;
+            max-height: none !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            padding: 2px 2px 8px !important;
+            scroll-snap-type: x proximity;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-purchase-scroller"]::-webkit-scrollbar {
+            display: none;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-purchase-card"] {
+            flex: 0 0 82% !important;
+            width: 82% !important;
+            min-width: 260px !important;
+            max-width: 320px !important;
+            min-height: 0 !important;
+            scroll-snap-align: start;
+            padding: 10px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-purchase-card"] button {
+            min-height: 36px !important;
+            padding: 6px 8px !important;
+          }
+
+          [data-page="documents"] [data-mobile-role="documents-product-panel"] {
+            margin-top: 0 !important;
           }
 
           [data-page="documents"] [data-tablet-role="documents-sidebar"] input,
