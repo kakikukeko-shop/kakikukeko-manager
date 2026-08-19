@@ -6492,58 +6492,30 @@ export default function DocumentsPage() {
                         />
 
                         <div style={{ minWidth: 0 }}>
-                          <div
+                          <button
+                            type="button"
+                            onClick={() => openItemDetail(it)}
                             style={{
-                              display: "flex",
-                              gap: 4,
-                              flexWrap: "wrap",
+                              border: "none",
+                              background: "transparent",
+                              padding: 0,
+                              color: "#111",
+                              textAlign: "left",
+                              fontWeight: 900,
+                              fontSize: 13,
+                              lineHeight: 1.3,
+                              cursor: "pointer",
+                              width: "100%",
+                              wordBreak: "break-word",
+                              display: "-webkit-box",
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
                               marginBottom: 6,
                             }}
                           >
-                            <span style={{ ...styles.badge("gray"), fontSize: 10, padding: "2px 6px" }}>
-                              {it.product_type ?? "기타"}
-                            </span>
-                            {refundPendingItemIds.has(it.id) ? (
-                              <span
-                                style={{
-                                  ...styles.badge("purple"),
-                                  background: "#fef3c7",
-                                  color: "#92400e",
-                                  border: "1px solid #f59e0b",
-                                  fontSize: 10,
-                                  padding: "2px 6px",
-                                }}
-                              >
-                                환불 진행중
-                              </span>
-                            ) : null}
-                            {refundStatus ? (
-                              <span
-                                style={{
-                                  ...styles.badge(
-                                    refundStatus === "전체환불"
-                                      ? "gray"
-                                      : "orange",
-                                  ),
-                                  fontSize: 10,
-                                  padding: "2px 6px",
-                                }}
-                              >
-                                {refundStatus}
-                              </span>
-                            ) : null}
-                            {isUnreceived ? (
-                              <span
-                                style={{
-                                  ...styles.badge("orange"),
-                                  fontSize: 10,
-                                  padding: "2px 6px",
-                                }}
-                              >
-                                미입고 {fmtNum(unreceivedQty)}개
-                              </span>
-                            ) : null}
-                          </div>
+                            {it.item_name ?? "(이름 없음)"}
+                          </button>
 
                           <div
                             style={{
@@ -6590,29 +6562,58 @@ export default function DocumentsPage() {
                               </button>
                             )}
 
-                            <button
-                              type="button"
-                              onClick={() => openItemDetail(it)}
+                            <div
                               style={{
-                                border: "none",
-                                background: "transparent",
-                                padding: 0,
-                                color: "#111",
-                                textAlign: "left",
-                                fontWeight: 900,
-                                fontSize: 13,
-                                lineHeight: 1.3,
-                                cursor: "pointer",
-                                width: "100%",
-                                wordBreak: "break-word",
-                                display: "-webkit-box",
-                                WebkitLineClamp: 3,
-                                WebkitBoxOrient: "vertical",
-                                overflow: "hidden",
+                                display: "flex",
+                                gap: 4,
+                                flexWrap: "wrap",
+                                alignContent: "flex-start",
                               }}
                             >
-                              {it.item_name ?? "(이름 없음)"}
-                            </button>
+                              <span style={{ ...styles.badge("gray"), fontSize: 10, padding: "2px 6px" }}>
+                                {it.product_type ?? "기타"}
+                              </span>
+                              {refundPendingItemIds.has(it.id) ? (
+                                <span
+                                  style={{
+                                    ...styles.badge("purple"),
+                                    background: "#fef3c7",
+                                    color: "#92400e",
+                                    border: "1px solid #f59e0b",
+                                    fontSize: 10,
+                                    padding: "2px 6px",
+                                  }}
+                                >
+                                  환불 진행중
+                                </span>
+                              ) : null}
+                              {refundStatus ? (
+                                <span
+                                  style={{
+                                    ...styles.badge(
+                                      refundStatus === "전체환불"
+                                        ? "gray"
+                                        : "orange",
+                                    ),
+                                    fontSize: 10,
+                                    padding: "2px 6px",
+                                  }}
+                                >
+                                  {refundStatus}
+                                </span>
+                              ) : null}
+                              {isUnreceived ? (
+                                <span
+                                  style={{
+                                    ...styles.badge("orange"),
+                                    fontSize: 10,
+                                    padding: "2px 6px",
+                                  }}
+                                >
+                                  미입고 {fmtNum(unreceivedQty)}개
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       </div>
