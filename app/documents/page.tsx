@@ -245,20 +245,24 @@ function stripRefundMetaDetail(raw: string | null | undefined) {
   return [before, after].filter(Boolean).join("\n\n").trim();
 }
 
+type RefundKind = "product" | "price_adjustment";
+
 function parseRefundMeta(memo: string | null | undefined): {
   items: RefundMetaItem[];
+  kind: RefundKind;
 } {
   const text = (memo ?? "").trim();
   if (!text.startsWith(REFUND_META_HEADER))
-    return { items: [] as RefundMetaItem[] };
+    return { items: [] as RefundMetaItem[], kind: "product" };
 
   const payload = text.split("\n\n")[0].replace(REFUND_META_HEADER, "").trim();
-  if (!payload) return { items: [] as RefundMetaItem[] };
+  if (!payload) return { items: [] as RefundMetaItem[], kind: "product" };
 
   try {
     const parsed = JSON.parse(payload);
     const items = Array.isArray(parsed?.items) ? parsed.items : [];
     return {
+      kind: parsed?.kind === "price_adjustment" ? "price_adjustment" : "product",
       items: items
         .map((item: any) => ({
           item_id: String(item?.item_id ?? ""),
@@ -276,7 +280,7 @@ function parseRefundMeta(memo: string | null | undefined): {
         .filter((item: RefundMetaItem) => item.item_id),
     };
   } catch {
-    return { items: [] as RefundMetaItem[] };
+    return { items: [] as RefundMetaItem[], kind: "product" };
   }
 }
 
@@ -330,9 +334,13 @@ function buildRefundMetaItems(
   });
 }
 
-function buildRefundMemo(baseMemo: string, items: RefundMetaItem[]) {
+function buildRefundMemo(
+  baseMemo: string,
+  items: RefundMetaItem[],
+  kind: RefundKind = "product",
+) {
   const detail = `${REFUND_META_HEADER}
-${JSON.stringify({ items }, null, 2)}`;
+${JSON.stringify({ kind, items }, null, 2)}`;
   const cleanedBase = stripRefundMetaDetail(baseMemo);
   return cleanedBase
     ? `${detail}
@@ -391,6 +399,7 @@ function buildRefundSummaryMemo(
   baseMemo: string,
   items: RefundMetaItem[],
   info: ReturnType<typeof getRefundLossInfo>,
+  kind: RefundKind = "product",
 ) {
   const summary = [
     `환불 대상 원가:${Math.round(info.targetKRW)}`,
@@ -401,7 +410,7 @@ function buildRefundSummaryMemo(
   ].join("\n");
 
   const memo = baseMemo?.trim() ? `${summary}\n\n${baseMemo.trim()}` : summary;
-  return buildRefundMemo(memo, items);
+  return buildRefundMemo(memo, items, kind);
 }
 
 function parseRefundSummaryMemo(memo: string | null | undefined) {
@@ -527,6 +536,7 @@ const COST_TYPE_OPTIONS = [
   "관부과세",
   "잔금",
   "카드할인",
+  "할인/쿠폰",
   "기타",
   "환불",
 ] as const;
@@ -542,6 +552,7 @@ const PURCHASE_SORT_OPTIONS = [
 const PURCHASE_FILTER_OPTIONS = [
   { value: "all", label: "전체 보기" },
   { value: "unreceived", label: "미입고만 보기" },
+  { value: "refund_pending", label: "환불 진행중만 보기" },
   { value: "refunded", label: "환불상품만 보기" },
 ] as const;
 
@@ -575,7 +586,7 @@ function getCostReceiptFileType(costType: string | null | undefined) {
   const type = normalizeCostType(costType);
   if (type === "관부과세") return "관부과세영수증";
   if (type === "잔금") return "잔금비용영수증";
-  if (type === "카드할인") return "카드할인증빙";
+  if (type === "카드할인" || type === "할인/쿠폰") return "카드할인증빙";
   if (type === "기타") return "기타비용영수증";
   if (type === "환불") return "환불증빙";
   if (type === "배송비(거래처)" || type === "배송비(배대지)")
@@ -892,7 +903,9 @@ function distributeByWeightsCeilIntSigned(total: number, weights: number[]) {
 function signedCostAmountByType(costType: string, amount: number) {
   const normalized = normalizeCostType(costType);
   const absolute = Math.abs(amount);
-  return normalized === "카드할인" ? -absolute : absolute;
+  return normalized === "카드할인" || normalized === "할인/쿠폰"
+    ? -absolute
+    : absolute;
 }
 
 function isShippingCostType(costType: string | null | undefined) {
@@ -1051,7 +1064,8 @@ function getCostInputLabel(costType: string) {
   if (normalized === "환불") return "환불증빙";
   if (normalized === "관부과세") return "관부과세영수증";
   if (normalized === "잔금") return "잔금비용영수증";
-  if (normalized === "카드할인") return "카드할인 증빙";
+  if (normalized === "카드할인" || normalized === "할인/쿠폰")
+    return "할인/쿠폰 증빙";
   if (normalized === "기타") return "기타비용영수증";
   return "배송비영수증";
 }
@@ -1365,7 +1379,8 @@ function isSharedRefundReallocationCostType(
     normalized === "관부과세" ||
     normalized === "잔금" ||
     normalized === "기타" ||
-    normalized === "카드할인"
+    normalized === "카드할인" ||
+    normalized === "할인/쿠폰"
   );
 }
 
@@ -1880,6 +1895,8 @@ export default function DocumentsPage() {
   const [ecVatAmount, setEcVatAmount] = useState("");
   const [ecCustomsFeeAmount, setEcCustomsFeeAmount] = useState("");
   const [cShippingAmount, setCShippingAmount] = useState("");
+  const [cRefundKind, setCRefundKind] = useState<RefundKind>("product");
+  const [ecRefundKind, setEcRefundKind] = useState<RefundKind>("product");
 
   const productTableWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -2214,6 +2231,8 @@ export default function DocumentsPage() {
     for (const a of allocations) {
       const normalized = normalizeCostType(costTypeMap.get(a.purchase_cost_id));
       if (!normalized) continue;
+      // 환불 진행중은 전용 상태 배지로 따로 보여주므로 추가비용 배지에는 중복 표시하지 않는다.
+      if (normalized === "환불 진행중") continue;
 
       const prev = map.get(a.purchase_item_id) ?? [];
       if (!prev.some((x) => x.label == normalized)) {
@@ -2233,6 +2252,19 @@ export default function DocumentsPage() {
     }
     return map;
   }, [allocations, costTypeMap]);
+
+  const refundPendingItemIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const cost of costs) {
+      if (normalizeCostType(cost.cost_type) !== "환불 진행중") continue;
+      for (const allocation of allocations) {
+        if (allocation.purchase_cost_id === cost.id) {
+          set.add(allocation.purchase_item_id);
+        }
+      }
+    }
+    return set;
+  }, [costs, allocations]);
 
   const itemRefundStatusMap = useMemo(() => {
     const map = new Map<string, "전체환불" | "부분환불">();
@@ -2379,30 +2411,56 @@ export default function DocumentsPage() {
   const purchaseCardCounts = useMemo(() => {
     const map = new Map<
       string,
-      { itemKinds: number; hasUnreceived: boolean; unreceivedQty: number }
+      {
+        itemKinds: number;
+        hasUnreceived: boolean;
+        unreceivedQty: number;
+        refundPendingCount: number;
+      }
     >();
 
     for (const p of purchases) {
       const its = itemsByPurchase.get(p.id) ?? [];
       const unreceivedQty = its.reduce((sum, item) => {
+        // 전체환불 상품은 현재 qty 값이 남아 있어도 미입고로 잡지 않는다.
+        if (itemRefundStatusMap.get(item.id) === "전체환불") return sum;
         const total = Math.max(0, n(item.qty));
         const arrived = Math.max(0, arrivedQtyByItem.get(item.id) ?? 0);
         return sum + Math.max(0, total - arrived);
       }, 0);
 
+      const refundPendingCount = its.reduce(
+        (sum, item) => sum + (refundPendingItemIds.has(item.id) ? 1 : 0),
+        0,
+      );
+
       map.set(p.id, {
         itemKinds: its.length,
         hasUnreceived: unreceivedQty > 0,
         unreceivedQty,
+        refundPendingCount,
       });
     }
     return map;
-  }, [purchases, itemsByPurchase, arrivedQtyByItem]);
+  }, [
+    purchases,
+    itemsByPurchase,
+    arrivedQtyByItem,
+    itemRefundStatusMap,
+    refundPendingItemIds,
+  ]);
 
   const filteredPurchases = useMemo(() => {
     if (purchaseViewFilter === "unreceived") {
       return searchedSortedPurchases.filter(
         (purchase) => purchaseCardCounts.get(purchase.id)?.hasUnreceived,
+      );
+    }
+
+    if (purchaseViewFilter === "refund_pending") {
+      return searchedSortedPurchases.filter(
+        (purchase) =>
+          (purchaseCardCounts.get(purchase.id)?.refundPendingCount ?? 0) > 0,
       );
     }
 
@@ -3136,6 +3194,105 @@ export default function DocumentsPage() {
     });
   }
 
+
+  async function clearRefundPendingForItems(itemIds: string[]) {
+    const idSet = new Set(itemIds);
+    if (idSet.size === 0) return;
+
+    const pendingCosts = costs.filter(
+      (cost) => normalizeCostType(cost.cost_type) === "환불 진행중",
+    );
+
+    for (const cost of pendingCosts) {
+      const linked = allocations.filter(
+        (a) =>
+          a.purchase_cost_id === cost.id &&
+          idSet.has(a.purchase_item_id),
+      );
+      if (linked.length === 0) continue;
+
+      const idsToRemove = linked.map((a) => a.purchase_item_id);
+      const delAlloc = await supabase
+        .from("cost_allocations")
+        .delete()
+        .eq("purchase_cost_id", cost.id)
+        .in("purchase_item_id", idsToRemove);
+      if (delAlloc.error) throw delAlloc.error;
+
+      const remaining = allocations.filter(
+        (a) =>
+          a.purchase_cost_id === cost.id &&
+          !idsToRemove.includes(a.purchase_item_id),
+      );
+      if (remaining.length === 0) {
+        const delCost = await supabase
+          .from("purchase_costs")
+          .delete()
+          .eq("id", cost.id);
+        if (delCost.error) throw delCost.error;
+      }
+    }
+  }
+
+  async function toggleRefundPendingForSelected() {
+    if (selectedItems.length === 0) {
+      setErr("환불 진행중으로 표시할 상품을 먼저 체크해줘.");
+      return;
+    }
+
+    setLoading(true);
+    setErr(null);
+    setMsg(null);
+
+    try {
+      const toClear = selectedItems
+        .filter((item) => refundPendingItemIds.has(item.id))
+        .map((item) => item.id);
+      const toAdd = selectedItems.filter(
+        (item) => !refundPendingItemIds.has(item.id),
+      );
+
+      if (toClear.length > 0) {
+        await clearRefundPendingForItems(toClear);
+      }
+
+      for (const item of toAdd) {
+        const insCost = await supabase
+          .from("purchase_costs")
+          .insert({
+            purchase_id: item.purchase_id,
+            cost_type: "환불 진행중",
+            amount: 0,
+            currency: "KRW",
+            fx_rate: 1,
+            memo: "실제 환불금액 입금 전 임시 표시",
+            cost_date: new Date().toISOString().slice(0, 10),
+          })
+          .select("id")
+          .single();
+        if (insCost.error) throw insCost.error;
+
+        const insAlloc = await supabase.from("cost_allocations").insert({
+          purchase_cost_id: insCost.data.id,
+          purchase_item_id: item.id,
+          allocated_amount: 0,
+        });
+        if (insAlloc.error) throw insAlloc.error;
+      }
+
+      setMsg(
+        toAdd.length > 0
+          ? `환불 진행중 ${toAdd.length}개 표시 완료${toClear.length > 0 ? ` / ${toClear.length}개 해제` : ""}`
+          : `환불 진행중 ${toClear.length}개 해제 완료`,
+      );
+      await refreshAll();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function resetCostForm() {
     setCType("배송비(거래처)");
     setCTotalForeign("");
@@ -3153,6 +3310,7 @@ export default function DocumentsPage() {
     setCDutyAmount("");
     setCVatAmount("");
     setCCustomsFeeAmount("");
+    setCRefundKind("product");
     setCostDirty(false);
   }
 
@@ -3188,6 +3346,7 @@ export default function DocumentsPage() {
     setEcDutyAmount("");
     setEcVatAmount("");
     setEcCustomsFeeAmount("");
+    setEcRefundKind("product");
     setCostEditDirty(false);
   }
 
@@ -4092,6 +4251,10 @@ export default function DocumentsPage() {
               );
           const costCurrency = currencyValue(draftCost.currency, draftCost.currency_custom);
           const costKRW = Math.max(0, n(draftCost.krw_amount));
+          const signedDraftCostKRW = signedCostAmountByType(
+            draftCost.cost_type,
+            costKRW,
+          );
           if (!draftCost.cost_type || !costCurrency || costKRW <= 0) continue;
           if (!draftCost.cost_date || draftCost.cost_date.length !== 10) {
             throw new Error("추가비용 날짜를 YYYY-MM-DD 형식으로 입력해줘.");
@@ -4109,7 +4272,10 @@ export default function DocumentsPage() {
             .insert({
               purchase_id: purchaseId,
               cost_type: draftCost.cost_type,
-              amount: foreignAmount,
+              amount: signedCostAmountByType(
+                draftCost.cost_type,
+                foreignAmount,
+              ),
               currency: costCurrency,
               fx_rate:
                 normalizeCurrencyCode(costCurrency) === "KRW"
@@ -4123,7 +4289,10 @@ export default function DocumentsPage() {
             .single();
           if (costInsert.error) throw costInsert.error;
 
-          const allocated = distributeByWeightsCeilIntSigned(costKRW, itemWeights);
+          const allocated = distributeByWeightsCeilIntSigned(
+            signedDraftCostKRW,
+            itemWeights,
+          );
           const allocationInsert = await supabase.from("cost_allocations").insert(
             savedPurchaseItemIds.map((itemId, index) => ({
               purchase_cost_id: costInsert.data.id,
@@ -4381,6 +4550,11 @@ export default function DocumentsPage() {
 
     setEditingCost(cost);
     setEcType(normalizedType);
+    setEcRefundKind(
+      normalizedType === "환불"
+        ? parseRefundMeta(cost.memo).kind
+        : "product",
+    );
     setEcCurrency(normalizeCurrencySelectValue(cost.currency || "KRW"));
     setEcCurrencyCustom(
       normalizeCurrencySelectValue(cost.currency) === "직접입력"
@@ -4502,6 +4676,8 @@ export default function DocumentsPage() {
       n(ecTotalKRW),
       wasRefund ? editingCost.memo : null,
     );
+    const isPriceAdjustmentRefund =
+      ecType === "환불" && ecRefundKind === "price_adjustment";
     const refundItemAdjustments = getRefundItemAdjustments(
       chosen,
       editRefundItemEditMap,
@@ -4526,6 +4702,7 @@ export default function DocumentsPage() {
                 wasRefund ? editingCost.memo : null,
               ),
               refundInfoEdit,
+              ecRefundKind,
             )
           : ecMemo || null;
 
@@ -4542,7 +4719,9 @@ export default function DocumentsPage() {
         : [];
     const signedCostKRW =
       ecType === "환불"
-        ? refundInfoEdit.adjustmentKRW
+        ? isPriceAdjustmentRefund
+          ? -Math.round(Math.max(0, n(ecTotalKRW)))
+          : refundInfoEdit.adjustmentKRW
         : signedCostAmountByType(ecType, costKRW);
 
     if (!ecType.trim()) {
@@ -4585,7 +4764,7 @@ export default function DocumentsPage() {
       setErr("환불/배분할 상품을 1개 이상 선택해줘.");
       return;
     }
-    if (ecType === "환불") {
+    if (ecType === "환불" && !isPriceAdjustmentRefund) {
       for (const it of chosen) {
         const edit = editRefundItemEditMap[it.id];
         if (!edit || !edit.item_name.trim()) {
@@ -4636,7 +4815,12 @@ export default function DocumentsPage() {
         .update({
           cost_type: ecType,
           // 차손은 +, 차익은 -로 저장해서 대시보드에서도 둘 다 집계할 수 있게 한다.
-          amount: ecType === "환불" ? refundInfoEdit.adjustmentKRW : amount,
+          amount:
+            ecType === "환불"
+              ? isPriceAdjustmentRefund
+                ? -Math.round(Math.max(0, n(ecTotalKRW)))
+                : refundInfoEdit.adjustmentKRW
+              : amount,
           currency: ecType === "환불" ? "KRW" : cur,
           fx_rate:
             ecType === "환불"
@@ -4659,10 +4843,27 @@ export default function DocumentsPage() {
 
       const alloc =
         ecType === "환불"
-          ? refundItemAdjustments.map((row) => ({
-              item_id: row.item_id,
-              amt: row.adjustment_krw,
-            }))
+          ? isPriceAdjustmentRefund
+            ? (() => {
+                const directWeights = chosen.map((item) =>
+                  Math.max(0, n(editCostItemForeignMap[item.id])),
+                );
+                const weights = directWeights.some((v) => v > 0)
+                  ? directWeights
+                  : chosen.map((item) => Math.max(0, n(item.foreign_total)));
+                const allocated = distributeByWeightsCeilIntSigned(
+                  -Math.round(Math.max(0, n(ecTotalKRW))),
+                  weights,
+                );
+                return chosen.map((item, idx) => ({
+                  item_id: item.id,
+                  amt: allocated[idx] ?? 0,
+                }));
+              })()
+            : refundItemAdjustments.map((row) => ({
+                item_id: row.item_id,
+                amt: row.adjustment_krw,
+              }))
           : (() => {
               const allocAmounts = distributeByWeightsCeilIntSigned(
                 signedCostKRW,
@@ -4703,12 +4904,16 @@ export default function DocumentsPage() {
         });
       }
 
-      if (ecType === "환불") {
+      if (ecType === "환불" && !isPriceAdjustmentRefund) {
         await updateRefundAdjustedItems(
           chosen,
           editRefundItemEditMap,
           wasRefund ? editingCost.memo : null,
         );
+      }
+
+      if (ecType === "환불") {
+        await clearRefundPendingForItems(chosen.map((item) => item.id));
       }
 
       // 환불 신규등록·수정·삭제·일반비용 전환 모두 저장 직후 자동 재배분한다.
@@ -4729,7 +4934,9 @@ export default function DocumentsPage() {
 
       setMsg(
         ecType === "환불"
-          ? `환불 수정 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfoEdit.lossKRW)} / 차익 ${fmtKRW(refundInfoEdit.profitKRW)})`
+          ? isPriceAdjustmentRefund
+            ? `차액 환불 수정 완료 · 상품 수량은 유지하고 ${fmtKRW(Math.max(0, n(ecTotalKRW)))} 원가 차감`
+            : `상품 환불 수정 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfoEdit.lossKRW)} / 차익 ${fmtKRW(refundInfoEdit.profitKRW)})`
           : wasRefund
             ? "환불 해제 완료 · 공동비용 자동 재배분 완료"
             : "추가비용 수정 완료",
@@ -4976,6 +5183,8 @@ export default function DocumentsPage() {
       refundItemEditMap,
       n(cTotalKRW),
     );
+    const isPriceAdjustmentRefund =
+      cType === "환불" && cRefundKind === "price_adjustment";
     const refundItemAdjustments = getRefundItemAdjustments(
       chosen,
       refundItemEditMap,
@@ -4990,10 +5199,11 @@ export default function DocumentsPage() {
               cMemo,
               buildRefundMetaItems(chosen, refundItemEditMap),
               refundInfo,
+              cRefundKind,
             )
           : cMemo || null;
 
-    if (cType === "환불") {
+    if (cType === "환불" && !isPriceAdjustmentRefund) {
       for (const it of chosen) {
         const edit = refundItemEditMap[it.id];
         if (!edit || !edit.item_name.trim()) {
@@ -5029,7 +5239,9 @@ export default function DocumentsPage() {
         : [];
     const signedCostKRW =
       cType === "환불"
-        ? refundInfo.adjustmentKRW
+        ? isPriceAdjustmentRefund
+          ? -Math.round(Math.max(0, n(cTotalKRW)))
+          : refundInfo.adjustmentKRW
         : signedCostAmountByType(cType, costKRW);
 
     if (
@@ -5059,7 +5271,12 @@ export default function DocumentsPage() {
           purchase_id: linkedPurchaseId,
           cost_type: cType,
           // 차손은 +, 차익은 -로 저장해서 대시보드에도 모두 반영된다.
-          amount: cType === "환불" ? refundInfo.adjustmentKRW : amount,
+          amount:
+            cType === "환불"
+              ? isPriceAdjustmentRefund
+                ? -Math.round(Math.max(0, n(cTotalKRW)))
+                : refundInfo.adjustmentKRW
+              : amount,
           currency: cType === "환불" ? "KRW" : cur,
           fx_rate:
             cType === "환불"
@@ -5079,10 +5296,27 @@ export default function DocumentsPage() {
 
       const alloc =
         cType === "환불"
-          ? refundItemAdjustments.map((row) => ({
-              item_id: row.item_id,
-              amt: row.adjustment_krw,
-            }))
+          ? isPriceAdjustmentRefund
+            ? (() => {
+                const directWeights = chosen.map((item) =>
+                  Math.max(0, n(costItemForeignMap[item.id])),
+                );
+                const weights = directWeights.some((v) => v > 0)
+                  ? directWeights
+                  : chosen.map((item) => Math.max(0, n(item.foreign_total)));
+                const allocated = distributeByWeightsCeilIntSigned(
+                  -Math.round(Math.max(0, n(cTotalKRW))),
+                  weights,
+                );
+                return chosen.map((item, idx) => ({
+                  item_id: item.id,
+                  amt: allocated[idx] ?? 0,
+                }));
+              })()
+            : refundItemAdjustments.map((row) => ({
+                item_id: row.item_id,
+                amt: row.adjustment_krw,
+              }))
           : (() => {
               const allocAmounts = distributeByWeightsCeilIntSigned(
                 signedCostKRW,
@@ -5121,10 +5355,10 @@ export default function DocumentsPage() {
         });
       }
 
-      if (cType === "환불") {
+      if (cType === "환불" && !isPriceAdjustmentRefund) {
         await updateRefundAdjustedItems(chosen, refundItemEditMap);
 
-        // 공동비용 전체 재배분 버튼 없이, 환불 저장과 동시에 자동 처리한다.
+        // 공동비용 전체 재배분 버튼 없이, 상품 환불 저장과 동시에 자동 처리한다.
         await rebalanceSharedCostsAfterRefund(
           chosen.map((item) => item.id),
           costs,
@@ -5132,9 +5366,15 @@ export default function DocumentsPage() {
         );
       }
 
+      if (cType === "환불") {
+        await clearRefundPendingForItems(chosen.map((item) => item.id));
+      }
+
       setMsg(
         cType === "환불"
-          ? `환불 저장 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfo.lossKRW)} / 차익 ${fmtKRW(refundInfo.profitKRW)})`
+          ? isPriceAdjustmentRefund
+            ? `차액 환불 저장 완료 · 상품 수량은 유지하고 ${fmtKRW(Math.max(0, n(cTotalKRW)))} 원가 차감`
+            : `상품 환불 저장 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfo.lossKRW)} / 차익 ${fmtKRW(refundInfo.profitKRW)})`
           : cType === "카드할인"
             ? `카드할인 저장 완료 (${fmtKRW(Math.abs(Math.round(costKRW)))} 차감)`
             : `추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`,
@@ -5155,6 +5395,7 @@ export default function DocumentsPage() {
       setCDutyAmount("");
       setCVatAmount("");
       setCCustomsFeeAmount("");
+      setCRefundKind("product");
       setCostReceiptFile(null);
       setCostImportDocFile(null);
       await refreshAll();
@@ -5419,6 +5660,15 @@ export default function DocumentsPage() {
 
         <button
           style={styles.btn("ghost")}
+          onClick={toggleRefundPendingForSelected}
+          disabled={loading || selectedItems.length === 0}
+          title="선택 상품의 환불 진행중 표시를 켜거나 해제"
+        >
+          환불 진행중 체크/해제
+        </button>
+
+        <button
+          style={styles.btn("ghost")}
           onClick={refreshAll}
           disabled={loading}
         >
@@ -5586,9 +5836,11 @@ export default function DocumentsPage() {
               <div style={styles.small}>
                 {purchaseViewFilter === "unreceived"
                   ? "미입고 상품이 포함된 매입이 없어."
-                  : purchaseViewFilter === "refunded"
-                    ? "환불 상품이 포함된 매입이 없어."
-                    : "조건에 맞는 매입이 없어."}
+                  : purchaseViewFilter === "refund_pending"
+                    ? "환불 진행중 상품이 포함된 매입이 없어."
+                    : purchaseViewFilter === "refunded"
+                      ? "환불 상품이 포함된 매입이 없어."
+                      : "조건에 맞는 매입이 없어."}
               </div>
             )}
 
@@ -5623,6 +5875,20 @@ export default function DocumentsPage() {
                         {cnt?.hasUnreceived ? (
                           <span style={styles.badge("orange")}>
                             미입고 {cnt.unreceivedQty}개
+                          </span>
+                        ) : null}
+                        {(cnt?.refundPendingCount ?? 0) > 0 ? (
+                          <span
+                            style={{
+                              ...styles.badge("purple"),
+                              background: "#fef3c7",
+                              color: "#92400e",
+                              border: "1px solid #f59e0b",
+                              padding: "4px 8px",
+                              fontWeight: 900,
+                            }}
+                          >
+                            환불 진행중 {cnt?.refundPendingCount ?? 0}개
                           </span>
                         ) : null}
                         {refundSummary?.fullCount ? (
@@ -5675,6 +5941,11 @@ export default function DocumentsPage() {
                         {cnt?.hasUnreceived ? (
                           <div style={{ color: "#9a3412", fontWeight: 900 }}>
                             미입고: {cnt.unreceivedQty}개
+                          </div>
+                        ) : null}
+                        {(cnt?.refundPendingCount ?? 0) > 0 ? (
+                          <div style={{ color: "#92400e", fontWeight: 900 }}>
+                            환불 진행중: {cnt?.refundPendingCount ?? 0}개
                           </div>
                         ) : null}
                         {refundSummary &&
@@ -6013,6 +6284,18 @@ export default function DocumentsPage() {
                                     <span style={styles.badge("gray")}>
                                       {it.product_type ?? "기타"}
                                     </span>
+                                    {refundPendingItemIds.has(it.id) ? (
+                                      <span
+                                        style={{
+                                          ...styles.badge("purple"),
+                                          background: "#fef3c7",
+                                          color: "#92400e",
+                                          border: "1px solid #f59e0b",
+                                        }}
+                                      >
+                                        환불 진행중
+                                      </span>
+                                    ) : null}
                                     {refundStatus ? (
                                       <span
                                         style={styles.badge(
@@ -6178,6 +6461,17 @@ export default function DocumentsPage() {
                             <span data-tablet-role="documents-product-name">
                               {it.item_name ?? "(이름 없음)"}
                             </span>
+                            {refundPendingItemIds.has(it.id) ? (
+                              <span
+                                style={{
+                                  ...styles.badge("purple"),
+                                  background: "#fef3c7",
+                                  color: "#92400e",
+                                }}
+                              >
+                                환불 진행중
+                              </span>
+                            ) : null}
                             {itemRefundStatusMap.get(it.id) ? (
                               <span
                                 style={styles.badge(
@@ -6315,6 +6609,24 @@ export default function DocumentsPage() {
 
           [data-tablet-role="purchase-buy-form"] [data-tablet-role="purchase-item-input-grid"] {
             grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          [data-tablet-role="purchase-cost-form"] > div,
+          [data-tablet-role="purchase-cost-form"] input,
+          [data-tablet-role="purchase-cost-form"] select,
+          [data-tablet-role="purchase-cost-form"] textarea {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+          }
+
+          [data-tablet-role="purchase-cost-form"] > div:nth-child(2) {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+
+          [data-tablet-role="purchase-cost-form"] button {
+            max-width: 100% !important;
+            white-space: normal !important;
           }
         }
       `}</style>
@@ -6653,7 +6965,7 @@ export default function DocumentsPage() {
                   <div key={cost.key} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, display: "grid", gap: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><strong>추가비용 {index + 1}</strong><button type="button" style={styles.btn("danger")} onClick={() => setDraftPurchaseCosts((prev) => prev.filter((row) => row.key !== cost.key))}>삭제</button></div>
                     <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
-                      <div style={styles.field}><div style={styles.label}>종류</div><select style={styles.select} value={cost.cost_type} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, cost_type: e.target.value } : row))}>{COST_TYPE_OPTIONS.filter((x) => x !== "환불" && x !== "카드할인").map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+                      <div style={styles.field}><div style={styles.label}>종류</div><select style={styles.select} value={cost.cost_type} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, cost_type: e.target.value } : row))}>{COST_TYPE_OPTIONS.filter((x) => x !== "환불").map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
                       <div style={styles.field}><div style={styles.label}>날짜</div><input style={styles.input} value={cost.cost_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, cost_date: formatDateInput(e.target.value) } : row))} /></div>
                       <div style={styles.field}><div style={styles.label}>통화</div><select style={styles.select} value={cost.currency} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{cost.currency === "직접입력" && <input style={styles.input} value={cost.currency_custom} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, currency_custom: e.target.value } : row))} />}</div>
                       <div style={styles.field}><div style={styles.label}>외화금액</div><input style={styles.input} value={cost.foreign_amount} onChange={(e) => setDraftPurchaseCosts((prev) => prev.map((row) => row.key === cost.key ? { ...row, foreign_amount: e.target.value } : row))} placeholder="원화면 비워도 됨" /></div>
@@ -7207,6 +7519,7 @@ export default function DocumentsPage() {
         onClose={requestCloseCostModal}
       >
         <div
+          data-tablet-role="purchase-cost-form"
           onInputCapture={() => setCostDirty(true)}
           onChangeCapture={() => setCostDirty(true)}
         >
@@ -7266,18 +7579,45 @@ export default function DocumentsPage() {
             </div>
 
             {cType === "환불" ? (
-              <div style={styles.field}>
-                <div style={styles.label}>실제 환불금액(원)</div>
-                <input
-                  style={styles.input}
-                  value={cTotalKRW}
-                  onChange={(e) => setCTotalKRW(e.target.value)}
-                  placeholder="예: 90000"
-                />
-                <div style={styles.small}>
-                  환불 대상 원가와 비교해 차손·차익이 자동 계산돼.
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>환불 종류</div>
+                  <select
+                    style={styles.select}
+                    value={cRefundKind}
+                    onChange={(e) =>
+                      setCRefundKind(e.target.value as RefundKind)
+                    }
+                  >
+                    <option value="product">상품 환불</option>
+                    <option value="price_adjustment">차액 환불</option>
+                  </select>
+                  <div style={styles.small}>
+                    상품 환불은 수량도 줄고, 차액 환불은 수량은 그대로 두고 원가만 내려가.
+                  </div>
                 </div>
-              </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>환불 외화총액(선택)</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalForeign}
+                    onChange={(e) => setCTotalForeign(e.target.value)}
+                    placeholder="예: 500"
+                  />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>실제 환불금액(원)</div>
+                  <input
+                    style={styles.input}
+                    value={cTotalKRW}
+                    onChange={(e) => setCTotalKRW(e.target.value)}
+                    placeholder="예: 4820"
+                  />
+                  <div style={styles.small}>
+                    차액 환불은 선택 상품 금액 비율로 자동배분하고, 상품별 외화금액을 넣으면 그 비율을 우선 사용해.
+                  </div>
+                </div>
+              </>
             ) : cType === "관부과세" ? (
               <>
                 <div style={styles.field}>
@@ -7547,7 +7887,7 @@ export default function DocumentsPage() {
                       수량 {fmtNum(n(it.qty))} / 상품 원화합계{" "}
                       {fmtKRW(n(it.line_total))}
                     </div>
-                    {cType === "환불" ? (
+                    {cType === "환불" && cRefundKind === "product" ? (
                       <div style={{ ...styles.small, marginTop: 6 }}>
                         환불 대상 원가: <b>{fmtKRW(n(it.line_total))}</b>
                       </div>
@@ -7579,7 +7919,7 @@ export default function DocumentsPage() {
                       </>
                     )}
 
-                    {cType === "환불" ? (
+                    {cType === "환불" && cRefundKind === "product" ? (
                       <div
                         style={{
                           marginTop: 10,
@@ -7682,6 +8022,7 @@ export default function DocumentsPage() {
         onClose={requestCloseCostEditModal}
       >
         <div
+          data-tablet-role="purchase-cost-form"
           onInputCapture={() => setCostEditDirty(true)}
           onChangeCapture={() => setCostEditDirty(true)}
         >
@@ -7744,18 +8085,39 @@ export default function DocumentsPage() {
             </div>
 
             {ecType === "환불" ? (
-              <div style={styles.field}>
-                <div style={styles.label}>실제 환불금액(원)</div>
-                <input
-                  style={styles.input}
-                  value={ecTotalKRW}
-                  onChange={(e) => setEcTotalKRW(e.target.value)}
-                  placeholder="예: 90000"
-                />
-                <div style={styles.small}>
-                  환불 대상 원가와 비교해 차손·차익이 자동 계산돼.
+              <>
+                <div style={styles.field}>
+                  <div style={styles.label}>환불 종류</div>
+                  <select
+                    style={styles.select}
+                    value={ecRefundKind}
+                    onChange={(e) =>
+                      setEcRefundKind(e.target.value as RefundKind)
+                    }
+                  >
+                    <option value="product">상품 환불</option>
+                    <option value="price_adjustment">차액 환불</option>
+                  </select>
                 </div>
-              </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>환불 외화총액(선택)</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalForeign}
+                    onChange={(e) => setEcTotalForeign(e.target.value)}
+                    placeholder="예: 500"
+                  />
+                </div>
+                <div style={styles.field}>
+                  <div style={styles.label}>실제 환불금액(원)</div>
+                  <input
+                    style={styles.input}
+                    value={ecTotalKRW}
+                    onChange={(e) => setEcTotalKRW(e.target.value)}
+                    placeholder="예: 4820"
+                  />
+                </div>
+              </>
             ) : ecType === "관부과세" ? (
               <>
                 <div style={styles.field}>
@@ -8028,7 +8390,7 @@ export default function DocumentsPage() {
                           수량 {fmtNum(n(it.qty))} / 상품 원화합계{" "}
                           {fmtKRW(n(it.line_total))}
                         </div>
-                        {ecType === "환불" ? (
+                        {ecType === "환불" && ecRefundKind === "product" ? (
                           <div style={{ ...styles.small, marginTop: 6 }}>
                             환불 대상 원가: <b>{fmtKRW(n(it.line_total))}</b>
                           </div>
@@ -8060,7 +8422,7 @@ export default function DocumentsPage() {
                           </>
                         )}
 
-                        {ecType === "환불" ? (
+                        {ecType === "환불" && ecRefundKind === "product" ? (
                           <div
                             style={{
                               marginTop: 10,
@@ -8199,6 +8561,17 @@ export default function DocumentsPage() {
                   >
                     {detailItem.item_name ?? "(이름 없음)"}
                   </button>{" "}
+                  {refundPendingItemIds.has(detailItem.id) ? (
+                    <span
+                      style={{
+                        ...styles.badge("purple"),
+                        background: "#fef3c7",
+                        color: "#92400e",
+                      }}
+                    >
+                      환불 진행중
+                    </span>
+                  ) : null}
                   {itemRefundStatusMap.get(detailItem.id) ? (
                     <span
                       style={styles.badge(
@@ -8211,6 +8584,7 @@ export default function DocumentsPage() {
                     </span>
                   ) : null}
                   {detailItem.is_preorder &&
+                  itemRefundStatusMap.get(detailItem.id) !== "전체환불" &&
                   !hasBalanceByItem.get(detailItem.id) ? (
                     <span style={styles.badge("orange")}>미입고</span>
                   ) : null}
