@@ -3257,7 +3257,9 @@ export default function DocumentsPage() {
           card_name: `${fSupplier.trim()} 외화잔액`,
           currency: fCurrency,
           currency_custom: fCurrencyCustom,
-          foreign_amount: String(requiredForeign),
+          // 결제내역은 상품 본체 결제를 나타낸다.
+          // 배송비·수수료는 별도 추가비용/충전잔액 사용으로 관리한다.
+          foreign_amount: String(walletProductForeign),
           krw_amount: walletQuote.ok
             ? String(walletQuote.totalKRW)
             : "",
@@ -4455,23 +4457,32 @@ export default function DocumentsPage() {
       }
     }
 
-    const expectedPaymentForeign =
-      fUseWallet && (fShippingIncluded || fFeeIncluded)
+    // 충전잔액 사용 시 결제내역 외화는 '상품 외화'만 검사한다.
+    // 배송비/수수료는 별도의 충전잔액 사용분으로 차감되므로
+    // 상품 결제내역 외화합계와 총 차감 외화가 서로 달라도 정상이다.
+    const expectedPaymentForeign = fUseWallet
+      ? productForeign
+      : fShippingIncluded
         ? combinedForeign
-        : fShippingIncluded
-          ? combinedForeign
-          : productForeign;
+        : productForeign;
+
     if (
       !isRefundedPurchaseEdit &&
       paymentForeignSum > 0 &&
       Math.abs(paymentForeignSum - expectedPaymentForeign) > 0.01
     ) {
       setErr(
-        `결제내역 외화합계(${fmtNum(
-          paymentForeignSum,
-        )})가 실제 총 결제 외화총액(${fmtNum(
-          expectedPaymentForeign,
-        )})과 달라. 배송비를 같이 결제했다면 결제내역에는 배송비까지 포함된 실제 송금액을 적어줘.`,
+        fUseWallet
+          ? `상품 결제내역 외화합계(${fmtNum(
+              paymentForeignSum,
+            )})가 상품 외화총액(${fmtNum(
+              expectedPaymentForeign,
+            )})과 달라. 배송비·수수료 충전잔액 사용분은 여기 합계에 포함하지 않아.`
+          : `결제내역 외화합계(${fmtNum(
+              paymentForeignSum,
+            )})가 실제 총 결제 외화총액(${fmtNum(
+              expectedPaymentForeign,
+            )})과 달라. 배송비를 같이 결제했다면 결제내역에는 배송비까지 포함된 실제 송금액을 적어줘.`,
       );
       return;
     }
