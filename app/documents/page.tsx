@@ -121,6 +121,39 @@ type VendorRow = {
   is_active: boolean | null;
 };
 
+type VendorWalletTopupRow = {
+  id: string;
+  created_at: string;
+  vendor_name: string;
+  currency: string;
+  topup_date: string;
+  foreign_amount: number;
+  krw_amount: number;
+  fx_rate: number;
+  remaining_foreign: number;
+  memo: string | null;
+};
+
+type WalletQuotePart = {
+  topupId: string;
+  foreign: number;
+  krw: number;
+  fxRate: number;
+};
+
+type WalletQuote = {
+  ok: boolean;
+  balance: number;
+  needed: number;
+  productKRW: number;
+  shippingKRW: number;
+  feeKRW: number;
+  totalKRW: number;
+  productParts: WalletQuotePart[];
+  shippingParts: WalletQuotePart[];
+  feeParts: WalletQuotePart[];
+};
+
 type FileRow = {
   id: string;
   purchase_id: string | null;
@@ -533,6 +566,7 @@ const CURRENCY_OPTIONS = [
 const COST_TYPE_OPTIONS = [
   "배송비(거래처)",
   "배송비(배대지)",
+  "수수료",
   "관부과세",
   "잔금",
   "카드할인",
@@ -752,9 +786,11 @@ type CombinedPaymentMeta = {
   enabled: boolean;
   product_foreign: number;
   shipping_foreign: number;
+  fee_foreign: number;
   total_foreign: number;
   product_krw: number;
   shipping_krw: number;
+  fee_krw: number;
   shipping_vendor: string;
 };
 
@@ -777,9 +813,11 @@ function parseCombinedPaymentMeta(
       enabled: !!parsed?.enabled,
       product_foreign: Math.max(0, n(parsed?.product_foreign)),
       shipping_foreign: Math.max(0, n(parsed?.shipping_foreign)),
+      fee_foreign: Math.max(0, n(parsed?.fee_foreign)),
       total_foreign: Math.max(0, n(parsed?.total_foreign)),
       product_krw: Math.max(0, Math.round(n(parsed?.product_krw))),
       shipping_krw: Math.max(0, Math.round(n(parsed?.shipping_krw))),
+      fee_krw: Math.max(0, Math.round(n(parsed?.fee_krw))),
       shipping_vendor: String(parsed?.shipping_vendor ?? ""),
     };
   } catch {
@@ -1067,6 +1105,7 @@ function getCostInputLabel(costType: string) {
   if (normalized === "카드할인" || normalized === "할인/쿠폰")
     return "할인/쿠폰 증빙";
   if (normalized === "기타") return "기타비용영수증";
+  if (normalized === "수수료") return "수수료 증빙";
   return "배송비영수증";
 }
 
@@ -1736,6 +1775,117 @@ function ItemSelectionManager({
   );
 }
 
+
+function quoteVendorWalletFIFO(
+  topups: VendorWalletTopupRow[],
+  vendorName: string,
+  currency: string,
+  productForeign: number,
+  shippingForeign: number,
+  feeForeign: number,
+): WalletQuote {
+  const vendor = normalizeName(vendorName);
+  const cur = normalizeCurrencyCode(currency);
+  const productNeed = Math.max(0, round4(productForeign));
+  const shippingNeed = Math.max(0, round4(shippingForeign));
+  const feeNeed = Math.max(0, round4(feeForeign));
+  const needed = round4(productNeed + shippingNeed + feeNeed);
+
+  const lots = topups
+    .filter(
+      (row) =>
+        normalizeName(row.vendor_name) === vendor &&
+        normalizeCurrencyCode(row.currency) === cur &&
+        n(row.remaining_foreign) > 0,
+    )
+    .sort((a, b) => {
+      const dateDiff = String(a.topup_date || "").localeCompare(
+        String(b.topup_date || ""),
+      );
+      if (dateDiff !== 0) return dateDiff;
+
+      const createdDiff = String(a.created_at || "").localeCompare(
+        String(b.created_at || ""),
+      );
+      if (createdDiff !== 0) return createdDiff;
+
+      return String(a.id).localeCompare(String(b.id));
+    })
+    .map((row) => ({
+      ...row,
+      remaining: Math.max(0, n(row.remaining_foreign)),
+    }));
+
+  const balance = round4(
+    lots.reduce((sum, row) => sum + row.remaining, 0),
+  );
+
+  if (needed <= 0 || balance + 0.0001 < needed) {
+    return {
+      ok: false,
+      balance,
+      needed,
+      productKRW: 0,
+      shippingKRW: 0,
+      feeKRW: 0,
+      totalKRW: 0,
+      productParts: [],
+      shippingParts: [],
+      feeParts: [],
+    };
+  }
+
+  const consumePreview = (amount: number) => {
+    let left = round4(amount);
+    const parts: WalletQuotePart[] = [];
+
+    for (const lot of lots) {
+      if (left <= 0.0001) break;
+      if (lot.remaining <= 0) continue;
+
+      const take = round4(Math.min(left, lot.remaining));
+      const krw = Math.round(take * n(lot.fx_rate));
+
+      parts.push({
+        topupId: lot.id,
+        foreign: take,
+        krw,
+        fxRate: n(lot.fx_rate),
+      });
+
+      lot.remaining = round4(lot.remaining - take);
+      left = round4(left - take);
+    }
+
+    return {
+      left,
+      parts,
+      krw: parts.reduce((sum, part) => sum + part.krw, 0),
+    };
+  };
+
+  // 상품 → 배송비 → 수수료 순서로 같은 충전잔액을 FIFO 차감한다.
+  const product = consumePreview(productNeed);
+  const shipping = consumePreview(shippingNeed);
+  const fee = consumePreview(feeNeed);
+
+  return {
+    ok:
+      product.left <= 0.0001 &&
+      shipping.left <= 0.0001 &&
+      fee.left <= 0.0001,
+    balance,
+    needed,
+    productKRW: product.krw,
+    shippingKRW: shipping.krw,
+    feeKRW: fee.krw,
+    totalKRW: product.krw + shipping.krw + fee.krw,
+    productParts: product.parts,
+    shippingParts: shipping.parts,
+    feeParts: fee.parts,
+  };
+}
+
 export default function DocumentsPage() {
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [purchasePayments, setPurchasePayments] = useState<PurchasePaymentRow[]>([]);
@@ -1744,6 +1894,7 @@ export default function DocumentsPage() {
   const [allocations, setAllocations] = useState<CostAllocationRow[]>([]);
   const [arrivals, setArrivals] = useState<ArrivalRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [walletTopups, setWalletTopups] = useState<VendorWalletTopupRow[]>([]);
   const [files, setFiles] = useState<FileRow[]>([]);
 
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(
@@ -1835,11 +1986,14 @@ export default function DocumentsPage() {
     string[]
   >([]);
   const [fShippingIncluded, setFShippingIncluded] = useState(false);
+  const [fFeeIncluded, setFFeeIncluded] = useState(false);
   const [fShippingForeign, setFShippingForeign] = useState("");
+  const [fFeeForeign, setFFeeForeign] = useState("");
   const [fCombinedForeign, setFCombinedForeign] = useState("");
   const [fShippingVendor, setFShippingVendor] = useState("");
   const [fTotalKRW, setFTotalKRW] = useState("");
   const [fMemo, setFMemo] = useState("");
+  const [fUseWallet, setFUseWallet] = useState(false);
   const [draftPayments, setDraftPayments] = useState<DraftPayment[]>([
     {
       key: crypto.randomUUID(),
@@ -1875,6 +2029,7 @@ export default function DocumentsPage() {
   ]);
 
   const [cType, setCType] = useState("배송비(거래처)");
+  const [cUseWallet, setCUseWallet] = useState(false);
   const [cAmount, setCAmount] = useState("");
   const [cTotalForeign, setCTotalForeign] = useState("");
   const [cTotalKRW, setCTotalKRW] = useState("");
@@ -2726,7 +2881,9 @@ export default function DocumentsPage() {
     fTotalForeign,
     enteredDraftItemForeignSum,
     fShippingIncluded,
+    fFeeIncluded,
     fShippingForeign,
+    fFeeForeign,
     fCombinedForeign,
     paymentForeignSum,
     paymentKRWSum,
@@ -2746,7 +2903,15 @@ export default function DocumentsPage() {
 
     if (fShippingIncluded) {
       const shipping = Math.max(0, n(fShippingForeign));
-      setFCombinedForeign(String(round4(enteredDraftItemForeignSum + shipping)));
+      setFCombinedForeign(
+        String(
+          round4(
+            enteredDraftItemForeignSum +
+              shipping +
+              (fUseWallet && fFeeIncluded ? Math.max(0, n(fFeeForeign)) : 0),
+          ),
+        ),
+      );
     } else {
       setFCombinedForeign(nextProductForeign);
     }
@@ -2755,6 +2920,9 @@ export default function DocumentsPage() {
     fTotalForeignManuallyEdited,
     fShippingIncluded,
     fShippingForeign,
+    fUseWallet,
+    fFeeIncluded,
+    fFeeForeign,
   ]);
 
   useEffect(() => {
@@ -2793,6 +2961,7 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (!fShippingIncluded) return;
+    if (fUseWallet) return;
     if (editingPurchaseHasRefund) return;
     if (paymentForeignSum <= 0) return;
 
@@ -2814,6 +2983,7 @@ export default function DocumentsPage() {
     }
   }, [
     fShippingIncluded,
+    fUseWallet,
     editingPurchaseHasRefund,
     paymentForeignSum,
     fTotalForeign,
@@ -2821,6 +2991,309 @@ export default function DocumentsPage() {
     fCombinedForeign,
     fShippingForeign,
   ]);
+
+
+
+  const supplierWalletLots = useMemo(() => {
+    const vendorKey = normalizeName(fSupplier);
+    if (!vendorKey) return [] as VendorWalletTopupRow[];
+
+    return walletTopups
+      .filter(
+        (row) =>
+          normalizeName(row.vendor_name) === vendorKey &&
+          Math.max(0, n(row.remaining_foreign)) > 0,
+      )
+      .sort((a, b) => {
+        const d = String(a.topup_date || "").localeCompare(
+          String(b.topup_date || ""),
+        );
+        if (d !== 0) return d;
+        return String(a.created_at || "").localeCompare(
+          String(b.created_at || ""),
+        );
+      });
+  }, [walletTopups, fSupplier]);
+
+  const supplierWalletCurrencySummaries = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        currency: string;
+        balance: number;
+        totalOriginal: number;
+        lots: VendorWalletTopupRow[];
+      }
+    >();
+
+    for (const row of supplierWalletLots) {
+      const currency = normalizeCurrencyCode(row.currency);
+      if (!currency) continue;
+
+      const prev = map.get(currency) ?? {
+        currency,
+        balance: 0,
+        totalOriginal: 0,
+        lots: [],
+      };
+
+      prev.balance += Math.max(0, n(row.remaining_foreign));
+      prev.totalOriginal += Math.max(0, n(row.foreign_amount));
+      prev.lots.push(row);
+      map.set(currency, prev);
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.currency.localeCompare(b.currency),
+    );
+  }, [supplierWalletLots]);
+
+  function loadVendorWalletCurrency(currency: string) {
+    const normalized = normalizeCurrencyCode(currency);
+    if (!normalized) return;
+
+    const builtIn = CURRENCY_OPTIONS.find((x) => x.value === normalized);
+    if (builtIn && builtIn.value !== "직접입력") {
+      setFCurrency(builtIn.value);
+      setFCurrencyCustom("");
+    } else {
+      setFCurrency("직접입력");
+      setFCurrencyCustom(normalized);
+    }
+
+    setFUseWallet(true);
+    setFPaymentMet("충전잔액");
+
+    if (fShippingIncluded) {
+      const productForeign =
+        enteredDraftItemForeignSum > 0
+          ? enteredDraftItemForeignSum
+          : Math.max(0, n(fTotalForeign));
+      setFCombinedForeign(
+        String(
+          round4(
+            productForeign +
+              Math.max(0, n(fShippingForeign)) +
+              (fFeeIncluded ? Math.max(0, n(fFeeForeign)) : 0),
+          ),
+        ),
+      );
+    }
+    setManualPaymentForeignKeys([]);
+    setDraftPayments((prev) => {
+      const current = prev[0];
+      return [
+        {
+          key: current?.key || crypto.randomUUID(),
+          payment_date: current?.payment_date || "",
+          payment_method: "충전잔액",
+          card_name: `${fSupplier.trim()} 외화잔액`,
+          currency:
+            builtIn && builtIn.value !== "직접입력"
+              ? builtIn.value
+              : "직접입력",
+          currency_custom:
+            builtIn && builtIn.value !== "직접입력" ? "" : normalized,
+          foreign_amount: current?.foreign_amount || "",
+          krw_amount: current?.krw_amount || "",
+          memo: `거래처관리 충전잔액 불러오기 · ${normalized}`,
+        },
+      ];
+    });
+    setBuyDirty(true);
+  }
+
+  const walletCurrency = normalizeCurrencyCode(
+    currencyValue(fCurrency, fCurrencyCustom),
+  );
+
+  const walletProductForeign = Math.max(
+    0,
+    enteredDraftItemForeignSum || n(fTotalForeign),
+  );
+
+  const walletShippingForeign = fShippingIncluded
+    ? Math.max(0, n(fShippingForeign))
+    : 0;
+
+  const walletFeeForeign = fUseWallet && fFeeIncluded
+    ? Math.max(0, n(fFeeForeign))
+    : 0;
+
+  const walletQuote = useMemo(
+    () =>
+      quoteVendorWalletFIFO(
+        walletTopups,
+        fSupplier,
+        walletCurrency,
+        walletProductForeign,
+        walletShippingForeign,
+        walletFeeForeign,
+      ),
+    [
+      walletTopups,
+      fSupplier,
+      walletCurrency,
+      walletProductForeign,
+      walletShippingForeign,
+      walletFeeForeign,
+    ],
+  );
+
+
+  const costWalletCurrency = normalizeCurrencyCode(
+    currencyValue(cCurrency, cCurrencyCustom),
+  );
+
+  const costWalletEligible =
+    isShippingCostType(cType) || normalizeCostType(cType) === "수수료";
+
+  const costWalletQuote = useMemo(() => {
+    const foreign = Math.max(0, n(cTotalForeign));
+    return quoteVendorWalletFIFO(
+      walletTopups,
+      cVendorName,
+      costWalletCurrency,
+      0,
+      isShippingCostType(cType) ? foreign : 0,
+      normalizeCostType(cType) === "수수료" ? foreign : 0,
+    );
+  }, [
+    walletTopups,
+    cVendorName,
+    costWalletCurrency,
+    cType,
+    cTotalForeign,
+  ]);
+
+  const costWalletKRW = isShippingCostType(cType)
+    ? costWalletQuote.shippingKRW
+    : normalizeCostType(cType) === "수수료"
+      ? costWalletQuote.feeKRW
+      : 0;
+
+  useEffect(() => {
+    if (!cUseWallet) return;
+    if (!costWalletEligible) {
+      setCUseWallet(false);
+      return;
+    }
+    setCTotalKRW(costWalletQuote.ok ? String(costWalletKRW) : "");
+    setCFxRate(
+      costWalletQuote.ok && n(cTotalForeign) > 0
+        ? String(calcFxRate(costWalletKRW, n(cTotalForeign)))
+        : "",
+    );
+  }, [
+    cUseWallet,
+    costWalletEligible,
+    costWalletQuote.ok,
+    costWalletKRW,
+    cTotalForeign,
+  ]);
+
+  function toggleCostWalletUse(checked: boolean) {
+    if (!checked) {
+      setCUseWallet(false);
+      setCTotalKRW("");
+      return;
+    }
+
+    if (!costWalletEligible) {
+      setErr("충전잔액 사용은 배송비 또는 수수료에서 사용할 수 있어.");
+      return;
+    }
+    if (!cVendorName.trim()) {
+      setErr("충전잔액을 사용할 거래처를 먼저 선택해줘.");
+      return;
+    }
+
+    const vendorKey = normalizeName(cVendorName);
+    const firstLot = walletTopups.find(
+      (row) =>
+        normalizeName(row.vendor_name) === vendorKey &&
+        n(row.remaining_foreign) > 0,
+    );
+
+    if (!firstLot) {
+      setErr(`${cVendorName}에 사용 가능한 외화 충전잔액이 없어.`);
+      return;
+    }
+
+    const currency = normalizeCurrencyCode(firstLot.currency);
+    const builtIn = CURRENCY_OPTIONS.find((x) => x.value === currency);
+    if (builtIn && builtIn.value !== "직접입력") {
+      setCCurrency(builtIn.value);
+      setCCurrencyCustom("");
+    } else {
+      setCCurrency("직접입력");
+      setCCurrencyCustom(currency);
+    }
+
+    setCUseWallet(true);
+    setCostDirty(true);
+    setErr(null);
+  }
+
+  // 충전잔액 결제를 켜면 결제내역은 프로그램이 FIFO 결과로 자동 작성한다.
+  useEffect(() => {
+    if (!fUseWallet || buyMode !== "create") return;
+    if (!fSupplier.trim() || !walletCurrency) return;
+
+    const requiredForeign = round4(
+      walletProductForeign + walletShippingForeign + walletFeeForeign,
+    );
+    if (requiredForeign <= 0) return;
+
+    setDraftPayments((prev) => {
+      const current = prev[0];
+
+      return [
+        {
+          key: current?.key || crypto.randomUUID(),
+          // 충전일/매입일과 별개로 실제 결제일을 직접 저장할 수 있게 유지한다.
+          payment_date: current?.payment_date || "",
+          payment_method: "충전잔액",
+          card_name: `${fSupplier.trim()} 외화잔액`,
+          currency: fCurrency,
+          currency_custom: fCurrencyCustom,
+          foreign_amount: String(requiredForeign),
+          krw_amount: walletQuote.ok
+            ? String(walletQuote.totalKRW)
+            : "",
+          memo: walletQuote.ok
+            ? `FIFO 충전잔액 사용 · 사용 전 잔액 ${fmtNum(
+                walletQuote.balance,
+              )} ${walletCurrency}`
+            : `충전잔액 부족 · 현재 ${fmtNum(
+                walletQuote.balance,
+              )} / 필요 ${fmtNum(
+                walletQuote.needed,
+              )} ${walletCurrency}`,
+        },
+      ];
+    });
+
+    setFTotalKRW(walletQuote.ok ? String(walletQuote.totalKRW) : "");
+    setManualPaymentForeignKeys([]);
+  }, [
+    fUseWallet,
+    buyMode,
+    fSupplier,
+    fPurchaseDate,
+    fCurrency,
+    fCurrencyCustom,
+    walletCurrency,
+    walletProductForeign,
+    walletShippingForeign,
+    walletFeeForeign,
+    fFeeIncluded,
+    walletQuote.ok,
+    walletQuote.totalKRW,
+    walletQuote.balance,
+    walletQuote.needed,
+  ]);
+
 
   useEffect(() => {
     if (!buyModalOpen || !buyDirty) return;
@@ -2848,6 +3321,7 @@ export default function DocumentsPage() {
     fShippingVendor,
     fTotalKRW,
     fMemo,
+    fUseWallet,
     draftPayments,
     draftPurchaseCosts,
     draftItems,
@@ -3009,7 +3483,7 @@ export default function DocumentsPage() {
     setMsg(null);
 
     try {
-      const [pRes, ppRes, iRes, cRes, aRes, arRes, vRes, fRes] = await Promise.all([
+      const [pRes, ppRes, iRes, cRes, aRes, arRes, vRes, fRes, wtRes] = await Promise.all([
         supabase
           .from("purchase")
           .select(
@@ -3060,6 +3534,14 @@ export default function DocumentsPage() {
             "id,purchase_id,item_id,cost_id,file_type,file_name,file_path,created_at",
           )
           .order("created_at", { ascending: false }),
+
+        supabase
+          .from("vendor_wallet_topups")
+          .select(
+            "id,created_at,vendor_name,currency,topup_date,foreign_amount,krw_amount,fx_rate,remaining_foreign,memo",
+          )
+          .order("topup_date", { ascending: true })
+          .order("created_at", { ascending: true }),
       ]);
 
       if (pRes.error) throw pRes.error;
@@ -3070,6 +3552,7 @@ export default function DocumentsPage() {
       if (arRes.error) throw arRes.error;
       if (vRes.error) throw vRes.error;
       if (fRes.error) throw fRes.error;
+      if (wtRes.error) throw wtRes.error;
 
       const p = (pRes.data ?? []) as PurchaseRow[];
       const pp = (ppRes.data ?? []) as PurchasePaymentRow[];
@@ -3079,6 +3562,7 @@ export default function DocumentsPage() {
       const ars = (arRes.data ?? []) as ArrivalRow[];
       const vs = (vRes.data ?? []) as VendorRow[];
       const fs = (fRes.data ?? []) as FileRow[];
+      const wts = (wtRes.data ?? []) as VendorWalletTopupRow[];
 
       setPurchases(p);
       setPurchasePayments(pp);
@@ -3087,6 +3571,7 @@ export default function DocumentsPage() {
       setAllocations(as);
       setArrivals(ars);
       setVendors(vs.filter((x) => x.is_active !== false));
+      setWalletTopups(wts);
       setFiles(fs);
 
       if (!selectedPurchaseId && p.length > 0) {
@@ -3295,6 +3780,7 @@ export default function DocumentsPage() {
 
   function resetCostForm() {
     setCType("배송비(거래처)");
+    setCUseWallet(false);
     setCTotalForeign("");
     setCTotalKRW("");
     setCCurrency("KRW");
@@ -3467,11 +3953,14 @@ export default function DocumentsPage() {
       fTotalForeignManuallyEdited,
       manualPaymentForeignKeys,
       fShippingIncluded,
+      fFeeIncluded,
       fShippingForeign,
+      fFeeForeign,
       fCombinedForeign,
       fShippingVendor,
       fTotalKRW,
       fMemo,
+      fUseWallet,
       draftPayments,
       draftPurchaseCosts,
       draftItems: draftItems.map((item) => ({
@@ -3523,11 +4012,14 @@ export default function DocumentsPage() {
           : [],
       );
       setFShippingIncluded(!!draft.fShippingIncluded);
+      setFFeeIncluded(!!draft.fFeeIncluded);
       setFShippingForeign(String(draft.fShippingForeign ?? ""));
+      setFFeeForeign(String(draft.fFeeForeign ?? ""));
       setFCombinedForeign(String(draft.fCombinedForeign ?? ""));
       setFShippingVendor(draft.fShippingVendor ?? "");
       setFTotalKRW(String(draft.fTotalKRW ?? ""));
       setFMemo(draft.fMemo ?? "");
+      setFUseWallet(!!draft.fUseWallet && draft.buyMode !== "edit");
       setDraftPayments(
         Array.isArray(draft.draftPayments) && draft.draftPayments.length > 0
           ? draft.draftPayments
@@ -3604,11 +4096,14 @@ export default function DocumentsPage() {
     setFTotalForeignManuallyEdited(false);
     setManualPaymentForeignKeys([]);
     setFShippingIncluded(false);
+    setFFeeIncluded(false);
     setFShippingForeign("");
+    setFFeeForeign("");
     setFCombinedForeign("");
     setFShippingVendor("");
     setFTotalKRW("");
     setFMemo("");
+    setFUseWallet(false);
     setDraftPayments([
       {
         key: crypto.randomUUID(),
@@ -3665,7 +4160,8 @@ export default function DocumentsPage() {
         : "",
     );
     const combinedMeta = parseCombinedPaymentMeta(p.memo);
-    setFShippingIncluded(!!combinedMeta?.enabled);
+    setFShippingIncluded(!!combinedMeta?.enabled && n(combinedMeta?.shipping_foreign) > 0);
+    setFFeeIncluded(!!combinedMeta?.enabled && n(combinedMeta?.fee_foreign) > 0);
     setFTotalForeignManuallyEdited(true);
     setManualPaymentForeignKeys(
       purchasePayments
@@ -3682,6 +4178,9 @@ export default function DocumentsPage() {
     setFShippingForeign(
       combinedMeta?.enabled ? String(combinedMeta.shipping_foreign) : "",
     );
+    setFFeeForeign(
+      combinedMeta?.enabled ? String(combinedMeta.fee_foreign ?? 0) : "",
+    );
     setFCombinedForeign(
       combinedMeta?.enabled
         ? String(combinedMeta.total_foreign)
@@ -3692,6 +4191,7 @@ export default function DocumentsPage() {
     );
     setFTotalKRW(String(p.total_amount ?? ""));
     setFMemo(stripCombinedPaymentMeta(p.memo));
+    setFUseWallet(false);
     const existingPayments = purchasePayments.filter((row) => row.purchase_id === p.id);
     setDraftPayments(
       existingPayments.length > 0
@@ -3812,7 +4312,10 @@ export default function DocumentsPage() {
       ? parseCombinedPaymentMeta(currentEditingPurchase?.memo)
       : null;
 
-    const totalKRW = Math.max(0, Math.round(paymentKRWSum));
+    const totalKRW =
+      fUseWallet && buyMode === "create" && walletQuote.ok
+        ? Math.max(0, Math.round(walletQuote.totalKRW))
+        : Math.max(0, Math.round(paymentKRWSum));
     const invoiceProductForeign = Math.max(0, n(fTotalForeign));
     const productForeign = Math.max(
       0,
@@ -3820,33 +4323,60 @@ export default function DocumentsPage() {
         enteredDraftItemForeignSum ||
         invoiceProductForeign,
     );
-    const combinedForeign = fShippingIncluded
-      ? Math.max(
-          0,
-          purchasePaymentComposition.combinedForeign ||
-            paymentForeignSum ||
-            n(fCombinedForeign),
-        )
-      : isRefundedPurchaseEdit
+    const feeForeign =
+      fUseWallet && fFeeIncluded && buyMode === "create"
+        ? Math.max(0, n(fFeeForeign))
+        : 0;
+
+    const combinedForeign =
+      fUseWallet && buyMode === "create"
         ? Math.max(
             0,
-            paymentForeignSum ||
-              n(currentEditingPurchase?.total_foreign) ||
-              productForeign,
+            round4(
+              productForeign +
+                (fShippingIncluded ? Math.max(0, n(fShippingForeign)) : 0) +
+                (fFeeIncluded ? feeForeign : 0),
+            ),
           )
-        : productForeign;
+        : fShippingIncluded
+          ? Math.max(
+              0,
+              purchasePaymentComposition.combinedForeign ||
+                paymentForeignSum ||
+                n(fCombinedForeign),
+            )
+          : isRefundedPurchaseEdit
+            ? Math.max(
+                0,
+                paymentForeignSum ||
+                  n(currentEditingPurchase?.total_foreign) ||
+                  productForeign,
+              )
+            : productForeign;
+
     const shippingForeign = fShippingIncluded
       ? isRefundedPurchaseEdit
         ? Math.max(
             0,
             n(fShippingForeign) || n(currentCombinedMeta?.shipping_foreign),
           )
-        : Math.max(0, round4(combinedForeign - productForeign))
+        : fUseWallet && buyMode === "create"
+          ? Math.max(0, n(fShippingForeign))
+          : Math.max(0, round4(combinedForeign - productForeign))
       : 0;
-    const productKRW = purchasePaymentComposition.productKRW;
-    const shippingKRW = purchasePaymentComposition.shippingKRW;
+    const productKRW =
+      fUseWallet && buyMode === "create" && walletQuote.ok
+        ? walletQuote.productKRW
+        : purchasePaymentComposition.productKRW;
+    const shippingKRW =
+      fUseWallet && buyMode === "create" && walletQuote.ok
+        ? walletQuote.shippingKRW
+        : purchasePaymentComposition.shippingKRW;
     const cur = currencyValue(fCurrency, fCurrencyCustom);
-    const fx = purchasePaymentComposition.productFx;
+    const fx =
+      fUseWallet && buyMode === "create" && walletQuote.ok
+        ? calcFxRate(walletQuote.productKRW, productForeign)
+        : purchasePaymentComposition.productFx;
     const validPayments = draftPayments.filter(
       (row) => n(row.krw_amount) > 0,
     );
@@ -3854,6 +4384,32 @@ export default function DocumentsPage() {
     if (!cur) {
       setErr("통화를 선택하거나 직접 입력해줘.");
       return;
+    }
+
+    if (fUseWallet && buyMode === "create") {
+      if (!fSupplier.trim()) {
+        setErr("충전잔액 결제는 거래처를 선택해야 해.");
+        return;
+      }
+
+      if (!walletQuote.ok) {
+        setErr(
+          `충전잔액이 부족해. 현재 ${fmtNum(
+            walletQuote.balance,
+          )} ${walletCurrency} / 필요 ${fmtNum(
+            walletQuote.needed,
+          )} ${walletCurrency}`,
+        );
+        return;
+      }
+
+      if (
+        validPayments.length !== 1 ||
+        validPayments[0]?.payment_method !== "충전잔액"
+      ) {
+        setErr("충전잔액 결제내역 자동계산을 확인해줘.");
+        return;
+      }
     }
     if (validPayments.length === 0 || totalKRW <= 0) {
       setErr("결제내역을 1건 이상 입력하고 원화 실결제금액을 넣어줘.");
@@ -3866,31 +4422,45 @@ export default function DocumentsPage() {
 
     // 환불이 없는 일반 매입만 현재 상품합계와 결제총액의 일치를 검사한다.
     // 환불된 매입은 원결제금액과 현재 남은 상품합계가 달라지는 것이 정상이다.
-    if (fShippingIncluded && !isRefundedPurchaseEdit) {
-      if (shippingForeign <= 0 || combinedForeign <= 0) {
+    if (!isRefundedPurchaseEdit) {
+      if (fShippingIncluded && shippingForeign <= 0) {
         setErr(
-          "함께 결제한 배송비 외화총액과 총 결제 외화총액을 입력해줘.",
+          fUseWallet
+            ? "배송비를 충전잔액에서 사용할 경우 배송비 외화금액을 입력해줘."
+            : "함께 결제한 배송비 외화총액을 입력해줘.",
         );
         return;
       }
+      if (fUseWallet && fFeeIncluded && feeForeign <= 0) {
+        setErr("수수료를 충전잔액에서 사용할 경우 수수료 외화금액을 입력해줘.");
+        return;
+      }
+
+      const expectedCombined = round4(
+        productForeign +
+          (fShippingIncluded ? shippingForeign : 0) +
+          (fUseWallet && fFeeIncluded ? feeForeign : 0),
+      );
+
       if (
-        Math.abs(productForeign + shippingForeign - combinedForeign) >
-        0.01
+        (fShippingIncluded || (fUseWallet && fFeeIncluded)) &&
+        Math.abs(expectedCombined - combinedForeign) > 0.01
       ) {
         setErr(
-          `상품입력 외화합계(${fmtNum(
-            productForeign,
-          )}) + 배송비 외화총액(${fmtNum(
-            shippingForeign,
-          )})이 총 결제 외화총액(${fmtNum(combinedForeign)})과 달라.`,
+          `상품·배송비·수수료 외화합계(${fmtNum(
+            expectedCombined,
+          )})가 총 차감 외화(${fmtNum(combinedForeign)})와 달라.`,
         );
         return;
       }
     }
 
-    const expectedPaymentForeign = fShippingIncluded
-      ? combinedForeign
-      : productForeign;
+    const expectedPaymentForeign =
+      fUseWallet && (fShippingIncluded || fFeeIncluded)
+        ? combinedForeign
+        : fShippingIncluded
+          ? combinedForeign
+          : productForeign;
     if (
       !isRefundedPurchaseEdit &&
       paymentForeignSum > 0 &&
@@ -3972,10 +4542,10 @@ export default function DocumentsPage() {
     const purchaseFxToSave = isRefundedPurchaseEdit
       ? calcFxRate(totalKRW, totalForeignToSave) ||
         Math.max(0, n(currentEditingPurchase?.fx_rate))
-      : fShippingIncluded
+      : fShippingIncluded || fFeeIncluded
         ? calcFxRate(totalKRW, combinedForeign)
         : fx;
-    const combinedMetaToSave = fShippingIncluded
+    const combinedMetaToSave = fShippingIncluded || fFeeIncluded
       ? isRefundedPurchaseEdit && currentCombinedMeta?.enabled
         ? {
             ...currentCombinedMeta,
@@ -3983,6 +4553,10 @@ export default function DocumentsPage() {
             shipping_foreign:
               Math.max(0, n(fShippingForeign)) ||
               currentCombinedMeta.shipping_foreign,
+            fee_foreign:
+              Math.max(0, n(fFeeForeign)) ||
+              currentCombinedMeta.fee_foreign ||
+              0,
             total_foreign: totalForeignToSave,
             shipping_vendor:
               fShippingVendor.trim() || currentCombinedMeta.shipping_vendor,
@@ -3991,9 +4565,12 @@ export default function DocumentsPage() {
             enabled: true,
             product_foreign: invoiceProductForeign,
             shipping_foreign: shippingForeign,
+            fee_foreign: feeForeign,
             total_foreign: totalForeignToSave,
             product_krw: productKRW,
             shipping_krw: shippingKRW,
+            fee_krw:
+              fUseWallet && walletQuote.ok ? walletQuote.feeKRW : 0,
             shipping_vendor: fShippingVendor.trim(),
           }
       : null;
@@ -4036,21 +4613,24 @@ export default function DocumentsPage() {
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
-            fx_rate: fShippingIncluded
+            fx_rate: fShippingIncluded || fFeeIncluded
               ? calcFxRate(totalKRW, combinedForeign)
               : fx,
             total_foreign: combinedForeign,
             total_amount: totalKRW,
             memo: buildCombinedPaymentMemo(
               fMemo,
-              fShippingIncluded
+              fShippingIncluded || fFeeIncluded
                 ? {
                     enabled: true,
                     product_foreign: invoiceProductForeign,
                     shipping_foreign: shippingForeign,
+                    fee_foreign: feeForeign,
                     total_foreign: combinedForeign,
                     product_krw: productKRW,
                     shipping_krw: shippingKRW,
+                    fee_krw:
+                      fUseWallet && walletQuote.ok ? walletQuote.feeKRW : 0,
                     shipping_vendor: fShippingVendor.trim(),
                   }
                 : null,
@@ -4064,6 +4644,105 @@ export default function DocumentsPage() {
       }
 
       if (!purchaseId) throw new Error("매입 ID를 찾을 수 없어.");
+
+      // 새 매입에서 충전잔액을 사용한 경우 실제 FIFO 차감을 확정한다.
+      // 상품분과 배송비분은 같은 충전잔액에서 순서대로 차감되지만,
+      // 원화 원가는 서로 분리해서 저장한다.
+      if (fUseWallet && buyMode === "create") {
+        const consumeRes = await supabase.rpc(
+          "consume_vendor_wallet",
+          {
+            p_purchase_id: purchaseId,
+            p_vendor_name: fSupplier.trim(),
+            p_currency: walletCurrency,
+            p_usage_date:
+              validPayments[0]?.payment_date || fPurchaseDate,
+            p_product_foreign: productForeign,
+            p_shipping_foreign: shippingForeign,
+            p_fee_foreign: feeForeign,
+            p_memo: "매입관리 자동 차감",
+          },
+        );
+
+        if (consumeRes.error) {
+          // 매입 본체만 생성된 직후 차감이 실패한 경우 찌꺼기를 남기지 않는다.
+          await supabase
+            .from("purchase")
+            .delete()
+            .eq("id", purchaseId);
+          throw consumeRes.error;
+        }
+
+        const consumed = (consumeRes.data ?? {}) as {
+          product_krw?: number;
+          shipping_krw?: number;
+          fee_krw?: number;
+          total_krw?: number;
+        };
+
+        const consumedProductKRW = Math.max(
+          0,
+          Math.round(n(consumed.product_krw)),
+        );
+        const consumedShippingKRW = Math.max(
+          0,
+          Math.round(n(consumed.shipping_krw)),
+        );
+        const consumedFeeKRW = Math.max(
+          0,
+          Math.round(n(consumed.fee_krw)),
+        );
+        const consumedTotalKRW = Math.max(
+          0,
+          Math.round(n(consumed.total_krw)),
+        );
+
+        if (consumedTotalKRW <= 0) {
+          throw new Error(
+            "충전잔액 원화 계산 결과가 0원이야. 충전내역을 확인해줘.",
+          );
+        }
+
+        // 아래 기존 저장 로직이 같은 원화금액을 사용하도록 반영한다.
+        validPayments[0].krw_amount = String(consumedTotalKRW);
+
+        const walletPurchaseMemo = buildCombinedPaymentMemo(
+          fMemo,
+          fShippingIncluded || fFeeIncluded
+            ? {
+                enabled: true,
+                product_foreign: invoiceProductForeign,
+                shipping_foreign: shippingForeign,
+                fee_foreign: feeForeign,
+                total_foreign: combinedForeign,
+                product_krw: consumedProductKRW,
+                shipping_krw: consumedShippingKRW,
+                fee_krw: consumedFeeKRW,
+                shipping_vendor:
+                  fShippingVendor.trim() || fSupplier.trim(),
+              }
+            : null,
+        );
+
+        const updateWalletPurchase = await supabase
+          .from("purchase")
+          .update({
+            payment_met: "충전잔액",
+            card_name: `${fSupplier.trim()} 외화잔액`,
+            currency: cur,
+            fx_rate: calcFxRate(
+              consumedTotalKRW,
+              combinedForeign,
+            ),
+            total_foreign: combinedForeign,
+            total_amount: consumedTotalKRW,
+            memo: walletPurchaseMemo,
+          })
+          .eq("id", purchaseId);
+
+        if (updateWalletPurchase.error)
+          throw updateWalletPurchase.error;
+      }
 
       const deletePayments = await supabase
         .from("purchase_payments")
@@ -4242,6 +4921,50 @@ export default function DocumentsPage() {
         }
       }
 
+
+      if (
+        buyMode === "create" &&
+        fUseWallet &&
+        feeForeign > 0 &&
+        walletQuote.feeKRW > 0
+      ) {
+        const feeCost = await supabase
+          .from("purchase_costs")
+          .insert({
+            purchase_id: purchaseId,
+            cost_type: "수수료",
+            amount: feeForeign,
+            currency: cur,
+            fx_rate: calcFxRate(walletQuote.feeKRW, feeForeign),
+            memo: "[충전잔액 수수료]\n상품 매입과 함께 충전잔액에서 차감",
+            vendor_name: fSupplier || null,
+            cost_date:
+              validPayments[0]?.payment_date || fPurchaseDate || null,
+          })
+          .select("id")
+          .single();
+
+        if (feeCost.error) throw feeCost.error;
+
+        const feeAllocated = distributeByWeightsCeilIntSigned(
+          walletQuote.feeKRW,
+          cleaned.map((row) => Math.max(0, row.foreign_total)),
+        );
+
+        const feeAllocationInsert = await supabase
+          .from("cost_allocations")
+          .insert(
+            savedPurchaseItemIds.map((itemId, index) => ({
+              purchase_cost_id: feeCost.data.id,
+              purchase_item_id: itemId,
+              allocated_amount: feeAllocated[index] ?? 0,
+            })),
+          );
+
+        if (feeAllocationInsert.error)
+          throw feeAllocationInsert.error;
+      }
+
       if (buyMode === "create" && draftPurchaseCosts.length > 0) {
         for (const draftCost of draftPurchaseCosts) {
           const itemWeights = isShippingCostType(draftCost.cost_type)
@@ -4318,15 +5041,27 @@ export default function DocumentsPage() {
           ? isRefundedPurchaseEdit
             ? "매입 수정 완료 · 최초 결제내역은 유지하고 환불 후 남은 상품만 수정했어."
             : "매입 수정 완료"
-          : fShippingIncluded
-            ? `매입 저장 완료 · 상품 ${fmtKRW(
+          : fUseWallet
+            ? `매입 저장 완료 · 충전잔액 FIFO 차감 / 상품 ${fmtKRW(
                 productKRW,
-              )} / 배송비 ${fmtKRW(
-                shippingKRW,
-              )}로 실제 결제액을 남김없이 나눴어.`
-            : `매입 저장 완료 (상품 외화합계 자동보정 / 환율 ${fx.toFixed(
-                4,
-              )})`,
+              )}${
+                fShippingIncluded
+                  ? ` / 배송비 ${fmtKRW(shippingKRW)}`
+                  : ""
+              }${
+                feeForeign > 0
+                  ? ` / 수수료 ${fmtKRW(walletQuote.feeKRW)}`
+                  : ""
+              }`
+            : fShippingIncluded
+              ? `매입 저장 완료 · 상품 ${fmtKRW(
+                  productKRW,
+                )} / 배송비 ${fmtKRW(
+                  shippingKRW,
+                )}로 실제 결제액을 남김없이 나눴어.`
+              : `매입 저장 완료 (상품 외화합계 자동보정 / 환율 ${fx.toFixed(
+                  4,
+                )})`,
       );
       window.localStorage.removeItem(PURCHASE_DRAFT_STORAGE_KEY);
       setBuyModalOpen(false);
@@ -4714,9 +5449,11 @@ export default function DocumentsPage() {
     const allocationItems = chosen;
     const allocationWeights = isShippingCostType(ecType)
       ? chosen.map((item) => Math.max(0, n(item.qty)))
-      : resolvedForeign.ok
-        ? resolvedForeign.rows.map((row) => row.foreign_total)
-        : [];
+      : normalizeCostType(ecType) === "수수료"
+        ? chosen.map((item) => Math.max(0, n(item.line_total)))
+        : resolvedForeign.ok
+          ? resolvedForeign.rows.map((row) => row.foreign_total)
+          : [];
     const signedCostKRW =
       ecType === "환불"
         ? isPriceAdjustmentRefund
@@ -4789,6 +5526,7 @@ export default function DocumentsPage() {
     if (
       ecType !== "환불" &&
       !isShippingCostType(ecType) &&
+      normalizeCostType(ecType) !== "수수료" &&
       !resolvedForeign.ok
     ) {
       setErr(resolvedForeign.message);
@@ -5113,16 +5851,18 @@ export default function DocumentsPage() {
         : n(cTotalForeign);
     const amount = signedCostAmountByType(cType, amountBase);
 
-    const fx =
-      normalizeCurrencyCode(cur) === "KRW"
+    const fx = cUseWallet
+      ? calcFxRate(costWalletKRW, n(cTotalForeign))
+      : normalizeCurrencyCode(cur) === "KRW"
         ? 1
         : calcFxRate(
             n(cTotalKRW),
             cType === "관부과세" ? amount : n(cTotalForeign),
           );
 
-    const costKRW =
-      cType === "관부과세"
+    const costKRW = cUseWallet
+      ? costWalletKRW
+      : cType === "관부과세"
         ? n(cTotalKRW || amount)
         : normalizeCurrencyCode(cur) === "KRW"
           ? n(cTotalKRW || cTotalForeign)
@@ -5136,12 +5876,36 @@ export default function DocumentsPage() {
       setErr("통화를 선택하거나 직접 입력해줘.");
       return;
     }
+    if (cUseWallet) {
+      if (!costWalletEligible) {
+        setErr("충전잔액 사용은 배송비 또는 수수료에서 사용할 수 있어.");
+        return;
+      }
+      if (!cVendorName.trim()) {
+        setErr("충전잔액을 사용할 거래처를 선택해줘.");
+        return;
+      }
+      if (n(cTotalForeign) <= 0) {
+        setErr("충전잔액에서 차감할 외화금액을 입력해줘.");
+        return;
+      }
+      if (!costWalletQuote.ok || costWalletKRW <= 0) {
+        setErr(
+          `충전잔액이 부족하거나 계산할 수 없어. 현재 ${fmtNum(
+            costWalletQuote.balance,
+          )} ${costWalletCurrency} / 필요 ${fmtNum(
+            costWalletQuote.needed,
+          )} ${costWalletCurrency}`,
+        );
+        return;
+      }
+    }
     if (cType === "관부과세") {
       if (Math.abs(amount) <= 0 && n(cTotalKRW) <= 0) {
         setErr("원화 총액이나 관세/부가세를 입력해줘.");
         return;
       }
-      if (n(cTotalKRW) <= 0) {
+      if (!cUseWallet && n(cTotalKRW) <= 0) {
         setErr("원화 총액을 입력해줘.");
         return;
       }
@@ -5159,7 +5923,7 @@ export default function DocumentsPage() {
         setErr("외화 총액을 입력해줘.");
         return;
       }
-      if (n(cTotalKRW) <= 0) {
+      if (!cUseWallet && n(cTotalKRW) <= 0) {
         setErr("원화 총액을 입력해줘.");
         return;
       }
@@ -5201,7 +5965,9 @@ export default function DocumentsPage() {
               refundInfo,
               cRefundKind,
             )
-          : cMemo || null;
+          : cUseWallet
+            ? `[충전잔액 사용]\n${cMemo || ""}`.trim()
+            : cMemo || null;
 
     if (cType === "환불" && !isPriceAdjustmentRefund) {
       for (const it of chosen) {
@@ -5234,9 +6000,11 @@ export default function DocumentsPage() {
     const allocationItems = chosen;
     const allocationWeights = isShippingCostType(cType)
       ? chosen.map((item) => Math.max(0, n(item.qty)))
-      : resolvedForeign.ok
-        ? resolvedForeign.rows.map((row) => row.foreign_total)
-        : [];
+      : normalizeCostType(cType) === "수수료"
+        ? chosen.map((item) => Math.max(0, n(item.line_total)))
+        : resolvedForeign.ok
+          ? resolvedForeign.rows.map((row) => row.foreign_total)
+          : [];
     const signedCostKRW =
       cType === "환불"
         ? isPriceAdjustmentRefund
@@ -5247,6 +6015,7 @@ export default function DocumentsPage() {
     if (
       cType !== "환불" &&
       !isShippingCostType(cType) &&
+      normalizeCostType(cType) !== "수수료" &&
       !resolvedForeign.ok
     ) {
       setErr(resolvedForeign.message);
@@ -5264,6 +6033,12 @@ export default function DocumentsPage() {
       );
       const linkedPurchaseId =
         linkedPurchaseIds.length === 1 ? linkedPurchaseIds[0] : null;
+
+      if (cUseWallet && !linkedPurchaseId) {
+        throw new Error(
+          "충전잔액으로 추가비용을 저장할 때는 한 매입의 상품들만 선택해줘.",
+        );
+      }
 
       const insCost = await supabase
         .from("purchase_costs")
@@ -5339,6 +6114,39 @@ export default function DocumentsPage() {
         if (insAlloc.error) throw insAlloc.error;
       }
 
+      if (cUseWallet) {
+        const consumeRes = await supabase.rpc(
+          "consume_vendor_wallet",
+          {
+            p_purchase_id: linkedPurchaseId,
+            p_vendor_name: cVendorName.trim(),
+            p_currency: costWalletCurrency,
+            p_usage_date: cDate,
+            p_product_foreign: 0,
+            p_shipping_foreign: isShippingCostType(cType)
+              ? Math.max(0, n(cTotalForeign))
+              : 0,
+            p_fee_foreign:
+              normalizeCostType(cType) === "수수료"
+                ? Math.max(0, n(cTotalForeign))
+                : 0,
+            p_memo: `추가비용 자동 차감 · ${cType}`,
+          },
+        );
+
+        if (consumeRes.error) {
+          await supabase
+            .from("cost_allocations")
+            .delete()
+            .eq("purchase_cost_id", costId);
+          await supabase
+            .from("purchase_costs")
+            .delete()
+            .eq("id", costId);
+          throw consumeRes.error;
+        }
+      }
+
       if (costReceiptFile) {
         await upsertPurchaseFile({
           cost_id: costId,
@@ -5377,11 +6185,18 @@ export default function DocumentsPage() {
             : `상품 환불 저장 완료 · 공동비용 자동 재배분 완료 (차손 ${fmtKRW(refundInfo.lossKRW)} / 차익 ${fmtKRW(refundInfo.profitKRW)})`
           : cType === "카드할인"
             ? `카드할인 저장 완료 (${fmtKRW(Math.abs(Math.round(costKRW)))} 차감)`
-            : `추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`,
+            : cUseWallet
+              ? `추가비용 저장 완료 · 충전잔액 ${fmtNum(
+                  n(cTotalForeign),
+                )} ${costWalletCurrency} 차감 / ${fmtKRW(
+                  Math.round(costKRW),
+                )}`
+              : `추가비용 저장 완료 (${fmtKRW(Math.round(costKRW))})`,
       );
       setCostModalOpen(false);
       setCostDirty(false);
       setCType("배송비(거래처)");
+      setCUseWallet(false);
       setCAmount("");
       setCTotalForeign("");
       setCTotalKRW("");
@@ -7383,7 +8198,7 @@ export default function DocumentsPage() {
                   type="button"
                   style={styles.btn("ghost")}
                   onClick={() => setDraftPayments((prev) => [...prev, {
-                    key: crypto.randomUUID(), payment_date: fPurchaseDate, payment_method: "카드", card_name: "",
+                    key: crypto.randomUUID(), payment_date: "", payment_method: "카드", card_name: "",
                     currency: fCurrency, currency_custom: fCurrencyCustom, foreign_amount: "", krw_amount: "", memo: "",
                   }])}
                 >
@@ -7395,16 +8210,20 @@ export default function DocumentsPage() {
                 <div key={payment.key} style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, display: "grid", gap: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <strong>결제 {index + 1}</strong>
-                    <button type="button" style={styles.btn("danger")} onClick={() => setDraftPayments((prev) => prev.length === 1 ? prev : prev.filter((row) => row.key !== payment.key))}>삭제</button>
+                    <button type="button" style={styles.btn("danger")} disabled={fUseWallet} onClick={() => setDraftPayments((prev) => prev.length === 1 ? prev : prev.filter((row) => row.key !== payment.key))}>삭제</button>
                   </div>
                   <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
-                    <div style={styles.field}><div style={styles.label}>결제일</div><input style={styles.input} value={payment.payment_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_date: formatDateInput(e.target.value) } : row))} /></div>
-                    <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="기타">기타</option></select></div>
+                    <div style={styles.field}><div style={styles.label}>{fUseWallet ? "실제 결제일 (충전일과 별도)" : "결제일"}</div><input style={styles.input} value={payment.payment_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_date: formatDateInput(e.target.value) } : row))} /></div>
+                    <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="충전잔액">충전잔액</option><option value="기타">기타</option></select></div>
                     <div style={styles.field}><div style={styles.label}>카드명·계좌(선택)</div><input style={styles.input} value={payment.card_name} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, card_name: e.target.value } : row))} placeholder="예: 신한 / 사업자계좌" /></div>
                     <div style={styles.field}><div style={styles.label}>결제 통화</div><select style={styles.select} value={payment.currency} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{payment.currency === "직접입력" && <input style={styles.input} value={payment.currency_custom} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency_custom: e.target.value } : row))} placeholder="예: THB" />}</div>
                     <div style={styles.field}><div style={styles.label}>외화 결제금액(배송비 포함 실제 송금액)</div><input
-                      style={styles.input}
+                      style={{
+                        ...styles.input,
+                        background: fUseWallet ? "#f3f4f6" : "#fff",
+                      }}
                       value={payment.foreign_amount}
+                      readOnly={fUseWallet}
                       onChange={(e) => {
                         setManualPaymentForeignKeys((prev) =>
                           prev.includes(payment.key)
@@ -7421,7 +8240,7 @@ export default function DocumentsPage() {
                       }}
                       placeholder="상품 입력 시 자동계산 / 직접 수정 가능"
                     /></div>
-                    <div style={styles.field}><div style={styles.label}>원화 실결제금액</div><input style={styles.input} value={payment.krw_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, krw_amount: e.target.value } : row))} placeholder="카드 승인·이체된 원화" /></div>
+                    <div style={styles.field}><div style={styles.label}>원화 실결제금액</div><input style={{ ...styles.input, background: fUseWallet ? "#f3f4f6" : "#fff" }} readOnly={fUseWallet} value={payment.krw_amount} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, krw_amount: e.target.value } : row))} placeholder="카드 승인·이체된 원화" /></div>
                     <div style={styles.field}><div style={styles.label}>개별 환율</div><input style={{ ...styles.input, background: "#f3f4f6" }} readOnly value={normalizeCurrencyCode(currencyValue(payment.currency, payment.currency_custom)) === "KRW" ? "1" : calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)) > 0 ? calcFxRate(n(payment.krw_amount), n(payment.foreign_amount)).toFixed(4) : ""} /></div>
                     <div style={styles.field}><div style={styles.label}>결제 메모</div><input style={styles.input} value={payment.memo} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, memo: e.target.value } : row))} /></div>
                   </div>
@@ -7438,6 +8257,358 @@ export default function DocumentsPage() {
               </select>
               {fCurrency === "직접입력" && <input style={styles.input} value={fCurrencyCustom} onChange={(e) => setFCurrencyCustom(e.target.value)} placeholder="예: THB" />}
             </div>
+
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                border: fUseWallet
+                  ? "2px solid #7c3aed"
+                  : "1px solid #ddd6fe",
+                borderRadius: 14,
+                padding: 12,
+                background: fUseWallet ? "#faf5ff" : "#fff",
+                display: "grid",
+                gap: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 900, marginBottom: 4 }}>
+                  거래처 외화충전잔액
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#6b7280",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  거래처관리에서 등록한 충전내역을 여기서 불러와 사용해.
+                  충전일과 실제 상품 결제일은 서로 다르게 저장할 수 있어.
+                </div>
+              </div>
+
+              {!fSupplier.trim() ? (
+                <div
+                  style={{
+                    border: "1px dashed #d9d9e6",
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 12,
+                    color: "#6b7280",
+                    background: "#fafafa",
+                  }}
+                >
+                  먼저 거래처를 선택하면 등록된 외화 충전내역이 표시돼.
+                </div>
+              ) : supplierWalletCurrencySummaries.length === 0 ? (
+                <div
+                  style={{
+                    border: "1px dashed #d9d9e6",
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 12,
+                    color: "#6b7280",
+                    background: "#fafafa",
+                  }}
+                >
+                  {fSupplier}에 사용 가능한 외화 충전잔액이 없어.
+                  충전등록은 거래처관리에서 해줘.
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {supplierWalletCurrencySummaries.map((summary) => {
+                    const selected =
+                      fUseWallet &&
+                      walletCurrency === summary.currency;
+
+                    return (
+                      <div
+                        key={summary.currency}
+                        style={{
+                          border: selected
+                            ? "2px solid #7c3aed"
+                            : "1px solid #e5e7eb",
+                          borderRadius: 12,
+                          padding: 10,
+                          background: selected ? "#f5f3ff" : "#fff",
+                          display: "grid",
+                          gap: 8,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 10,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: "#6b7280",
+                              }}
+                            >
+                              사용 가능 잔액
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 18,
+                                fontWeight: 900,
+                              }}
+                            >
+                              {fmtNum(summary.balance)} {summary.currency}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            style={styles.btn(
+                              selected ? "primary" : "ghost",
+                            )}
+                            disabled={buyMode === "edit"}
+                            onClick={() =>
+                              loadVendorWalletCurrency(summary.currency)
+                            }
+                          >
+                            {selected
+                              ? "불러옴 ✓"
+                              : `${summary.currency} 잔액 불러오기`}
+                          </button>
+                        </div>
+
+                        <div
+                          style={{
+                            display: "grid",
+                            gap: 5,
+                            maxHeight: 150,
+                            overflowY: "auto",
+                          }}
+                        >
+                          {summary.lots.map((lot) => (
+                            <div
+                              key={lot.id}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns:
+                                  "90px minmax(0,1fr) minmax(0,1fr)",
+                                gap: 8,
+                                borderTop: "1px solid #f0f0f5",
+                                paddingTop: 6,
+                                fontSize: 11,
+                                color: "#4b5563",
+                              }}
+                            >
+                              <div>
+                                충전 {lot.topup_date}
+                              </div>
+                              <div>
+                                충전 {fmtNum(n(lot.foreign_amount))}{" "}
+                                {summary.currency}
+                                <br />
+                                남음 {fmtNum(n(lot.remaining_foreign))}{" "}
+                                {summary.currency}
+                              </div>
+                              <div>
+                                원화 {fmtKRW(n(lot.krw_amount))}
+                                <br />
+                                환율 {n(lot.fx_rate).toFixed(4)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {fUseWallet ? (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(150px, 1fr))",
+                      gap: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        현재 충전잔액
+                      </div>
+                      <div style={{ marginTop: 3, fontWeight: 900 }}>
+                        {fmtNum(walletQuote.balance)} {walletCurrency}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        이번 상품 외화
+                      </div>
+                      <div style={{ marginTop: 3, fontWeight: 900 }}>
+                        {fmtNum(walletProductForeign)} {walletCurrency}
+                        {walletQuote.ok
+                          ? ` → ${fmtKRW(walletQuote.productKRW)}`
+                          : ""}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        이번 배송비 외화
+                      </div>
+                      <div style={{ marginTop: 3, fontWeight: 900 }}>
+                        {fmtNum(walletShippingForeign)} {walletCurrency}
+                        {walletQuote.ok
+                          ? ` → ${fmtKRW(walletQuote.shippingKRW)}`
+                          : ""}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        이번 수수료 외화
+                      </div>
+                      <div style={{ marginTop: 3, fontWeight: 900 }}>
+                        {fmtNum(walletFeeForeign)} {walletCurrency}
+                        {walletQuote.ok
+                          ? ` → ${fmtKRW(walletQuote.feeKRW)}`
+                          : ""}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        자동 원화총액
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 3,
+                          fontWeight: 900,
+                          color: walletQuote.ok
+                            ? "#166534"
+                            : "#b91c1c",
+                        }}
+                      >
+                        {walletQuote.ok
+                          ? fmtKRW(walletQuote.totalKRW)
+                          : "상품 외화금액 입력 필요"}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        저장 후 예상잔액
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 3,
+                          fontWeight: 900,
+                          color: walletQuote.ok
+                            ? "#166534"
+                            : "#b91c1c",
+                        }}
+                      >
+                        {walletQuote.ok
+                          ? `${fmtNum(
+                              Math.max(
+                                0,
+                                walletQuote.balance -
+                                  walletQuote.needed,
+                              ),
+                            )} ${walletCurrency}`
+                          : `부족 ${fmtNum(
+                              Math.max(
+                                0,
+                                walletQuote.needed -
+                                  walletQuote.balance,
+                              ),
+                            )} ${walletCurrency}`}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      style={styles.btn("ghost")}
+                      onClick={() => {
+                        setFUseWallet(false);
+                        setFFeeIncluded(false);
+                        setFFeeForeign("");
+                        setFTotalKRW("");
+                        setDraftPayments((prev) =>
+                          prev.map((row) =>
+                            row.payment_method === "충전잔액"
+                              ? {
+                                  ...row,
+                                  payment_method: "카드",
+                                  card_name: "",
+                                  foreign_amount: "",
+                                  krw_amount: "",
+                                  memo: "",
+                                }
+                              : row,
+                          ),
+                        );
+                      }}
+                    >
+                      충전잔액 사용 해제
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
             <div style={styles.field}>
               <div style={styles.label}>인보이스 상품 외화총액(상품·배송비 구분 기준)</div>
               <input
@@ -7452,7 +8623,13 @@ export default function DocumentsPage() {
                       String(
                         Math.max(
                           0,
-                          round4(n(fCombinedForeign) - n(value)),
+                          round4(
+                            n(fCombinedForeign) -
+                              n(value) -
+                              (fUseWallet && fFeeIncluded
+                                ? Math.max(0, n(fFeeForeign))
+                                : 0),
+                          ),
                         ),
                       ),
                     );
@@ -7470,115 +8647,340 @@ export default function DocumentsPage() {
                 padding: 12,
                 background: "#faf8ff",
                 display: "grid",
-                gap: 10,
+                gap: 12,
               }}
             >
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontWeight: 900,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={fShippingIncluded}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setFShippingIncluded(checked);
-                    if (checked) {
-                      setFShippingVendor((prev) => prev || fSupplier);
-                      if (!fCombinedForeign && fTotalForeign) {
-                        setFCombinedForeign(fTotalForeign);
-                      }
-                    } else {
-                      setFShippingForeign("");
-                      setFCombinedForeign(fTotalForeign);
-                    }
-                  }}
-                />
-                상품값과 배송비를 한 번에 결제
-              </label>
-
-              {fShippingIncluded ? (
+              {fUseWallet ? (
                 <>
-                  <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
-                    <div style={styles.field}>
-                      <div style={styles.label}>배송비 외화총액(자동계산)</div>
-                      <input
-                        style={{ ...styles.input, background: "#f3f4f6" }}
-                        value={fShippingForeign}
-                        readOnly
-                        placeholder="결제 외화합계 - 상품리스트 입력합계"
-                      />
-                    </div>
-
-                    <div style={styles.field}>
-                      <div style={styles.label}>총 결제 외화총액(결제내역 외화합계)</div>
-                      <input
-                        style={{ ...styles.input, background: "#f3f4f6" }}
-                        value={fCombinedForeign}
-                        readOnly
-                        placeholder="위 결제내역의 외화합계"
-                      />
-                    </div>
-                  </div>
-
-                  <div style={styles.field}>
-                    <div style={styles.label}>배송비 거래처</div>
-                    <select
-                      style={styles.select}
-                      value={fShippingVendor}
-                      onChange={(e) => setFShippingVendor(e.target.value)}
-                    >
-                      <option value="">선택 안함</option>
-                      {includedShippingVendorOptions.map((vendor) => (
-                        <option key={vendor.id} value={vendor.name ?? ""}>
-                          {vendor.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>
-                      거래처관리에서 상품거래처·배대지·휴대품반입으로
-                      등록한 업체가 표시돼.
-                    </div>
-                  </div>
-
                   <div
                     style={{
-                      borderRadius: 12,
-                      background: "#ede9fe",
-                      padding: 12,
                       display: "grid",
-                      gap: 4,
-                      fontSize: 13,
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 10,
                     }}
                   >
-                    <div>
-                      상품 원화:{" "}
-                      <b>{fmtKRW(purchasePaymentComposition.productKRW)}</b>
-                    </div>
-                    <div>
-                      배송비 원화:{" "}
-                      <b>{fmtKRW(purchasePaymentComposition.shippingKRW)}</b>
-                    </div>
-                    <div>
-                      합계: <b>{fmtKRW(paymentKRWSum)}</b>
-                    </div>
-                    <div style={{ color: "#6b7280", fontSize: 12 }}>
-                      결제 외화합계에서 인보이스 상품총액을 빼 배송비
-                      외화를 계산해. 실제 원화총액은 인보이스 상품총액과
-                      배송비 외화 비율로 나누고, 상품 원화는 상품별 입력금액
-                      비율로 다시 배분해.
-                    </div>
+                    <label
+                      style={{
+                        border: fShippingIncluded
+                          ? "2px solid #7c3aed"
+                          : "1px solid #ddd6fe",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: fShippingIncluded ? "#f5f3ff" : "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontWeight: 900,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={fShippingIncluded}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setFShippingIncluded(checked);
+                          if (checked) {
+                            setFShippingVendor((prev) => prev || fSupplier);
+                          } else {
+                            setFShippingForeign("");
+                          }
+                          const productForeign =
+                            enteredDraftItemForeignSum > 0
+                              ? enteredDraftItemForeignSum
+                              : Math.max(0, n(fTotalForeign));
+                          setFCombinedForeign(
+                            String(
+                              round4(
+                                productForeign +
+                                  (checked
+                                    ? Math.max(0, n(fShippingForeign))
+                                    : 0) +
+                                  (fFeeIncluded
+                                    ? Math.max(0, n(fFeeForeign))
+                                    : 0),
+                              ),
+                            ),
+                          );
+                          setBuyDirty(true);
+                        }}
+                      />
+                      배송비 충전잔액 사용
+                    </label>
+
+                    <label
+                      style={{
+                        border: fFeeIncluded
+                          ? "2px solid #7c3aed"
+                          : "1px solid #ddd6fe",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: fFeeIncluded ? "#f5f3ff" : "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontWeight: 900,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={fFeeIncluded}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setFFeeIncluded(checked);
+                          if (!checked) setFFeeForeign("");
+                          const productForeign =
+                            enteredDraftItemForeignSum > 0
+                              ? enteredDraftItemForeignSum
+                              : Math.max(0, n(fTotalForeign));
+                          setFCombinedForeign(
+                            String(
+                              round4(
+                                productForeign +
+                                  (fShippingIncluded
+                                    ? Math.max(0, n(fShippingForeign))
+                                    : 0) +
+                                  (checked
+                                    ? Math.max(0, n(fFeeForeign))
+                                    : 0),
+                              ),
+                            ),
+                          );
+                          setBuyDirty(true);
+                        }}
+                      />
+                      수수료 충전잔액 사용
+                    </label>
                   </div>
+
+                  {(fShippingIncluded || fFeeIncluded) ? (
+                    <>
+                      <div
+                        data-tablet-role="purchase-form-grid"
+                        style={styles.grid2}
+                      >
+                        {fShippingIncluded ? (
+                          <div style={styles.field}>
+                            <div style={styles.label}>
+                              배송비 외화금액 ({walletCurrency || "외화"})
+                            </div>
+                            <input
+                              style={styles.input}
+                              value={fShippingForeign}
+                              inputMode="decimal"
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setFShippingForeign(value);
+                                const productForeign =
+                                  enteredDraftItemForeignSum > 0
+                                    ? enteredDraftItemForeignSum
+                                    : Math.max(0, n(fTotalForeign));
+                                setFCombinedForeign(
+                                  String(
+                                    round4(
+                                      productForeign +
+                                        Math.max(0, n(value)) +
+                                        (fFeeIncluded
+                                          ? Math.max(0, n(fFeeForeign))
+                                          : 0),
+                                    ),
+                                  ),
+                                );
+                                setBuyDirty(true);
+                              }}
+                              placeholder="예: 3500"
+                            />
+                            <div style={styles.small}>
+                              배송비가 나중에 결제되면 지금은 체크하지 않고,
+                              나중에 추가비용에서 충전잔액으로 등록하면 돼.
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {fFeeIncluded ? (
+                          <div style={styles.field}>
+                            <div style={styles.label}>
+                              수수료 외화금액 ({walletCurrency || "외화"})
+                            </div>
+                            <input
+                              style={styles.input}
+                              value={fFeeForeign}
+                              inputMode="decimal"
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setFFeeForeign(value);
+                                const productForeign =
+                                  enteredDraftItemForeignSum > 0
+                                    ? enteredDraftItemForeignSum
+                                    : Math.max(0, n(fTotalForeign));
+                                setFCombinedForeign(
+                                  String(
+                                    round4(
+                                      productForeign +
+                                        (fShippingIncluded
+                                          ? Math.max(0, n(fShippingForeign))
+                                          : 0) +
+                                        Math.max(0, n(value)),
+                                    ),
+                                  ),
+                                );
+                                setBuyDirty(true);
+                              }}
+                              placeholder="예: 500"
+                            />
+                            <div style={styles.small}>
+                              수수료는 상품 가격 비율로 각 상품에 배분돼.
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div style={styles.field}>
+                          <div style={styles.label}>
+                            총 차감 외화(상품
+                            {fShippingIncluded ? " + 배송비" : ""}
+                            {fFeeIncluded ? " + 수수료" : ""})
+                          </div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={fCombinedForeign}
+                            readOnly
+                          />
+                        </div>
+                      </div>
+
+                      {fShippingIncluded ? (
+                        <div style={styles.field}>
+                          <div style={styles.label}>배송비 거래처</div>
+                          <select
+                            style={styles.select}
+                            value={fShippingVendor}
+                            onChange={(e) => setFShippingVendor(e.target.value)}
+                          >
+                            <option value="">선택 안함</option>
+                            {includedShippingVendorOptions.map((vendor) => (
+                              <option key={vendor.id} value={vendor.name ?? ""}>
+                                {vendor.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : null}
+
+                      <div
+                        style={{
+                          borderRadius: 12,
+                          background: "#ede9fe",
+                          padding: 12,
+                          display: "grid",
+                          gap: 4,
+                          fontSize: 13,
+                        }}
+                      >
+                        <div>
+                          상품 원화: <b>{fmtKRW(walletQuote.productKRW)}</b>
+                        </div>
+                        {fShippingIncluded ? (
+                          <div>
+                            배송비 원화: <b>{fmtKRW(walletQuote.shippingKRW)}</b>
+                            {" "}(수량 대비 배분)
+                          </div>
+                        ) : null}
+                        {fFeeIncluded ? (
+                          <div>
+                            수수료 원화: <b>{fmtKRW(walletQuote.feeKRW)}</b>
+                            {" "}(상품 가격 대비 배분)
+                          </div>
+                        ) : null}
+                        <div>
+                          합계: <b>{fmtKRW(walletQuote.totalKRW)}</b>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={styles.small}>
+                      배송비나 수수료가 아직 결제되지 않았다면 체크하지 않아도 돼.
+                      나중에 <b>추가비용</b>에서 충전잔액을 사용해 따로 등록할 수 있어.
+                    </div>
+                  )}
                 </>
               ) : (
-                <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  배송비를 따로 결제했다면 아래 추가비용에서 별도로
-                  등록해.
-                </div>
+                <>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontWeight: 900,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={fShippingIncluded}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setFShippingIncluded(checked);
+                        if (checked) {
+                          setFShippingVendor((prev) => prev || fSupplier);
+                          if (!fCombinedForeign && fTotalForeign) {
+                            setFCombinedForeign(fTotalForeign);
+                          }
+                        } else {
+                          setFShippingForeign("");
+                          setFCombinedForeign(fTotalForeign);
+                        }
+                      }}
+                    />
+                    상품값과 배송비를 한 번에 결제
+                  </label>
+
+                  {fShippingIncluded ? (
+                    <>
+                      <div
+                        data-tablet-role="purchase-form-grid"
+                        style={styles.grid2}
+                      >
+                        <div style={styles.field}>
+                          <div style={styles.label}>배송비 외화총액(자동계산)</div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={fShippingForeign}
+                            readOnly
+                            placeholder="결제 외화합계 - 상품리스트 입력합계"
+                          />
+                        </div>
+                        <div style={styles.field}>
+                          <div style={styles.label}>
+                            총 결제 외화총액(결제내역 외화합계)
+                          </div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={fCombinedForeign}
+                            readOnly
+                          />
+                        </div>
+                      </div>
+
+                      <div style={styles.field}>
+                        <div style={styles.label}>배송비 거래처</div>
+                        <select
+                          style={styles.select}
+                          value={fShippingVendor}
+                          onChange={(e) => setFShippingVendor(e.target.value)}
+                        >
+                          <option value="">선택 안함</option>
+                          {includedShippingVendorOptions.map((vendor) => (
+                            <option key={vendor.id} value={vendor.name ?? ""}>
+                              {vendor.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={styles.small}>
+                      배송비를 따로 결제했다면 아래 추가비용에서 별도로 등록해.
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -8199,6 +9601,12 @@ export default function DocumentsPage() {
                     setCCurrency("KRW");
                     setCCurrencyCustom("");
                   }
+                  if (
+                    !isShippingCostType(nextType) &&
+                    normalizeCostType(nextType) !== "수수료"
+                  ) {
+                    setCUseWallet(false);
+                  }
                 }}
               >
                 {COST_TYPE_OPTIONS.map((t) => (
@@ -8328,10 +9736,16 @@ export default function DocumentsPage() {
                 <div style={styles.field}>
                   <div style={styles.label}>원화 총액(실결제)</div>
                   <input
-                    style={styles.input}
+                    style={{
+                      ...styles.input,
+                      background: cUseWallet ? "#f3f4f6" : "#fff",
+                    }}
                     value={cTotalKRW}
+                    readOnly={cUseWallet}
                     onChange={(e) => setCTotalKRW(e.target.value)}
-                    placeholder="숫자만"
+                    placeholder={
+                      cUseWallet ? "충전잔액 환율로 자동계산" : "숫자만"
+                    }
                   />
                 </div>
               </>
@@ -8342,6 +9756,7 @@ export default function DocumentsPage() {
               <select
                 style={styles.select}
                 value={cCurrency}
+                disabled={cUseWallet}
                 onChange={(e) => setCCurrency(e.target.value)}
               >
                 {CURRENCY_OPTIONS.map((c) => (
@@ -8412,6 +9827,125 @@ export default function DocumentsPage() {
               </select>
             </div>
 
+            {costWalletEligible ? (
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                  border: cUseWallet
+                    ? "2px solid #7c3aed"
+                    : "1px solid #ddd6fe",
+                  borderRadius: 12,
+                  padding: 12,
+                  background: cUseWallet ? "#faf5ff" : "#fff",
+                  display: "grid",
+                  gap: 8,
+                }}
+              >
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontWeight: 900,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={cUseWallet}
+                    onChange={(e) => toggleCostWalletUse(e.target.checked)}
+                  />
+                  충전잔액 사용
+                </label>
+
+                <div style={styles.small}>
+                  나중에 결제된 배송비·수수료도 여기서 외화로 입력하면
+                  거래처 충전잔액에서 FIFO로 차감돼.
+                </div>
+
+                {cUseWallet ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(150px, 1fr))",
+                      gap: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 10,
+                        padding: 9,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        현재 잔액
+                      </div>
+                      <b>
+                        {fmtNum(costWalletQuote.balance)} {costWalletCurrency}
+                      </b>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 10,
+                        padding: 9,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        이번 차감
+                      </div>
+                      <b>
+                        {fmtNum(n(cTotalForeign))} {costWalletCurrency}
+                      </b>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 10,
+                        padding: 9,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        자동 원화
+                      </div>
+                      <b>
+                        {costWalletQuote.ok
+                          ? fmtKRW(costWalletKRW)
+                          : "외화금액/잔액 확인"}
+                      </b>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 10,
+                        padding: 9,
+                        background: "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, color: "#6b7280" }}>
+                        처리 후 예상잔액
+                      </div>
+                      <b>
+                        {costWalletQuote.ok
+                          ? `${fmtNum(
+                              Math.max(
+                                0,
+                                costWalletQuote.balance -
+                                  costWalletQuote.needed,
+                              ),
+                            )} ${costWalletCurrency}`
+                          : "-"}
+                      </b>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div style={styles.field}>
               <div style={styles.label}>{getCostInputLabel(cType)}</div>
               <div style={styles.fileBox}>
@@ -8462,8 +9996,16 @@ export default function DocumentsPage() {
           <div style={styles.hr} />
 
           <div style={{ ...styles.small, marginBottom: 8 }}>
-            배분 기준: <b>상품 원화합계</b> 비율 / 소수점은 <b>무조건 올림</b> /
-            오차는 <b>상품 원화합계가 가장 큰 상품</b>에 몰아줌
+            배분 기준:{" "}
+            <b>
+              {isShippingCostType(cType)
+                ? "상품 수량 대비"
+                : normalizeCostType(cType) === "수수료"
+                  ? "상품 가격 대비"
+                  : "상품금액 대비"}
+            </b>
+            {" "} / 소수점은 <b>무조건 올림</b> / 오차는 가장 큰 배분 대상에
+            몰아줌
           </div>
 
           <ItemSelectionManager
@@ -8487,10 +10029,9 @@ export default function DocumentsPage() {
           <div
             style={{ ...styles.small, marginBottom: 8, whiteSpace: "pre-line" }}
           >
-            ① 전부 비우면 <b>수량대비 자동배분</b>
-            {"\n"}② 일부만 입력하면 <b>남은 금액만 빈 칸에 자동배분</b>
-            {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
-            <b>입력 금액대비 전체 자동보정</b>
+            {normalizeCostType(cType) === "수수료"
+              ? "수수료는 선택 상품의 상품금액 비율로 자동배분돼."
+              : "① 전부 비우면 수량대비 자동배분\n② 일부만 입력하면 남은 금액만 빈 칸에 자동배분\n③ 전부 입력 후 외화 총액과 안 맞으면 입력 금액대비 전체 자동보정"}
             {cType === "환불"
               ? "\n[환불 처리]\n• 부분환불: 남은 수량의 원가만 다시 계산\n• 전체환불: 수량 0, 상품 원가에 차손·차익 미반영\n• 차손·차익: 전체환불이면 별도 손익으로만 기록\n\n[공동 추가비용 재배분]\n• 대상: 배송비·관부과세·잔금·기타·카드할인\n• 기준: 개당 상품금액 × 남은 수량\n• 전체환불 상품: 재배분 대상 제외\n• 수량만 기준으로 나누지 않음"
               : cType === "카드할인"
@@ -8533,6 +10074,21 @@ export default function DocumentsPage() {
                     {cType === "환불" && cRefundKind === "product" ? (
                       <div style={{ ...styles.small, marginTop: 6 }}>
                         환불 대상 원가: <b>{fmtKRW(n(it.line_total))}</b>
+                      </div>
+                    ) : normalizeCostType(cType) === "수수료" ? (
+                      <div
+                        style={{
+                          ...styles.small,
+                          marginTop: 8,
+                          padding: 8,
+                          borderRadius: 10,
+                          background: "#f5f3ff",
+                          color: "#5b21b6",
+                        }}
+                      >
+                        수수료는 상품 가격{" "}
+                        <b>{fmtKRW(Math.max(0, n(it.line_total)))}</b> 기준으로
+                        자동배분돼.
                       </div>
                     ) : (
                       <>
