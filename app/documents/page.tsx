@@ -2784,16 +2784,32 @@ export default function DocumentsPage() {
       enteredProductForeign > 0
         ? enteredProductForeign
         : invoiceProductForeign;
-    const actualCombinedForeign = fShippingIncluded
-      ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
-      : editingPurchaseHasRefund
+    const actualCombinedForeign =
+      fUseWallet && (fShippingIncluded || fFeeIncluded)
         ? Math.max(
             0,
             paymentForeignSum ||
-              n(editingPurchase?.total_foreign) ||
-              actualProductForeign,
+              n(fCombinedForeign) ||
+              round4(
+                actualProductForeign +
+                  (fShippingIncluded
+                    ? Math.max(0, n(fShippingForeign))
+                    : 0) +
+                  (fFeeIncluded
+                    ? Math.max(0, n(fFeeForeign))
+                    : 0),
+              ),
           )
-        : Math.max(0, paymentForeignSum || actualProductForeign);
+        : fShippingIncluded
+          ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
+          : editingPurchaseHasRefund
+            ? Math.max(
+                0,
+                paymentForeignSum ||
+                  n(editingPurchase?.total_foreign) ||
+                  actualProductForeign,
+              )
+            : Math.max(0, paymentForeignSum || actualProductForeign);
 
     // 환불된 매입은 현재 남은 상품금액과 최초 결제금액이 달라지는 게 정상이다.
     // 이 경우 배송비/원화배분/평균환율은 환불 전 원결제 기준을 유지한다.
@@ -2880,6 +2896,7 @@ export default function DocumentsPage() {
   }, [
     fTotalForeign,
     enteredDraftItemForeignSum,
+    fUseWallet,
     fShippingIncluded,
     fFeeIncluded,
     fShippingForeign,
@@ -2901,16 +2918,21 @@ export default function DocumentsPage() {
     const nextProductForeign = String(enteredDraftItemForeignSum);
     setFTotalForeign(nextProductForeign);
 
-    if (fShippingIncluded) {
+    if (fUseWallet && (fShippingIncluded || fFeeIncluded)) {
+      const shipping = fShippingIncluded
+        ? Math.max(0, n(fShippingForeign))
+        : 0;
+      const fee = fFeeIncluded
+        ? Math.max(0, n(fFeeForeign))
+        : 0;
+
+      setFCombinedForeign(
+        String(round4(enteredDraftItemForeignSum + shipping + fee)),
+      );
+    } else if (fShippingIncluded) {
       const shipping = Math.max(0, n(fShippingForeign));
       setFCombinedForeign(
-        String(
-          round4(
-            enteredDraftItemForeignSum +
-              shipping +
-              (fUseWallet && fFeeIncluded ? Math.max(0, n(fFeeForeign)) : 0),
-          ),
-        ),
+        String(round4(enteredDraftItemForeignSum + shipping)),
       );
     } else {
       setFCombinedForeign(nextProductForeign);
@@ -2936,9 +2958,25 @@ export default function DocumentsPage() {
     );
     if (normalizeCurrencyCode(paymentCurrency) === "KRW") return;
 
-    const autoForeign = fShippingIncluded
-      ? Math.max(0, n(fCombinedForeign))
-      : Math.max(0, n(fTotalForeign));
+    const autoForeign = fUseWallet
+      ? Math.max(
+          0,
+          round4(
+            Math.max(
+              0,
+              enteredDraftItemForeignSum || n(fTotalForeign),
+            ) +
+              (fShippingIncluded
+                ? Math.max(0, n(fShippingForeign))
+                : 0) +
+              (fFeeIncluded
+                ? Math.max(0, n(fFeeForeign))
+                : 0),
+          ),
+        )
+      : fShippingIncluded
+        ? Math.max(0, n(fCombinedForeign))
+        : Math.max(0, n(fTotalForeign));
     if (autoForeign <= 0) return;
 
     const nextValue = String(round4(autoForeign));
@@ -2954,9 +2992,14 @@ export default function DocumentsPage() {
   }, [
     draftPayments,
     manualPaymentForeignKeys,
+    fUseWallet,
     fShippingIncluded,
+    fFeeIncluded,
+    fShippingForeign,
+    fFeeForeign,
     fCombinedForeign,
     fTotalForeign,
+    enteredDraftItemForeignSum,
   ]);
 
   useEffect(() => {
@@ -3064,19 +3107,20 @@ export default function DocumentsPage() {
     setFUseWallet(true);
     setFPaymentMet("충전잔액");
 
-    if (fShippingIncluded) {
+    if (fShippingIncluded || fFeeIncluded) {
       const productForeign =
         enteredDraftItemForeignSum > 0
           ? enteredDraftItemForeignSum
           : Math.max(0, n(fTotalForeign));
+      const shippingForeign = fShippingIncluded
+        ? Math.max(0, n(fShippingForeign))
+        : 0;
+      const feeForeign = fFeeIncluded
+        ? Math.max(0, n(fFeeForeign))
+        : 0;
+
       setFCombinedForeign(
-        String(
-          round4(
-            productForeign +
-              Math.max(0, n(fShippingForeign)) +
-              (fFeeIncluded ? Math.max(0, n(fFeeForeign)) : 0),
-          ),
-        ),
+        String(round4(productForeign + shippingForeign + feeForeign)),
       );
     }
     setManualPaymentForeignKeys([]);
@@ -3257,9 +3301,9 @@ export default function DocumentsPage() {
           card_name: `${fSupplier.trim()} 외화잔액`,
           currency: fCurrency,
           currency_custom: fCurrencyCustom,
-          // 결제내역은 상품 본체 결제를 나타낸다.
-          // 배송비·수수료는 별도 추가비용/충전잔액 사용으로 관리한다.
-          foreign_amount: String(walletProductForeign),
+          // 상품·배송비·수수료 모두 같은 충전잔액에서 빠지므로
+          // 결제내역에는 이번에 실제 차감되는 외화 총액/원화 총액을 기록한다.
+          foreign_amount: String(requiredForeign),
           krw_amount: walletQuote.ok
             ? String(walletQuote.totalKRW)
             : "",
@@ -3318,7 +3362,9 @@ export default function DocumentsPage() {
     fTotalForeignManuallyEdited,
     manualPaymentForeignKeys,
     fShippingIncluded,
+    fFeeIncluded,
     fShippingForeign,
+    fFeeForeign,
     fCombinedForeign,
     fShippingVendor,
     fTotalKRW,
@@ -4457,11 +4503,10 @@ export default function DocumentsPage() {
       }
     }
 
-    // 충전잔액 사용 시 결제내역 외화는 '상품 외화'만 검사한다.
-    // 배송비/수수료는 별도의 충전잔액 사용분으로 차감되므로
-    // 상품 결제내역 외화합계와 총 차감 외화가 서로 달라도 정상이다.
+    // 충전잔액 사용 시 상품·배송비·수수료가 모두 같은 잔액에서 차감된다.
+    // 따라서 결제내역 외화합계도 실제 총 충전잔액 차감 외화와 맞아야 한다.
     const expectedPaymentForeign = fUseWallet
-      ? productForeign
+      ? combinedForeign
       : fShippingIncluded
         ? combinedForeign
         : productForeign;
@@ -4473,11 +4518,11 @@ export default function DocumentsPage() {
     ) {
       setErr(
         fUseWallet
-          ? `상품 결제내역 외화합계(${fmtNum(
+          ? `충전잔액 결제내역 외화합계(${fmtNum(
               paymentForeignSum,
-            )})가 상품 외화총액(${fmtNum(
+            )})가 실제 총 차감 외화(${fmtNum(
               expectedPaymentForeign,
-            )})과 달라. 배송비·수수료 충전잔액 사용분은 여기 합계에 포함하지 않아.`
+            )})와 달라. 상품·배송비·수수료 충전잔액 사용분을 모두 포함한 금액이어야 해.`
           : `결제내역 외화합계(${fmtNum(
               paymentForeignSum,
             )})가 실제 총 결제 외화총액(${fmtNum(
