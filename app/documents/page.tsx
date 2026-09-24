@@ -954,15 +954,76 @@ function isShippingCostType(costType: string | null | undefined) {
   );
 }
 
+type CostAllocationBasis = "auto" | "quantity" | "amount";
+
+const COST_ALLOCATION_BASIS_META_RE =
+  /\[추가비용 배분기준:(auto|quantity|amount)\]/;
+
+function parseCostAllocationBasis(
+  memo: string | null | undefined,
+): CostAllocationBasis {
+  const match = String(memo ?? "").match(COST_ALLOCATION_BASIS_META_RE);
+  const value = match?.[1];
+  return value === "quantity" || value === "amount" ? value : "auto";
+}
+
+function hasCostAllocationBasisMeta(memo: string | null | undefined) {
+  return COST_ALLOCATION_BASIS_META_RE.test(String(memo ?? ""));
+}
+
+function stripCostAllocationBasisMeta(raw: string | null | undefined) {
+  return String(raw ?? "")
+    .replace(COST_ALLOCATION_BASIS_META_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildCostAllocationBasisMemo(
+  baseMemo: string | null | undefined,
+  basis: CostAllocationBasis,
+) {
+  const cleaned = stripCostAllocationBasisMeta(baseMemo);
+  const meta = `[추가비용 배분기준:${basis}]`;
+  return cleaned ? `${cleaned}\n\n${meta}` : meta;
+}
+
+function getEffectiveCostAllocationBasis(
+  costType: string | null | undefined,
+  basis: CostAllocationBasis,
+): Exclude<CostAllocationBasis, "auto"> {
+  if (basis === "quantity" || basis === "amount") return basis;
+  return isShippingCostType(costType) ? "quantity" : "amount";
+}
+
+function getCostAllocationBasisLabel(
+  costType: string | null | undefined,
+  basis: CostAllocationBasis,
+) {
+  const effective = getEffectiveCostAllocationBasis(costType, basis);
+  if (basis === "auto") {
+    return `자동(${effective === "quantity" ? "수량비율" : "금액비율"})`;
+  }
+  return effective === "quantity" ? "수량비율" : "금액비율";
+}
+
 function getCostAllocationWeights(
   costType: string | null | undefined,
-  rows: Array<{ qty?: number | null; foreign_total?: number | null }>,
+  rows: Array<{
+    qty?: number | null;
+    line_total?: number | null;
+    foreign_total?: number | null;
+  }>,
+  basis: CostAllocationBasis = "auto",
 ) {
-  if (isShippingCostType(costType)) {
+  const effective = getEffectiveCostAllocationBasis(costType, basis);
+  if (effective === "quantity") {
     return rows.map((row) => Math.max(0, n(row.qty)));
   }
 
-  return rows.map((row) => Math.max(0, n(row.foreign_total)));
+  return rows.map((row) => {
+    const lineTotal = Math.max(0, n(row.line_total));
+    return lineTotal > 0 ? lineTotal : Math.max(0, n(row.foreign_total));
+  });
 }
 
 type ResolvedCostForeignRow = {
@@ -1403,7 +1464,7 @@ async function updateRefundAdjustedItems(
  * 1) 환불 상품의 상품금액은 "원래 상품 전체금액 - 환불 대상 상품금액"으로 줄어든다.
  * 2) 남은 수량이 있는 상품만 배분 대상에 포함한다.
  * 3) 각 상품의 "개당 상품금액 × 남은 수량"을 다시 계산한다.
- * 4) 배송비는 남은 수량 비율로, 관부과세·잔금·기타는 남은 상품금액 비율로 재배분한다.
+ * 4) 각 비용에 저장된 배분기준을 유지한다. 기존 비용은 자동 기준(배송비=수량, 그 외=금액)을 쓴다.
  *
  * 환불 차익/차손(cost_type=환불)은 다른 상품으로 퍼뜨리지 않고
  * 환불 처리한 해당 상품에만 유지한다.
@@ -1416,6 +1477,7 @@ function isSharedRefundReallocationCostType(
     normalized === "배송비(거래처)" ||
     normalized === "배송비(배대지)" ||
     normalized === "관부과세" ||
+    normalized === "수수료" ||
     normalized === "잔금" ||
     normalized === "기타" ||
     normalized === "카드할인" ||
@@ -1502,13 +1564,18 @@ async function rebalanceSharedCostsAfterRefund(
     // 모두 환불되어 남은 재고가 없으면 비용을 억지로 상품에 남기지 않는다.
     if (remainingItems.length === 0 || totalAllocatedKRW === 0) continue;
 
-    // 배송비는 남은 상품 수량 비율로, 관부과세·잔금·기타·카드할인은
-    // 남은 상품금액 비율로 재배분한다.
-    const reallocationWeights = isShippingCostType(cost.cost_type)
-      ? remainingItems.map((item) => Math.max(0, item.qty))
-      : remainingItems.map((item) =>
-          Math.max(0, item.remaining_product_total),
-        );
+    // 저장된 배분기준을 그대로 따른다.
+    // 기존 비용(배분기준 메타가 없는 건)은 자동으로 처리한다:
+    // 배송비 → 수량비율 / 그 외 비용 → 상품금액 비율.
+    const reallocationBasis = parseCostAllocationBasis(cost.memo);
+    const reallocationWeights = getCostAllocationWeights(
+      cost.cost_type,
+      remainingItems.map((item) => ({
+        qty: item.qty,
+        line_total: item.remaining_product_total,
+      })),
+      reallocationBasis,
+    );
 
     if (reallocationWeights.every((weight) => weight <= 0)) continue;
 
@@ -1932,6 +1999,7 @@ export default function DocumentsPage() {
       typeof window !== "undefined" &&
       window.localStorage.getItem(SHIPPING_REALLOCATION_DONE_KEY) === "done",
   );
+  const costAllocationMigrationRunningRef = useRef(false);
 
   const [buyModalOpen, setBuyModalOpen] = useState(false);
   const [buyMode, setBuyMode] = useState<"create" | "edit">("create");
@@ -1947,6 +2015,8 @@ export default function DocumentsPage() {
   const [costEditModalOpen, setCostEditModalOpen] = useState(false);
   const [editingCost, setEditingCost] = useState<PurchaseCostRow | null>(null);
   const [ecType, setEcType] = useState("배송비(거래처)");
+  const [ecAllocationBasis, setEcAllocationBasis] =
+    useState<CostAllocationBasis>("auto");
   const [ecAmount, setEcAmount] = useState("");
   const [ecTotalForeign, setEcTotalForeign] = useState("");
   const [ecTotalKRW, setEcTotalKRW] = useState("");
@@ -2029,6 +2099,8 @@ export default function DocumentsPage() {
   ]);
 
   const [cType, setCType] = useState("배송비(거래처)");
+  const [cAllocationBasis, setCAllocationBasis] =
+    useState<CostAllocationBasis>("auto");
   const [cUseWallet, setCUseWallet] = useState(false);
   const [cAmount, setCAmount] = useState("");
   const [cTotalForeign, setCTotalForeign] = useState("");
@@ -3695,6 +3767,18 @@ export default function DocumentsPage() {
     refreshAll();
   }, []);
 
+  useEffect(() => {
+    if (loading) return;
+    if (costs.length === 0 || items.length === 0) return;
+    const hasLegacyCost = costs.some((cost) => {
+      const type = normalizeCostType(cost.cost_type);
+      if (!type || type === "환불" || type === "환불 진행중") return false;
+      return !hasCostAllocationBasisMeta(cost.memo);
+    });
+    if (!hasLegacyCost) return;
+    migrateExistingCostsToAutoAllocationBasis();
+  }, [loading, costs, allocations, items]);
+
   function toggleSelectedItem(id: string) {
     setSelectedItemIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
@@ -3828,6 +3912,7 @@ export default function DocumentsPage() {
 
   function resetCostForm() {
     setCType("배송비(거래처)");
+    setCAllocationBasis("auto");
     setCUseWallet(false);
     setCTotalForeign("");
     setCTotalKRW("");
@@ -3862,6 +3947,7 @@ export default function DocumentsPage() {
   function resetCostEditForm() {
     setEditingCost(null);
     setEcType("배송비(거래처)");
+    setEcAllocationBasis("auto");
     setEcTotalForeign("");
     setEcTotalKRW("");
     setEcCurrency("KRW");
@@ -5130,6 +5216,97 @@ export default function DocumentsPage() {
     }
   }
 
+  async function migrateExistingCostsToAutoAllocationBasis() {
+    if (costAllocationMigrationRunningRef.current) return;
+
+    const legacyCosts = costs.filter((cost) => {
+      const type = normalizeCostType(cost.cost_type);
+      if (!type || type === "환불" || type === "환불 진행중") return false;
+      return !hasCostAllocationBasisMeta(cost.memo);
+    });
+
+    if (legacyCosts.length === 0) return;
+
+    costAllocationMigrationRunningRef.current = true;
+    try {
+      let updatedCount = 0;
+      let skippedCount = 0;
+
+      for (const cost of legacyCosts) {
+        const oldRows = allocations.filter(
+          (allocation) => allocation.purchase_cost_id === cost.id,
+        );
+        const linkedIds = new Set(oldRows.map((row) => row.purchase_item_id));
+        const targetItems = items.filter(
+          (item) =>
+            linkedIds.has(item.id) &&
+            Math.max(0, Math.floor(n(item.qty))) > 0,
+        );
+
+        const totalAllocatedKRW = Math.round(
+          oldRows.reduce(
+            (sum, allocation) => sum + n(allocation.allocated_amount),
+            0,
+          ),
+        );
+
+        if (targetItems.length > 0 && totalAllocatedKRW !== 0) {
+          const weights = getCostAllocationWeights(
+            cost.cost_type,
+            targetItems,
+            "auto",
+          );
+
+          if (weights.some((weight) => weight > 0)) {
+            const distributed = distributeByWeightsCeilIntSigned(
+              totalAllocatedKRW,
+              weights,
+            );
+
+            const del = await supabase
+              .from("cost_allocations")
+              .delete()
+              .eq("purchase_cost_id", cost.id);
+            if (del.error) throw del.error;
+
+            const ins = await supabase.from("cost_allocations").insert(
+              targetItems.map((item, index) => ({
+                purchase_cost_id: cost.id,
+                purchase_item_id: item.id,
+                allocated_amount: distributed[index] ?? 0,
+              })),
+            );
+            if (ins.error) throw ins.error;
+            updatedCount += 1;
+          } else {
+            skippedCount += 1;
+          }
+        } else {
+          skippedCount += 1;
+        }
+
+        const memoUpdate = await supabase
+          .from("purchase_costs")
+          .update({
+            memo: buildCostAllocationBasisMemo(cost.memo, "auto"),
+          })
+          .eq("id", cost.id);
+        if (memoUpdate.error) throw memoUpdate.error;
+      }
+
+      setMsg(
+        `기존 추가비용 자동 배분기준 적용 완료 · ${updatedCount}건 재배분${
+          skippedCount > 0 ? ` / ${skippedCount}건은 배분 대상 없음` : ""
+        }`,
+      );
+      await refreshAll();
+    } catch (e: any) {
+      setErr(`기존 추가비용 자동 재배분 실패: ${e?.message ?? String(e)}`);
+    } finally {
+      costAllocationMigrationRunningRef.current = false;
+    }
+  }
+
   async function reallocateAllExistingShippingCostsByQuantity() {
     const shippingCosts = costs.filter((cost) =>
       isShippingCostType(cost.cost_type),
@@ -5341,6 +5518,7 @@ export default function DocumentsPage() {
 
     setEditingCost(cost);
     setEcType(normalizedType);
+    setEcAllocationBasis(parseCostAllocationBasis(cost.memo));
     setEcRefundKind(
       normalizedType === "환불"
         ? parseRefundMeta(cost.memo).kind
@@ -5353,7 +5531,11 @@ export default function DocumentsPage() {
         : "",
     );
     setEcFxRate(String(cost.fx_rate ?? 1));
-    setEcMemo(stripRefundMetaDetail(stripCustomsMemoDetail(cost.memo)));
+    setEcMemo(
+      stripCostAllocationBasisMeta(
+        stripRefundMetaDetail(stripCustomsMemoDetail(cost.memo)),
+      ),
+    );
     setEcVendorName(cost.vendor_name ?? "");
     setEcDate(cost.cost_date ?? "");
     setEcSelectedItemIds(nextSelectedIds);
@@ -5476,7 +5658,7 @@ export default function DocumentsPage() {
       wasRefund ? editingCost.memo : null,
     );
 
-    const finalMemo =
+    const visibleFinalMemo =
       ecType === "관부과세"
         ? buildCustomsMemo(
             ecMemo,
@@ -5496,6 +5678,10 @@ export default function DocumentsPage() {
               ecRefundKind,
             )
           : ecMemo || null;
+    const finalMemo =
+      ecType === "환불"
+        ? visibleFinalMemo
+        : buildCostAllocationBasisMemo(visibleFinalMemo, ecAllocationBasis);
 
     const resolvedForeign = resolveCostForeignTotals(
       chosen,
@@ -5503,13 +5689,10 @@ export default function DocumentsPage() {
       n(ecTotalForeign),
     );
     const allocationItems = chosen;
-    const allocationWeights = isShippingCostType(ecType)
-      ? chosen.map((item) => Math.max(0, n(item.qty)))
-      : normalizeCostType(ecType) === "수수료"
-        ? chosen.map((item) => Math.max(0, n(item.line_total)))
-        : resolvedForeign.ok
-          ? resolvedForeign.rows.map((row) => row.foreign_total)
-          : [];
+    const allocationWeights =
+      ecType === "환불"
+        ? []
+        : getCostAllocationWeights(ecType, chosen, ecAllocationBasis);
     const signedCostKRW =
       ecType === "환불"
         ? isPriceAdjustmentRefund
@@ -5579,17 +5762,12 @@ export default function DocumentsPage() {
         }
       }
     }
-    if (
-      ecType !== "환불" &&
-      !isShippingCostType(ecType) &&
-      normalizeCostType(ecType) !== "수수료" &&
-      !resolvedForeign.ok
-    ) {
-      setErr(resolvedForeign.message);
-      return;
-    }
     if (ecType !== "환불" && allocationWeights.every((w) => n(w) <= 0)) {
-      setErr("상품 외화 총액 배분값이 0이야.");
+      setErr(
+        getEffectiveCostAllocationBasis(ecType, ecAllocationBasis) === "quantity"
+          ? "수량비율로 배분할 수 있는 상품 수량이 0이야."
+          : "금액비율로 배분할 수 있는 상품 원화금액이 0이야.",
+      );
       return;
     }
 
@@ -6011,7 +6189,7 @@ export default function DocumentsPage() {
       n(cTotalKRW),
     );
 
-    const finalMemo =
+    const visibleFinalMemo =
       cType === "관부과세"
         ? buildCustomsMemo(cMemo, cDutyAmount, cVatAmount, cCustomsFeeAmount)
         : cType === "환불"
@@ -6024,6 +6202,10 @@ export default function DocumentsPage() {
           : cUseWallet
             ? `[충전잔액 사용]\n${cMemo || ""}`.trim()
             : cMemo || null;
+    const finalMemo =
+      cType === "환불"
+        ? visibleFinalMemo
+        : buildCostAllocationBasisMemo(visibleFinalMemo, cAllocationBasis);
 
     if (cType === "환불" && !isPriceAdjustmentRefund) {
       for (const it of chosen) {
@@ -6054,13 +6236,10 @@ export default function DocumentsPage() {
       n(cTotalForeign),
     );
     const allocationItems = chosen;
-    const allocationWeights = isShippingCostType(cType)
-      ? chosen.map((item) => Math.max(0, n(item.qty)))
-      : normalizeCostType(cType) === "수수료"
-        ? chosen.map((item) => Math.max(0, n(item.line_total)))
-        : resolvedForeign.ok
-          ? resolvedForeign.rows.map((row) => row.foreign_total)
-          : [];
+    const allocationWeights =
+      cType === "환불"
+        ? []
+        : getCostAllocationWeights(cType, chosen, cAllocationBasis);
     const signedCostKRW =
       cType === "환불"
         ? isPriceAdjustmentRefund
@@ -6068,17 +6247,12 @@ export default function DocumentsPage() {
           : refundInfo.adjustmentKRW
         : signedCostAmountByType(cType, costKRW);
 
-    if (
-      cType !== "환불" &&
-      !isShippingCostType(cType) &&
-      normalizeCostType(cType) !== "수수료" &&
-      !resolvedForeign.ok
-    ) {
-      setErr(resolvedForeign.message);
-      return;
-    }
     if (cType !== "환불" && allocationWeights.every((w) => n(w) <= 0)) {
-      setErr("상품 외화 총액 배분값이 0이야.");
+      setErr(
+        getEffectiveCostAllocationBasis(cType, cAllocationBasis) === "quantity"
+          ? "수량비율로 배분할 수 있는 상품 수량이 0이야."
+          : "금액비율로 배분할 수 있는 상품 원화금액이 0이야.",
+      );
       return;
     }
 
@@ -10051,18 +10225,36 @@ export default function DocumentsPage() {
 
           <div style={styles.hr} />
 
-          <div style={{ ...styles.small, marginBottom: 8 }}>
-            배분 기준:{" "}
-            <b>
-              {isShippingCostType(cType)
-                ? "상품 수량 대비"
-                : normalizeCostType(cType) === "수수료"
-                  ? "상품 가격 대비"
-                  : "상품금액 대비"}
-            </b>
-            {" "} / 소수점은 <b>무조건 올림</b> / 오차는 가장 큰 배분 대상에
-            몰아줌
-          </div>
+          {cType !== "환불" ? (
+            <div
+              style={{
+                ...styles.card,
+                padding: 12,
+                marginBottom: 12,
+                background: "#fafafa",
+              }}
+            >
+              <div style={styles.label}>배분 기준</div>
+              <select
+                style={styles.select}
+                value={cAllocationBasis}
+                onChange={(e) => {
+                  setCAllocationBasis(e.target.value as CostAllocationBasis);
+                  setCostDirty(true);
+                }}
+              >
+                <option value="auto">
+                  자동 ({isShippingCostType(cType) ? "수량비율" : "금액비율"})
+                </option>
+                <option value="quantity">수량비율</option>
+                <option value="amount">금액비율</option>
+              </select>
+              <div style={{ ...styles.small, marginTop: 6 }}>
+                현재 적용: <b>{getCostAllocationBasisLabel(cType, cAllocationBasis)}</b>
+                {" "}· 금액비율은 각 상품의 원화합계, 수량비율은 상품 수량으로 계산해.
+              </div>
+            </div>
+          ) : null}
 
           <ItemSelectionManager
             title="배분할 상품"
@@ -10085,9 +10277,11 @@ export default function DocumentsPage() {
           <div
             style={{ ...styles.small, marginBottom: 8, whiteSpace: "pre-line" }}
           >
-            {normalizeCostType(cType) === "수수료"
-              ? "수수료는 선택 상품의 상품금액 비율로 자동배분돼."
-              : "① 전부 비우면 수량대비 자동배분\n② 일부만 입력하면 남은 금액만 빈 칸에 자동배분\n③ 전부 입력 후 외화 총액과 안 맞으면 입력 금액대비 전체 자동보정"}
+            {cType === "환불" && cRefundKind === "price_adjustment"
+              ? "차액 환불은 상품별 외화금액을 입력하면 그 비율을 우선 사용하고, 비우면 상품금액 비율로 자동배분돼."
+              : cType === "환불"
+                ? "환불할 상품과 변경 후 수량을 확인해줘."
+                : `선택한 배분 기준(${getCostAllocationBasisLabel(cType, cAllocationBasis)})으로 추가비용을 자동배분해.`}
             {cType === "환불"
               ? "\n[환불 처리]\n• 부분환불: 남은 수량의 원가만 다시 계산\n• 전체환불: 수량 0, 상품 원가에 차손·차익 미반영\n• 차손·차익: 전체환불이면 별도 손익으로만 기록\n\n[공동 추가비용 재배분]\n• 대상: 배송비·관부과세·잔금·기타·카드할인\n• 기준: 개당 상품금액 × 남은 수량\n• 전체환불 상품: 재배분 대상 제외\n• 수량만 기준으로 나누지 않음"
               : cType === "카드할인"
@@ -10131,25 +10325,10 @@ export default function DocumentsPage() {
                       <div style={{ ...styles.small, marginTop: 6 }}>
                         환불 대상 원가: <b>{fmtKRW(n(it.line_total))}</b>
                       </div>
-                    ) : normalizeCostType(cType) === "수수료" ? (
-                      <div
-                        style={{
-                          ...styles.small,
-                          marginTop: 8,
-                          padding: 8,
-                          borderRadius: 10,
-                          background: "#f5f3ff",
-                          color: "#5b21b6",
-                        }}
-                      >
-                        수수료는 상품 가격{" "}
-                        <b>{fmtKRW(Math.max(0, n(it.line_total)))}</b> 기준으로
-                        자동배분돼.
-                      </div>
-                    ) : (
+                    ) : cType === "환불" && cRefundKind === "price_adjustment" ? (
                       <>
                         <div style={{ ...styles.field, marginTop: 8 }}>
-                          <div style={styles.label}>상품 외화 총액</div>
+                          <div style={styles.label}>상품 외화 총액(선택)</div>
                           <input
                             style={styles.input}
                             value={costItemForeignMap[it.id] ?? ""}
@@ -10160,18 +10339,30 @@ export default function DocumentsPage() {
                               }));
                               setCostDirty(true);
                             }}
-                            placeholder="비우면 자동배분"
+                            placeholder="비우면 상품금액 비율"
                           />
                         </div>
                         <div style={{ ...styles.small, marginTop: 6 }}>
                           자동계산 외화총액:{" "}
-                          <b>
-                            {previewRow
-                              ? fmtNum(previewRow.foreign_total)
-                              : "0"}
-                          </b>
+                          <b>{previewRow ? fmtNum(previewRow.foreign_total) : "0"}</b>
                         </div>
                       </>
+                    ) : (
+                      <div
+                        style={{
+                          ...styles.small,
+                          marginTop: 8,
+                          padding: 8,
+                          borderRadius: 10,
+                          background: "#f5f3ff",
+                          color: "#5b21b6",
+                        }}
+                      >
+                        {getEffectiveCostAllocationBasis(cType, cAllocationBasis) ===
+                        "quantity"
+                          ? <>배분 기준값: 수량 <b>{fmtNum(Math.max(0, n(it.qty)))}</b></>
+                          : <>배분 기준값: 상품 원화합계 <b>{fmtKRW(Math.max(0, n(it.line_total)))}</b></>}
+                      </div>
                     )}
 
                     {cType === "환불" && cRefundKind === "product" ? (
@@ -10577,6 +10768,37 @@ export default function DocumentsPage() {
             </div>
 
             <div style={{ gridColumn: "1 / -1" }}>
+              {ecType !== "환불" ? (
+                <div
+                  style={{
+                    ...styles.card,
+                    padding: 12,
+                    marginBottom: 12,
+                    background: "#fafafa",
+                  }}
+                >
+                  <div style={styles.label}>배분 기준</div>
+                  <select
+                    style={styles.select}
+                    value={ecAllocationBasis}
+                    onChange={(e) => {
+                      setEcAllocationBasis(e.target.value as CostAllocationBasis);
+                      setCostEditDirty(true);
+                    }}
+                  >
+                    <option value="auto">
+                      자동 ({isShippingCostType(ecType) ? "수량비율" : "금액비율"})
+                    </option>
+                    <option value="quantity">수량비율</option>
+                    <option value="amount">금액비율</option>
+                  </select>
+                  <div style={{ ...styles.small, marginTop: 6 }}>
+                    현재 적용: <b>{getCostAllocationBasisLabel(ecType, ecAllocationBasis)}</b>
+                    {" "}· 기존 비용에 저장된 기준이 없으면 자동으로 불러와.
+                  </div>
+                </div>
+              ) : null}
+
               <ItemSelectionManager
                 title="배분할 상품"
                 selectedItems={editSelectedItems}
@@ -10602,10 +10824,11 @@ export default function DocumentsPage() {
                   whiteSpace: "pre-line",
                 }}
               >
-                ① 전부 비우면 <b>수량대비 자동배분</b>
-                {"\n"}② 일부만 입력하면 <b>남은 금액만 빈 칸에 자동배분</b>
-                {"\n"}③ 전부 입력 후 외화 총액과 안 맞으면{" "}
-                <b>입력 금액대비 전체 자동보정</b>
+                {ecType === "환불" && ecRefundKind === "price_adjustment"
+                  ? "차액 환불은 상품별 외화금액을 입력하면 그 비율을 우선 사용하고, 비우면 상품금액 비율로 자동배분돼."
+                  : ecType === "환불"
+                    ? "환불할 상품과 변경 후 수량을 확인해줘."
+                    : `선택한 배분 기준(${getCostAllocationBasisLabel(ecType, ecAllocationBasis)})으로 추가비용을 다시 자동배분해.`}
                 {ecType === "환불"
                   ? "\n[환불 처리]\n• 부분환불: 남은 수량의 원가만 다시 계산\n• 전체환불: 수량 0, 상품 원가에 차손·차익 미반영\n• 차손·차익: 전체환불이면 별도 손익으로만 기록\n\n[공동 추가비용 재배분]\n• 대상: 배송비·관부과세·잔금·기타·카드할인\n• 기준: 개당 상품금액 × 남은 수량\n• 전체환불 상품: 재배분 대상 제외\n• 수량만 기준으로 나누지 않음"
                   : ecType === "카드할인"
@@ -10649,10 +10872,10 @@ export default function DocumentsPage() {
                           <div style={{ ...styles.small, marginTop: 6 }}>
                             환불 대상 원가: <b>{fmtKRW(n(it.line_total))}</b>
                           </div>
-                        ) : (
+                        ) : ecType === "환불" && ecRefundKind === "price_adjustment" ? (
                           <>
                             <div style={{ ...styles.field, marginTop: 8 }}>
-                              <div style={styles.label}>상품 외화 총액</div>
+                              <div style={styles.label}>상품 외화 총액(선택)</div>
                               <input
                                 style={styles.input}
                                 value={editCostItemForeignMap[it.id] ?? ""}
@@ -10663,18 +10886,30 @@ export default function DocumentsPage() {
                                   }));
                                   setCostEditDirty(true);
                                 }}
-                                placeholder="비우면 자동배분"
+                                placeholder="비우면 상품금액 비율"
                               />
                             </div>
                             <div style={{ ...styles.small, marginTop: 6 }}>
                               자동계산 외화총액:{" "}
-                              <b>
-                                {previewRow
-                                  ? fmtNum(previewRow.foreign_total)
-                                  : "0"}
-                              </b>
+                              <b>{previewRow ? fmtNum(previewRow.foreign_total) : "0"}</b>
                             </div>
                           </>
+                        ) : (
+                          <div
+                            style={{
+                              ...styles.small,
+                              marginTop: 8,
+                              padding: 8,
+                              borderRadius: 10,
+                              background: "#f5f3ff",
+                              color: "#5b21b6",
+                            }}
+                          >
+                            {getEffectiveCostAllocationBasis(ecType, ecAllocationBasis) ===
+                            "quantity"
+                              ? <>배분 기준값: 수량 <b>{fmtNum(Math.max(0, n(it.qty)))}</b></>
+                              : <>배분 기준값: 상품 원화합계 <b>{fmtKRW(Math.max(0, n(it.line_total)))}</b></>}
+                          </div>
                         )}
 
                         {ecType === "환불" && ecRefundKind === "product" ? (
@@ -10914,7 +11149,9 @@ export default function DocumentsPage() {
                           </td>
                           <td style={styles.td}>{a.vendor_name ?? "-"}</td>
                           <td style={{ ...styles.td, whiteSpace: "pre-line" }}>
-                            {stripRefundMetaDetail(a.memo)}
+                            {stripCostAllocationBasisMeta(
+                              stripRefundMetaDetail(a.memo),
+                            )}
                           </td>
                           <td style={styles.td}>
                             {a.cost_id ? (
