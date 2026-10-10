@@ -4550,7 +4550,7 @@ export default function DocumentsPage() {
       return;
     }
     if (invoiceProductForeign <= 0 || productForeign <= 0 || fx <= 0) {
-      setErr("인보이스 상품 외화총액과 상품별 외화가격을 입력해줘.");
+      setErr("인보이스 상품 외화총액과 원화 결제금액을 확인해줘. 상품별 외화가격은 비워두면 수량 기준으로 자동 분배돼.");
       return;
     }
 
@@ -9378,10 +9378,45 @@ export default function DocumentsPage() {
                 ))}
               </select>
             </div>
-            <button
-              style={styles.btn("ghost")}
-              onClick={() =>
-                setDraftItems((prev) => [
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={styles.btn("ghost")}
+                onClick={() => {
+                  if (n(fTotalForeign) <= 0) {
+                    setErr("먼저 인보이스 상품 외화총액을 입력해줘.");
+                    return;
+                  }
+                  if (!draftItems.some((item) => item.item_name.trim())) {
+                    setErr("균등분배할 상품명을 1개 이상 입력해줘.");
+                    return;
+                  }
+                  const hasEnteredPrices = draftItems.some(
+                    (item) => item.foreign_unit_price.trim() !== "" || item.foreign_total.trim() !== "",
+                  );
+                  if (
+                    hasEnteredPrices &&
+                    !window.confirm("기존 상품별 외화가격을 지우고 전체 수량 기준으로 다시 균등분배할까?")
+                  ) return;
+                  setDraftItems((prev) =>
+                    prev.map((item) => ({
+                      ...item,
+                      foreign_unit_price: "",
+                      foreign_total: "",
+                    })),
+                  );
+                  setFTotalForeignManuallyEdited(true);
+                  setBuyDirty(true);
+                  setErr(null);
+                }}
+              >
+                수량 기준 균등분배
+              </button>
+              <button
+                type="button"
+                style={styles.btn("ghost")}
+                onClick={() =>
+                  setDraftItems((prev) => [
                   ...prev,
                   {
                     key: crypto.randomUUID(),
@@ -9397,19 +9432,21 @@ export default function DocumentsPage() {
                   },
                 ])
               }
-            >
-              + 상품 추가
-            </button>
+              >
+                + 상품 추가
+              </button>
+            </div>
           </div>
 
           <div
             style={{ ...styles.small, marginTop: 6, whiteSpace: "pre-line" }}
           >
-            ① 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
-            {"\n"}② 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
-            {"\n"}③ 상품리스트 합계와 인보이스 상품총액이 달라도 상품가격은 건드리지 않고, 차이는{" "}
+            ① <b>인보이스 상품 외화총액</b>만 입력하고 상품별 가격을 비워두면, 저장할 때 <b>전체 상품 수량 기준으로 자동 균등분배</b>돼. 위 버튼을 누르면 기존 가격도 지우고 다시 균등분배할 수 있어.
+            {"\n"}② 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
+            {"\n"}③ 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
+            {"\n"}④ 상품리스트 합계와 인보이스 상품총액이 달라도 상품가격은 건드리지 않고, 차이는{" "}
             <b>배송비에서 자동으로 더하거나 빼서 맞춰</b>.
-            {"\n"}④ 결제 외화합계는 배송비 포함 실제 송금액이고, 배송비 외화는{" "}
+            {"\n"}⑤ 결제 외화합계는 배송비 포함 실제 송금액이고, 배송비 외화는{" "}
             <b>결제 외화합계 - 상품리스트 입력합계</b>로 자동계산돼.
             인보이스와 상품리스트 차이는 배송비가 흡수하고, 배송비 원화는 상품 수량 비율로 배분해.
             {"\n"}
