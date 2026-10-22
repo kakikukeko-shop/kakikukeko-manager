@@ -131,6 +131,9 @@ export default function VendorsPage() {
   const [pointRestorations, setPointRestorations] = useState<Array<{ id: string; created_at: string; topup_id: string; purchase_id: string; vendor_name: string; currency: string; usage_date: string; foreign_amount: number; krw_amount: number }>>([])
   const [cancelledSources, setCancelledSources] = useState<string[]>([])
   const vendorCancelBusy = useRef(false)
+  const [vendorCancelPopup, setVendorCancelPopup] = useState<{ kind: 'points' | 'topup'; id: string; title: string; effects?: any; error?: string } | null>(null)
+  const [vendorCancelReason, setVendorCancelReason] = useState('잘못 입력해서 취소')
+  const [vendorCancelLoading, setVendorCancelLoading] = useState(false)
   const [pointRows, setPointRows] = useState<{id:string;vendor_name:string;point_date:string;amount:number;kind:string;memo:string|null;purchase_id:string|null}[]>([])
   const [pointVendor, setPointVendor] = useState<VendorRow|null>(null)
   const [pointDate, setPointDate] = useState(new Date().toLocaleDateString('en-CA'))
@@ -499,21 +502,29 @@ export default function VendorsPage() {
 
   async function cancelVendorEntry(kind: 'points' | 'topup', id: string) {
     if (vendorCancelBusy.current) return
-    const reason = window.prompt('취소 사유를 적어 주세요.', '잘못 입력해서 취소')
-    if (!reason?.trim()) return
-    vendorCancelBusy.current = true; setWalletSaving(true); setPointSaving(true); setErr(null)
+    const source = kind === 'points' ? pointRows.find(row => row.id === id) : walletTopups.find(row => row.id === id)
+    const title = `${source?.vendor_name || '거래처'} · ${kind === 'points' ? '포인트 내역 취소' : '충전 등록 취소'}`
+    setVendorCancelReason('잘못 입력해서 취소');setVendorCancelPopup({kind,id,title});setVendorCancelLoading(true);vendorCancelBusy.current=true
     try {
-      const preview = await supabase.rpc('cancel_manager_action', {p_kind: kind,p_id:id,p_reason:reason.trim(),p_apply:false})
+      const preview=await supabase.rpc('cancel_manager_action',{p_kind:kind,p_id:id,p_reason:'취소 내용 미리보기',p_apply:false})
       if(preview.error) throw preview.error
-      const effect=preview.data
-      if(effect.already_cancelled) {await load();setMsg('이미 취소한 내역이에요.');return}
-      if(!window.confirm(`포인트 ${Number(effect.points_delta)>0?'+':''}${fmtNum(Number(effect.points_delta))}점 / 충전잔액 ${Number(effect.wallet_delta)>0?'+':''}${fmtNum(Number(effect.wallet_delta))} ${effect.wallet_currency||''} 변경\n이 내역을 취소할까요? 실제 송금은 취소되지 않아요.`)) return
-      const result=await supabase.rpc('cancel_manager_action',{p_kind:kind,p_id:id,p_reason:reason.trim(),p_apply:true,p_expected_token:effect.token})
+      if(preview.data.already_cancelled) throw new Error('이미 취소된 내역이에요. 새로고침해서 확인해 주세요.')
+      setVendorCancelPopup({kind,id,title,effects:preview.data})
+    } catch(e:any) {setVendorCancelPopup({kind,id,title,error:e?.message??String(e)})}
+    finally {vendorCancelBusy.current=false;setVendorCancelLoading(false)}
+  }
+
+  async function confirmVendorCancellation() {
+    if(vendorCancelBusy.current || !vendorCancelPopup?.effects || !vendorCancelReason.trim()) return
+    const pending=vendorCancelPopup;vendorCancelBusy.current=true;setVendorCancelLoading(true)
+    try {
+      const result=await supabase.rpc('cancel_manager_action',{p_kind:pending.kind,p_id:pending.id,p_reason:vendorCancelReason.trim(),p_apply:true,p_expected_token:pending.effects.token})
       if(result.error) throw result.error
-      if(kind==='topup') {setWalletTopupModalOpen(false);setEditingWalletTopupId(null)}
+      setVendorCancelPopup(null)
+      if(pending.kind==='topup'){setWalletTopupModalOpen(false);setEditingWalletTopupId(null)}
       await load();setMsg('처리를 취소했어요. 원본과 취소 이력은 보관됩니다.')
-    } catch(e:any) {setErr(e?.message??String(e))}
-    finally {vendorCancelBusy.current=false;setWalletSaving(false);setPointSaving(false)}
+    } catch(e:any) {setVendorCancelPopup({...pending,error:e?.message??String(e)})}
+    finally {vendorCancelBusy.current=false;setVendorCancelLoading(false)}
   }
 
   async function saveWalletTopup() {
@@ -2066,6 +2077,18 @@ export default function VendorsPage() {
           }
         }
       `}</style>
+      <SafeModal open={!!vendorCancelPopup} title="취소할 내용을 확인해 주세요" onClose={()=>{if(!vendorCancelLoading)setVendorCancelPopup(null)}}>
+        {vendorCancelPopup?<div style={{display:'grid',gap:14}}>
+          <b>{vendorCancelPopup.title}</b>
+          {vendorCancelLoading?<div>취소할 내용을 확인하고 있어요…</div>:null}
+          {vendorCancelPopup.effects?<div style={{padding:12,background:'#fff7ed',borderRadius:10,lineHeight:1.8}}><div>포인트: <b>{Number(vendorCancelPopup.effects.points_delta)>0?'+':''}{fmtNum(Number(vendorCancelPopup.effects.points_delta))}점</b></div><div>충전잔액: <b>{Number(vendorCancelPopup.effects.wallet_delta)>0?'+':''}{fmtNum(Number(vendorCancelPopup.effects.wallet_delta))} {vendorCancelPopup.effects.wallet_currency||''}</b></div></div>:null}
+          <label style={{display:'grid',gap:6}}>취소 사유<input style={styles.input} value={vendorCancelReason} disabled={vendorCancelLoading} onChange={e=>setVendorCancelReason(e.target.value)}/></label>
+          <div style={{fontSize:12,color:'#6b7280'}}>‘확인 후 취소’를 눌러야 실행돼요. 실제 송금은 취소되지 않아요.</div>
+          {vendorCancelPopup.error?<div role="alert" style={{color:'#b91c1c'}}>{vendorCancelPopup.error}</div>:null}
+          <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button type="button" style={styles.actionBtn} disabled={vendorCancelLoading} onClick={()=>setVendorCancelPopup(null)}>돌아가기</button><button type="button" style={styles.actionDeleteBtn} disabled={vendorCancelLoading||!vendorCancelPopup.effects||!!vendorCancelPopup.error||!vendorCancelReason.trim()} onClick={confirmVendorCancellation}>확인 후 취소</button></div>
+        </div>:null}
+      </SafeModal>
+
     </div>
   )
 }

@@ -1389,26 +1389,26 @@ function SalesCalendar({ sales, loading, error }: { sales: NormalizedSaleRow[]; 
   const monthRows = sales.filter(row => row.normalizedDate.startsWith(`${month}-`))
   const total = (rows: NormalizedSaleRow[], field: 'final_amount' | 'profit_amount') => rows.reduce((sum, row) => sum + Number(row[field] || 0), 0)
   const move = (offset: number) => { const [year, number] = month.split('-').map(Number); const date = new Date(year, number - 1 + offset, 1); setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`) }
-  const control = { border: '1px solid #ddd6fe', background: '#fff', borderRadius: 10, padding: '9px 13px', cursor: 'pointer', fontWeight: 800 } as const
-  return <section style={{ background: '#fff', padding: 18, borderRadius: 20, border: '1px solid #e5e7eb', minWidth: 0 }}>
+  const control = { border: '1px solid #ddd6fe', background: '#fff', borderRadius: 10, padding: '6px 10px', cursor: 'pointer', fontWeight: 800 } as const
+  return <section style={{ background: '#fff', padding: 14, borderRadius: 20, border: '1px solid #ede9fe', backgroundImage: 'linear-gradient(135deg, #ffffff, #faf8ff)', minWidth: 0 }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-      <h2 style={{ margin: 0, fontSize: 20 }}>월별 매출 달력</h2>
+      <h2 style={{ margin: 0, fontSize: 18 }}>월별 매출 달력</h2>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><button style={control} aria-label="이전 달" onClick={() => move(-1)}>‹</button><input type="month" aria-label="조회 월" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value) }} style={{ ...control, minWidth: 140 }} /><button style={control} aria-label="다음 달" onClick={() => move(1)}>›</button><button style={control} onClick={() => { setToday(koreaDateKey()); setMonth(koreaDateKey().slice(0, 7)) }}>이번 달</button></div>
     </div>
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, margin: '16px 0', padding: 14, background: '#f5f3ff', borderRadius: 12 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, margin: '10px 0', padding: 10, background: '#f5f3ff', borderRadius: 12 }}>
       <div>월 매출 <b>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'final_amount'))}</b></div>
       <div>월 매출이익 <b style={{ color: total(monthRows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'profit_amount'))}</b></div>
       <div>{loading || error ? '—' : `${monthRows.length}건 판매`}</div>
     </div>
-    <p style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>판매일 기준 · 매출은 저장된 실입금액, 매출이익은 매출관리의 저장된 이익 기준이에요. 월세 등 운영비를 모두 뺀 순이익은 아니에요. 날짜를 누르면 판매 내역을 볼 수 있어요.</p>
-    {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 5 }}>
-      {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <div key={day} style={{ padding: 8, textAlign: 'center', fontWeight: 800, color: index === 0 ? '#b91c1c' : index === 6 ? '#2563eb' : '#6b7280' }}>{day}</div>)}
+    <p style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.4, margin: '8px 0' }}>판매일 기준 · 매출은 실입금액, 이익은 매출관리의 저장값이에요(운영비 차감 전). 날짜를 누르면 내역을 볼 수 있어요.</p>
+    {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
+      {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <div key={day} style={{ padding: 4, textAlign: 'center', fontWeight: 800, color: index === 0 ? '#b91c1c' : index === 6 ? '#2563eb' : '#6b7280' }}>{day}</div>)}
       {days.map((date, index) => {
         const rows = byDate.get(date) || []
         const isToday = date === today
-        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 108, minWidth: 0, padding: 8, border: isToday ? '2px solid #7c3aed' : '1px solid #e5e7eb', borderRadius: 10, background: isToday ? '#f5f3ff' : '#fff', cursor: 'pointer', overflowWrap: 'anywhere' }}>
+        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 72, minWidth: 0, padding: '6px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', border: isToday ? '2px solid #7c3aed' : '1px solid #eeeaf5', borderRadius: 12, background: isToday ? '#ede9fe' : rows.length ? '#fff' : '#faf9fc', cursor: 'pointer', overflowWrap: 'anywhere' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, fontWeight: isToday ? 900 : 700, color: index % 7 === 0 ? '#b91c1c' : index % 7 === 6 ? '#2563eb' : '#111827' }}>{Number(date.slice(-2))}{isToday ? <span style={{ background: '#7c3aed', color: '#fff', padding: '2px 5px', borderRadius: 6, fontSize: 10 }}>오늘</span> : null}</div>
-          {rows.length ? <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.7 }}><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div><small style={{ color: '#6b7280' }}>{rows.length}건</small></div> : <div style={{ marginTop: 15, color: '#9ca3af', fontSize: 11 }}>판매 없음</div>}
+          {rows.length ? <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.5 }}><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div></div> : <div style={{ marginTop: 7, color: '#d1cbdc', fontSize: 11 }}>—</div>}
         </button> : <div key={`empty-${index}`} style={{ background: '#fafafa', borderRadius: 10 }} />
       })}
     </div></div>}

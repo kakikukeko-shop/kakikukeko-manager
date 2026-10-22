@@ -2056,6 +2056,19 @@ export default function DocumentsPage() {
   const [historyTargets, setHistoryTargets] = useState<Array<{ cost_id: string; item_id: string }>>([]);
   const [cancellationRows, setCancellationRows] = useState<Array<{ id: string; created_at: string; action_kind: string; source_id: string; reason: string; effects: any; snapshot?: any }>>([]);
   const cancellationBusyRef = useRef(false);
+  const [cancelPopup, setCancelPopup] = useState<{ kind: "cost" | "purchase"; id: string; title: string; products: string[]; details?: string[]; effects?: any; error?: string } | null>(null);
+  const [cancelReason, setCancelReason] = useState("잘못 입력해서 취소");
+  const [cancelPopupBusy, setCancelPopupBusy] = useState(false);
+  const [editPointOpen, setEditPointOpen] = useState(false);
+  const [editPointBusy, setEditPointBusy] = useState(false);
+  const [editPointSource, setEditPointSource] = useState<{ purchaseId: string; vendor: string; ids: string[]; products: string[]; wallet: number; points: number; usedPoints: number; available: Record<string, number> } | null>(null);
+  const [editPointAmount, setEditPointAmount] = useState("");
+  const [editPointDate, setEditPointDate] = useState("");
+  const [editPointType, setEditPointType] = useState("상품");
+  const [editPointError, setEditPointError] = useState("");
+  const [editPointQuote, setEditPointQuote] = useState<{ signature: string; krw: number } | null>(null);
+  const editPointBusyRef = useRef(false);
+  const editPointRequestRef = useRef<{ signature: string; id: string } | null>(null);
   const [cPointMode, setCPointMode] = useState(false);
   const [cPointAmount, setCPointAmount] = useState("");
   const [cPointUsageType, setCPointUsageType] = useState("상품");
@@ -4364,7 +4377,7 @@ export default function DocumentsPage() {
   }
 
   function openPurchaseEditModal(p: PurchaseRow) {
-    if (n(p.points_used) > 0 || n(p.points_earned) > 0) { setErr("포인트가 연결된 매입은 금액 수정이 잠겨 있어요. 잔액·원가 불일치를 막기 위한 제한이에요."); return; }
+    setFPointsUsed(""); setFPointsEarned("");
     const purchaseItems = itemsByPurchase.get(p.id) ?? [];
 
     setBuyMode("edit");
@@ -4522,6 +4535,12 @@ export default function DocumentsPage() {
 
   async function savePurchaseWithItems() {
     setErr(null);
+    if (buyMode === "edit" && editingPurchaseId) {
+      const original = purchaseMap.get(editingPurchaseId);
+      if (n(original?.points_used) > 0 || n(original?.points_earned) > 0) {
+        setErr("포인트가 연결된 매입의 일반 금액 수정은 잠겨 있어요. 포인트 추가는 아래 ‘잔액·포인트 불러오기’에서 저장해 주세요."); return;
+      }
+    }
     if ((n(fPointsUsed) || n(fPointsEarned)) && (!fUseWallet || buyMode !== "create" || walletCurrency !== "JPY")) {
       setErr("포인트는 JPY 충전잔액으로 새 매입을 등록할 때 사용해 주세요."); return;
     }
@@ -5549,29 +5568,93 @@ export default function DocumentsPage() {
     </div>;
   }
 
+  async function loadEditPurchasePoints() {
+    if (!editingPurchaseId || editPointBusyRef.current) return;
+    const source = purchaseMap.get(editingPurchaseId);
+    if (!source?.supplier) { setErr("저장된 매입 거래처가 없어요."); return; }
+    setEditPointOpen(true); setEditPointSource(null); setEditPointError(""); setEditPointAmount(""); setEditPointQuote(null); setEditPointType("상품");
+    setEditPointDate(purchasePayments.find(row => row.purchase_id === source.id)?.payment_date || source.purchase_date || "");
+    editPointRequestRef.current = null; editPointBusyRef.current = true; setEditPointBusy(true);
+    try {
+      const results = await Promise.all([
+        supabase.from("vendor_wallet_topups").select("vendor_name,currency,remaining_foreign").eq("vendor_name", source.supplier.trim()).is("cancelled_at", null),
+        supabase.from("vendor_point_ledger").select("vendor_name,amount"),
+        supabase.from("vendor_wallet_usages").select("id,currency,usage_type,foreign_amount").eq("purchase_id", source.id).is("cancelled_at", null),
+        supabase.from("point_wallet_restorations").select("usage_id,foreign_amount").eq("purchase_id", source.id).is("cancelled_at", null),
+      ]);
+      for (const result of results) if (result.error) throw result.error;
+      const usages = (results[2].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === "JPY");
+      if (!usages.length) throw new Error("이 매입에 JPY 충전잔액 차감 기록이 없어요. 카드 결제를 충전잔액 결제로 바꾸는 기능은 아니에요.");
+      const available: Record<string, number> = { 상품: 0, 배송비: 0, 수수료: 0 };
+      for (const row of usages) available[row.usage_type] = round4((available[row.usage_type] || 0) + n(row.foreign_amount) - (results[3].data || []).filter((r: any) => r.usage_id === row.id).reduce((sum: number, r: any) => sum + n(r.foreign_amount), 0));
+      const savedItems = itemsByPurchase.get(source.id) || [];
+      setEditPointSource({ purchaseId: source.id, vendor: source.supplier,
+        ids: savedItems.map(row => row.id).sort(), products: savedItems.map(row => `${row.item_name || "상품"} · ${fmtNum(n(row.qty))}개`),
+        wallet: (results[0].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === "JPY").reduce((sum: number, row: any) => sum + n(row.remaining_foreign), 0),
+        points: (results[1].data || []).filter((row: any) => normalizeName(row.vendor_name) === normalizeName(source.supplier)).reduce((sum: number, row: any) => sum + n(row.amount), 0),
+        usedPoints: n(source.points_used), available,
+      });
+    } catch (e: any) { setEditPointError(e?.message ?? String(e)); }
+    finally { editPointBusyRef.current = false; setEditPointBusy(false); }
+  }
+
+  async function processEditPurchasePoints(apply: boolean) {
+    if (editPointBusyRef.current || !editPointSource) return;
+    setEditPointError("");
+    if (buyDirty) { setEditPointError("매입 수정 화면에 다른 변경사항이 있어요. 먼저 저장하거나 변경을 버리고 다시 열어 주세요. 이 창에서는 저장된 매입에 포인트만 적용해요."); return; }
+    const points = Number(editPointAmount);
+    if (!Number.isSafeInteger(points) || points <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(editPointDate)) { setEditPointError("사용일과 추가로 적용할 포인트를 양의 정수로 입력해 주세요."); return; }
+    const signature = JSON.stringify([editPointSource.purchaseId, editPointSource.ids, points, editPointDate, editPointType]);
+    if (apply && editPointQuote?.signature !== signature) { setEditPointError("변경된 내용으로 적용 금액 확인을 다시 눌러 주세요."); return; }
+    editPointBusyRef.current = true; setEditPointBusy(true);
+    try {
+      if (editPointRequestRef.current?.signature !== signature) editPointRequestRef.current = { signature, id: crypto.randomUUID() };
+      const result = await supabase.rpc("apply_cost_points", { p_item_ids: editPointSource.ids, p_points: points, p_usage_date: editPointDate, p_usage_type: editPointType,
+        p_apply: apply, p_expected_krw: apply ? editPointQuote!.krw : null, p_request_id: apply ? editPointRequestRef.current!.id : null,
+        p_memo: "매입 수정에서 추가 적용한 포인트",
+      });
+      if (result.error) throw result.error;
+      if (!apply) setEditPointQuote({ signature, krw: n(result.data.krw) });
+      else {
+        setEditPointOpen(false); setBuyModalOpen(false); setBuyDirty(false);
+        await refreshAll(); setMsg(`포인트 ${fmtNum(points)}점 적용 · 충전잔액 ${fmtNum(points)}엔 복원 · 원가 ${fmtKRW(n(result.data.krw))} 차감 완료`);
+      }
+    } catch (e: any) { setEditPointError(e?.message ?? String(e)); }
+    finally { editPointBusyRef.current = false; setEditPointBusy(false); }
+  }
+
   async function cancelProcessing(kind: "cost" | "purchase", id: string) {
     if (cancellationBusyRef.current) return;
-    const reason = window.prompt("취소 사유를 적어줘. 원래 기록과 취소 이력은 보관돼.", "잘못 입력해서 취소");
-    if (!reason?.trim()) return;
-    cancellationBusyRef.current = true; setLoading(true); setErr(null); setMsg(null);
+    const cost = costs.find(row => row.id === id);
+    const purchase = purchaseMap.get(id);
+    const products = kind === "cost" && cost ? processingProducts(cost).map(row => `${row.name} · 현재 ${row.qty}개`)
+      : (itemsByPurchase.get(id) ?? []).map(row => `${row.item_name || "상품"} · 현재 ${fmtNum(n(row.qty))}개`);
+    const title = kind === "purchase" ? `${purchase?.supplier || "매입"} · 매입 전체 취소` : `${cost?.cost_date || ""} · ${cost?.vendor_name || ""} · ${cost?.cost_type || "처리"} 취소`;
+    const refund = cost?.cost_type === "환불" ? parseRefundSummaryMemo(cost.memo) : null;
+    const details = kind === "purchase" ? [`기록된 매입 금액: ${fmtKRW(n(purchase?.total_amount))}`] : refund ? [`실제 환불금액 ${fmtKRW(refund.actualKRW)}`, `환불 차손 ${fmtKRW(refund.lossKRW)} / 차익 ${fmtKRW(refund.profitKRW)} — 취소 후 현재 계산에서 제외돼요.`] : [`추가비용 원화 환산: ${fmtKRW(n(cost?.amount) * n(cost?.fx_rate || 1))}`];
+    setCancelReason("잘못 입력해서 취소"); setCancelPopup({ kind, id, title, products, details });
+    cancellationBusyRef.current = true; setCancelPopupBusy(true);
     try {
-      const preview = await supabase.rpc("cancel_manager_action", { p_kind: kind, p_id: id, p_reason: reason.trim(), p_apply: false });
+      const preview = await supabase.rpc("cancel_manager_action", { p_kind: kind, p_id: id, p_reason: "취소 내용 미리보기", p_apply: false });
       if (preview.error) throw preview.error;
-      const effects = preview.data;
-      if (effects.already_cancelled) { await refreshAll(); setMsg("이미 취소된 처리야."); return; }
-      const quantities = (effects.quantity_changes ?? []).map((row: any) => `${row.name || "상품"}: ${row.before}개 → ${row.after}개`).join("\n");
-      const message = [kind === "purchase" ? "매입 전체를 취소할까? 상품은 현재 목록에서 제외되고 원본은 취소 이력에 남아." : "이 처리를 취소할까? 비용과 상품 원가를 함께 되돌려.", quantities,
-        `포인트: ${Number(effects.points_delta) > 0 ? "+" : ""}${fmtNum(Number(effects.points_delta))}점`,
-        `충전잔액: ${effects.wallet_changes ? effects.wallet_changes.map((row: any) => `+${fmtNum(Number(row.amount))} ${row.currency}`).join(" / ") || "변경 없음" : `${Number(effects.wallet_delta) > 0 ? "+" : ""}${fmtNum(Number(effects.wallet_delta))} ${effects.wallet_currency || ""}`}`,
-        "실제 카드 승인·송금은 취소되지 않아. 이 관리툴의 기록만 되돌려.", `사유: ${reason}`].filter(Boolean).join("\n\n");
-      if (!window.confirm(message)) return;
-      const result = await supabase.rpc("cancel_manager_action", { p_kind: kind, p_id: id, p_reason: reason.trim(), p_apply: true, p_expected_token: effects.token });
+      if (preview.data.already_cancelled) throw new Error("이미 취소된 내역이에요. 새로고침해서 확인해 주세요.");
+      setCancelPopup({ kind, id, title, products, details, effects: preview.data });
+    } catch (e: any) { setCancelPopup({ kind, id, title, products, details, error: e?.message ?? String(e) }); }
+    finally { cancellationBusyRef.current = false; setCancelPopupBusy(false); }
+  }
+
+  async function confirmProcessingCancellation() {
+    if (cancellationBusyRef.current || !cancelPopup?.effects || !cancelReason.trim()) return;
+    const pending = cancelPopup;
+    cancellationBusyRef.current = true; setCancelPopupBusy(true);
+    try {
+      const result = await supabase.rpc("cancel_manager_action", { p_kind: pending.kind, p_id: pending.id, p_reason: cancelReason.trim(), p_apply: true, p_expected_token: pending.effects.token });
       if (result.error) throw result.error;
-      setItemDetailOpen(false);
-      if (kind === "purchase") { setSelectedPurchaseId(null); setSelectedItemIds([]); }
-      await refreshAll(); setMsg(kind === "purchase" ? "매입 취소 완료 · 취소 이력에 원본 보관" : "처리 취소 완료 · 수량·원가·잔액을 함께 반영했어.");
-    } catch (e: any) { setErr(e?.message ?? String(e)); }
-    finally { cancellationBusyRef.current = false; setLoading(false); }
+      setCancelPopup(null); setItemDetailOpen(false);
+      if (pending.kind === "purchase") { setSelectedPurchaseId(null); setSelectedItemIds([]); }
+      await refreshAll(); setMsg("처리 취소 완료 · 수량·원가·잔액을 함께 반영했어.");
+    } catch (e: any) { setCancelPopup({ ...pending, error: e?.message ?? String(e) }); }
+    finally { cancellationBusyRef.current = false; setCancelPopupBusy(false); }
   }
 
   async function deletePurchase(purchaseId: string) { await cancelProcessing("purchase", purchaseId); }
@@ -9076,6 +9159,11 @@ export default function DocumentsPage() {
                 </div>
               </div>
 
+              {buyMode === "edit" ? <div style={{ border: "1px solid #ddd6fe", background: "#faf5ff", padding: 12, borderRadius: 10, display: "grid", gap: 8 }}>
+                <b>이미 결제한 매입에 포인트 추가 적용</b>
+                <div style={styles.small}>현재 충전잔액과 포인트, 이 매입에서 이미 차감한 금액을 불러와요. 포인트로 바꾼 금액만큼 충전잔액을 돌려주므로 다시 차감하지 않아요. JPY 충전잔액으로 결제한 매입에서 사용할 수 있어요.</div>
+                <button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={loadEditPurchasePoints}>잔액·포인트 불러오기</button>
+              </div> : null}
               {fUseWallet && buyMode === "create" && walletCurrency === "JPY" ? (
                 <div style={{ padding: 12, border: "1px solid #ddd6fe", borderRadius: 12, display: "grid", gap: 8 }}>
                   <b style={{fontSize:13}}>포인트 · 현재 {fmtNum(pointBalance)}점 (1점＝1엔)</b>
@@ -9167,14 +9255,10 @@ export default function DocumentsPage() {
                             style={styles.btn(
                               selected ? "primary" : "ghost",
                             )}
-                            disabled={buyMode === "edit"}
-                            onClick={() =>
-                              loadVendorWalletCurrency(summary.currency)
-                            }
+                            disabled={editPointBusy}
+                            onClick={() => buyMode === "edit" ? loadEditPurchasePoints() : loadVendorWalletCurrency(summary.currency)}
                           >
-                            {selected
-                              ? "불러옴 ✓"
-                              : `${summary.currency} 잔액 불러오기`}
+                            {buyMode === "edit" ? "잔액·포인트 불러오기" : selected ? "불러옴 ✓" : `${summary.currency} 잔액 불러오기`}
                           </button>
                         </div>
 
@@ -11557,6 +11641,45 @@ export default function DocumentsPage() {
           </>
         ) : null}
       </SafeModal>
+      <SafeModal open={editPointOpen} title="기존 결제에 포인트 추가 적용" onClose={() => { if (!editPointBusy) setEditPointOpen(false); }}>
+        <div style={{ display: "grid", gap: 12 }}>
+          {editPointBusy ? <div>잔액과 적용 금액을 확인하고 있어요…</div> : null}
+          {editPointSource ? <>
+            <b>{editPointSource.vendor} · 저장된 매입</b>
+            <div style={{ background: "#faf5ff", borderRadius: 10, padding: 12 }}>현재 충전잔액 <b>{fmtNum(editPointSource.wallet)}엔</b> · 보유 포인트 <b>{fmtNum(editPointSource.points)}점</b><br />이 매입에 이미 사용한 포인트 {fmtNum(editPointSource.usedPoints)}점</div>
+            <div style={{ maxHeight: 150, overflowY: "auto", fontSize: 12 }}>{editPointSource.products.map((name, index) => <div key={index}>{name}</div>)}</div>
+            <div style={styles.small}>이미 사용한 포인트를 다시 적지 말고, 추가로 적용할 포인트만 입력하세요. 현재 충전잔액이 0엔이어도 기존 차감분을 포인트로 바꿀 수 있어요.</div>
+            <div style={styles.grid2}>
+              <label style={styles.field}>포인트 사용일<input style={styles.input} value={editPointDate} placeholder="YYYY-MM-DD" onChange={e => { setEditPointDate(formatDateInput(e.target.value)); setEditPointQuote(null); }} disabled={editPointBusy} /></label>
+              <label style={styles.field}>추가로 적용할 포인트<input style={styles.input} inputMode="numeric" value={editPointAmount} onChange={e => { setEditPointAmount(e.target.value); setEditPointQuote(null); }} disabled={editPointBusy} /></label>
+              <label style={styles.field}>포인트로 대신 결제할 항목<select style={styles.select} value={editPointType} onChange={e => { setEditPointType(e.target.value); setEditPointQuote(null); }} disabled={editPointBusy}>{["상품", "배송비", "수수료"].map(type => <option key={type} value={type}>{type} · 남은 차감분 {fmtNum(editPointSource.available[type] || 0)}엔</option>)}</select></label>
+            </div>
+            <button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={() => processEditPurchasePoints(false)}>적용 금액 확인</button>
+            {editPointQuote ? <div style={{ padding: 12, borderRadius: 10, background: "#fff7ed" }}>포인트 <b>−{fmtNum(Number(editPointAmount))}점</b> / 충전잔액 <b>+{fmtNum(Number(editPointAmount))}엔</b><br />상품 원가 <b>−{fmtKRW(editPointQuote.krw)}</b><div style={styles.small}>원래 차감한 충전분과 환율로 복원해요. 기존 결제 전체를 다시 차감하지 않아요.</div></div> : null}
+          </> : null}
+          {editPointError ? <div role="alert" style={{ color: "#b91c1c", whiteSpace: "pre-wrap" }}>{editPointError}</div> : null}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}><button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={() => setEditPointOpen(false)}>돌아가기</button><button type="button" style={styles.btn("primary")} disabled={editPointBusy || !editPointQuote || !!editPointError} onClick={() => processEditPurchasePoints(true)}>확인 후 포인트 적용</button></div>
+        </div>
+      </SafeModal>
+      <SafeModal open={!!cancelPopup} title="취소할 내용을 확인해 주세요" onClose={() => { if (!cancelPopupBusy) setCancelPopup(null); }}>
+        {cancelPopup ? <div style={{ display: "grid", gap: 14 }}>
+          <b>{cancelPopup.title}</b>
+          {cancelPopup.details?.map((line, index) => <div key={index} style={styles.small}>{line}</div>)}
+          <div style={{ padding: 12, border: "1px solid #e5e7eb", borderRadius: 10, maxHeight: 200, overflowY: "auto", display: "grid", gap: 6 }}>{cancelPopup.products.length ? cancelPopup.products.map((name, index) => <div key={index}>{name}</div>) : "상품 연결 기록 없음"}</div>
+          {cancelPopupBusy ? <div>취소할 내용을 확인하고 있어요…</div> : null}
+          {cancelPopup.effects ? <div style={{ background: "#fff7ed", padding: 12, borderRadius: 10, lineHeight: 1.8 }}>
+            {(cancelPopup.effects.quantity_changes || []).map((row: any, index: number) => <div key={index}>{row.name || "상품"}: <b>{row.before}개 → {row.after}개</b></div>)}
+            <div>포인트: <b>{Number(cancelPopup.effects.points_delta) > 0 ? "+" : ""}{fmtNum(Number(cancelPopup.effects.points_delta))}점</b></div>
+            <div>충전잔액: <b>{cancelPopup.effects.wallet_changes ? cancelPopup.effects.wallet_changes.map((row: any) => `+${fmtNum(Number(row.amount))} ${row.currency}`).join(" / ") || "변경 없음" : `${Number(cancelPopup.effects.wallet_delta) > 0 ? "+" : ""}${fmtNum(Number(cancelPopup.effects.wallet_delta))} ${cancelPopup.effects.wallet_currency || ""}`}</b></div>
+            <div>{cancelPopup.kind === "purchase" ? "매입과 재고는 현재 목록에서 제외되고, 원본은 취소 이력에 보관돼요." : "이 처리의 원가 조정을 제거하고, 환불이면 원래 수량과 공동비용 배분도 복구해요."}</div>
+          </div> : null}
+          <label style={styles.field}>취소 사유<input style={styles.input} value={cancelReason} disabled={cancelPopupBusy} onChange={e => setCancelReason(e.target.value)} /></label>
+          <div style={styles.small}>아래 ‘확인 후 취소’를 눌러야 실행돼요. 실제 카드 승인·송금은 취소되지 않아요.</div>
+          {cancelPopup.error ? <div role="alert" style={{ color: "#b91c1c", whiteSpace: "pre-wrap" }}>{cancelPopup.error}</div> : null}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}><button type="button" style={styles.btn("ghost")} disabled={cancelPopupBusy} onClick={() => setCancelPopup(null)}>돌아가기</button><button type="button" style={styles.btn("danger")} disabled={cancelPopupBusy || !cancelPopup.effects || !!cancelPopup.error || !cancelReason.trim()} onClick={confirmProcessingCancellation}>확인 후 취소</button></div>
+        </div> : null}
+      </SafeModal>
+
     </div>
   );
 }
