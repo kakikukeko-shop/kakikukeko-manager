@@ -1403,6 +1403,8 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
   const [today, setToday] = useState(koreaDateKey)
   const [month, setMonth] = useState(() => koreaDateKey().slice(0, 7))
   const [selected, setSelected] = useState<string | null>(null)
+  const [monthSalesOpen, setMonthSalesOpen] = useState(false)
+  const [monthPurchasesOpen, setMonthPurchasesOpen] = useState(false)
   useEffect(() => { const timer = window.setInterval(() => setToday(koreaDateKey()), 30000); return () => window.clearInterval(timer) }, [])
   const days = useMemo(() => calendarDays(month), [month])
   const byDate = useMemo(() => {
@@ -1432,7 +1434,8 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
       <div>월 매출 <b>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'final_amount'))}</b></div>
       <div>월 매출이익 <b style={{ color: total(monthRows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'profit_amount'))}</b></div>
       <div>월 매입 <b style={{ color: '#0f766e' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(monthPurchase)}</b></div>
-      <div>{loading || error ? '—' : `${monthRows.length}건 판매`}</div>
+      <button type="button" disabled={loading || !!error} onClick={() => setMonthSalesOpen(true)} style={{ border: 0, background: 'transparent', padding: 0, color: '#4338ca', cursor: 'pointer', fontSize: 'inherit', textDecoration: 'underline', textUnderlineOffset: 3 }}>{loading || error ? '—' : `${monthRows.length}건 판매`}</button>
+      <button type="button" title="상품 매입 등록 건수예요. 추가비용·환불은 건수에서 제외해요." disabled={loading || !!error} onClick={() => setMonthPurchasesOpen(true)} style={{ border: 0, background: 'transparent', padding: 0, color: '#0f766e', cursor: 'pointer', fontSize: 'inherit', textDecoration: 'underline', textUnderlineOffset: 3 }}>{loading || error ? '—' : `${purchases.filter(row => row.normalizedDate.startsWith(`${month}-`)).length}건 매입`}</button>
     </div>
     <p style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.4, margin: '8px 0' }}>판매일 기준 · 매출은 실입금액, 이익은 매출관리의 저장값이에요(운영비 차감 전). 매입은 매입일의 상품금액 + 비용일의 추가비용(환불 차감)이에요. 날짜를 누르면 내역을 볼 수 있어요.</p>
     {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
@@ -1450,6 +1453,13 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
         </button> : <div key={`empty-${index}`} style={{ background: '#fafafa', borderRadius: 10 }} />
       })}
     </div></div>}
+    <SafeModal open={monthSalesOpen} title={`${month} 판매 상품`} onClose={() => setMonthSalesOpen(false)}><div style={{ display: 'grid', gap: 10 }}>
+      {!monthRows.length ? <p>이 달에는 판매 내역이 없어요.</p> : [...monthRows].sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ede9fe' }}><b style={{ color: '#6d28d9', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.sale_items?.length ? row.sale_items.map((item, index) => <div key={index}>{getSaleItemName(item)}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>매출 {fmtKRW(Number(row.final_amount || 0))}</b></div></div>)}
+    </div></SafeModal>
+    <SafeModal open={monthPurchasesOpen} title={`${month} 매입 상품`} onClose={() => setMonthPurchasesOpen(false)}><div style={{ display: 'grid', gap: 10 }}>
+      <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>상품 매입금액 기준이에요. 달력의 월 매입 합계에는 추가비용·환불도 포함돼요.</p>
+      {!purchases.some(row => row.normalizedDate.startsWith(`${month}-`)) ? <p>이 달에는 상품 매입 내역이 없어요.</p> : purchases.filter(row => row.normalizedDate.startsWith(`${month}-`)).sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ccfbf1' }}><b style={{ color: '#0f766e', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.purchase_items?.length ? row.purchase_items.map((item, index) => <div key={index}>{item.item_name || '상품명 기록 없음'}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>상품매입 {fmtKRW(Number(row.total_amount || 0))}</b></div></div>)}
+    </div></SafeModal>
     <SafeModal open={!!selected} title={`${selected || ''} 매출 / 매입 내역`} onClose={() => setSelected(null)}><div style={{ display: 'grid', gap: 12 }}>
       <b>매출 {fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))} · 매출이익 {fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b>
       {!(byDate.get(selected || '') || []).length ? <p>이 날짜에는 판매 내역이 없어요.</p> : (byDate.get(selected || '') || []).map(row => <div key={row.id} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 10 }}>
