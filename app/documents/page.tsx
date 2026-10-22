@@ -22,6 +22,8 @@ type PurchaseRow = {
   total_foreign: number | null;
   total_amount: number | null;
   memo: string | null;
+  points_used?: number;
+  points_earned?: number;
 };
 
 type PurchasePaymentRow = {
@@ -1487,112 +1489,12 @@ function isSharedRefundReallocationCostType(
 
 async function rebalanceSharedCostsAfterRefund(
   changedItemIds: string[],
-  allCosts: PurchaseCostRow[],
-  allAllocations: CostAllocationRow[],
+  _allCosts: PurchaseCostRow[],
+  _allAllocations: CostAllocationRow[],
 ) {
-  const changedIdSet = new Set(changedItemIds);
-  if (changedIdSet.size === 0) return;
-
-  // 환불 상품이 기존에 포함돼 있던 배송비/관부과세만 재배분한다.
-  const targetCosts = allCosts.filter((cost) => {
-    if (!isSharedRefundReallocationCostType(cost.cost_type)) return false;
-    return allAllocations.some(
-      (allocation) =>
-        allocation.purchase_cost_id === cost.id &&
-        changedIdSet.has(allocation.purchase_item_id),
-    );
-  });
-
-  for (const cost of targetCosts) {
-    const oldRows = allAllocations.filter(
-      (allocation) => allocation.purchase_cost_id === cost.id,
-    );
-    if (oldRows.length === 0) continue;
-
-    const linkedItemIds = Array.from(
-      new Set(oldRows.map((allocation) => allocation.purchase_item_id)),
-    );
-
-    const itemRes = await supabase
-      .from("purchase_items")
-      .select("id,qty,line_total,unit_price")
-      .in("id", linkedItemIds);
-
-    if (itemRes.error) throw itemRes.error;
-
-    const remainingItems = (itemRes.data ?? [])
-      .map(
-        (item: {
-          id: string;
-          qty: number | null;
-          line_total: number | null;
-          unit_price: number | null;
-        }) => {
-          const qty = Math.max(0, Math.floor(n(item.qty)));
-          const unitPrice = Math.max(0, n(item.unit_price));
-          const calculatedTotal = ceil4(unitPrice * qty);
-
-          return {
-            id: item.id,
-            qty,
-            // 항상 "개당 상품금액 × 남은 수량"으로 다시 계산한다.
-            // 저장된 line_total이 정상이라면 같은 값이며, 혹시 0이어도 unit_price와 수량으로 복구된다.
-            remaining_product_total: Math.max(
-              calculatedTotal,
-              Math.max(0, n(item.line_total)),
-            ),
-          };
-        },
-      )
-      .filter((item) => item.qty > 0);
-
-    // 기존 배분합을 그대로 유지한다. 배송비/관부과세 총액 자체를 바꾸는 게 아니라,
-    // 환불 후 남은 상품들 사이에서만 다시 나누는 처리다.
-    const totalAllocatedKRW = Math.round(
-      oldRows.reduce(
-        (sum, allocation) => sum + n(allocation.allocated_amount),
-        0,
-      ),
-    );
-
-    const del = await supabase
-      .from("cost_allocations")
-      .delete()
-      .eq("purchase_cost_id", cost.id);
-    if (del.error) throw del.error;
-
-    // 모두 환불되어 남은 재고가 없으면 비용을 억지로 상품에 남기지 않는다.
-    if (remainingItems.length === 0 || totalAllocatedKRW === 0) continue;
-
-    // 저장된 배분기준을 그대로 따른다.
-    // 기존 비용(배분기준 메타가 없는 건)은 자동으로 처리한다:
-    // 배송비 → 수량비율 / 그 외 비용 → 상품금액 비율.
-    const reallocationBasis = parseCostAllocationBasis(cost.memo);
-    const reallocationWeights = getCostAllocationWeights(
-      cost.cost_type,
-      remainingItems.map((item) => ({
-        qty: item.qty,
-        line_total: item.remaining_product_total,
-      })),
-      reallocationBasis,
-    );
-
-    if (reallocationWeights.every((weight) => weight <= 0)) continue;
-
-    const redistributedAmounts = distributeByWeightsCeilIntSigned(
-      totalAllocatedKRW,
-      reallocationWeights,
-    );
-
-    const ins = await supabase.from("cost_allocations").insert(
-      remainingItems.map((item, index) => ({
-        purchase_cost_id: cost.id,
-        purchase_item_id: item.id,
-        allocated_amount: redistributedAmounts[index] ?? 0,
-      })),
-    );
-    if (ins.error) throw ins.error;
-  }
+  if (!changedItemIds.length) return;
+  const result = await supabase.rpc("rebalance_costs_after_refund", { p_item_ids: [...new Set(changedItemIds)] });
+  if (result.error) throw result.error;
 }
 
 function ItemSelectionManager({
@@ -1843,6 +1745,30 @@ function ItemSelectionManager({
 }
 
 
+function allocateExactKRW(total: number, weights: number[]) {
+  const amount = Math.max(0, Math.round(total));
+  const positive = weights.map((v) => Math.max(0, n(v)));
+  const sum = positive.reduce((a,b) => a+b, 0);
+  if (!positive.length) return [];
+  const raw = positive.map((w) => amount * (sum > 0 ? w / sum : 1 / positive.length));
+  const parts = raw.map(Math.floor);
+  const order = raw.map((v,i) => ({i, fraction:v-parts[i]})).sort((a,b) => b.fraction-a.fraction || a.i-b.i);
+  let remaining = amount - parts.reduce((a,b) => a+b,0);
+  for (let i=0; i<remaining; i++) parts[order[i % order.length].i] += 1;
+  return parts;
+}
+
+function pointPaymentParts(product: number, shipping: number, fee: number, points: number) {
+  const gross = round4(product + shipping + fee);
+  const net = Math.max(0, round4(gross - points));
+  if (gross <= 0) return { product: 0, shipping: 0, fee: 0, net: 0 };
+  let p = round4(product * net / gross);
+  let sh = round4(shipping * net / gross);
+  let f = round4(net - p - sh);
+  if (f < 0) { if (p >= sh) p = round4(p + f); else sh = round4(sh + f); f = 0; }
+  return { product: p, shipping: sh, fee: f, net };
+}
+
 function quoteVendorWalletFIFO(
   topups: VendorWalletTopupRow[],
   vendorName: string,
@@ -1961,6 +1887,9 @@ export default function DocumentsPage() {
   const [allocations, setAllocations] = useState<CostAllocationRow[]>([]);
   const [arrivals, setArrivals] = useState<ArrivalRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [pointRows, setPointRows] = useState<{vendor_name:string;amount:number}[]>([]);
+  const [fPointsUsed, setFPointsUsed] = useState("");
+  const [fPointsEarned, setFPointsEarned] = useState("");
   const [walletTopups, setWalletTopups] = useState<VendorWalletTopupRow[]>([]);
   const [files, setFiles] = useState<FileRow[]>([]);
 
@@ -2123,6 +2052,17 @@ export default function DocumentsPage() {
   const [cAllocationBasis, setCAllocationBasis] =
     useState<CostAllocationBasis>("auto");
   const [cUseWallet, setCUseWallet] = useState(false);
+  const [processingHistoryOpen, setProcessingHistoryOpen] = useState(false);
+  const [historyTargets, setHistoryTargets] = useState<Array<{ cost_id: string; item_id: string }>>([]);
+  const [cancellationRows, setCancellationRows] = useState<Array<{ id: string; created_at: string; action_kind: string; source_id: string; reason: string; effects: any; snapshot?: any }>>([]);
+  const cancellationBusyRef = useRef(false);
+  const [cPointMode, setCPointMode] = useState(false);
+  const [cPointAmount, setCPointAmount] = useState("");
+  const [cPointUsageType, setCPointUsageType] = useState("상품");
+  const [cPointQuote, setCPointQuote] = useState<{ signature: string; krw: number; balance: number; vendor: string } | null>(null);
+  const cPointRequestRef = useRef<{ signature: string; id: string } | null>(null);
+  const cPointBusyRef = useRef(false);
+  const isCostPointUse = cType === "할인/쿠폰" && cPointMode;
   const [cAmount, setCAmount] = useState("");
   const [cTotalForeign, setCTotalForeign] = useState("");
   const [cTotalKRW, setCTotalKRW] = useState("");
@@ -2132,6 +2072,7 @@ export default function DocumentsPage() {
   const [cMemo, setCMemo] = useState("");
   const [cVendorName, setCVendorName] = useState("");
   const [cDate, setCDate] = useState("");
+  const cPointSignature = JSON.stringify([selectedItemIds.slice().sort(), cPointAmount, cDate, cPointUsageType]);
   const [costReceiptFile, setCostReceiptFile] = useState<File | null>(null);
   const [costImportDocFile, setCostImportDocFile] = useState<File | null>(null);
 
@@ -3080,7 +3021,7 @@ export default function DocumentsPage() {
   ]);
 
   useEffect(() => {
-    if (draftPayments.length !== 1) return;
+    if (draftPayments.length !== 1 || fUseWallet) return;
     const payment = draftPayments[0];
     if (manualPaymentForeignKeys.includes(payment.key)) return;
 
@@ -3300,16 +3241,15 @@ export default function DocumentsPage() {
     ? Math.max(0, n(fFeeForeign))
     : 0;
 
+  const pointBalance = pointRows.filter((row) => normalizeName(row.vendor_name) === normalizeName(fSupplier)).reduce((sum,row) => sum+n(row.amount),0);
+  const appliedPoints = fUseWallet && buyMode === "create" && normalizeCurrencyCode(currencyValue(fCurrency, fCurrencyCustom)) === "JPY" ? Math.max(0,n(fPointsUsed)) : 0;
+  const pointNetParts = pointPaymentParts(walletProductForeign, walletShippingForeign, walletFeeForeign, appliedPoints);
+  const fullyPointPaid = fUseWallet && buyMode === "create" && appliedPoints > 0 && pointNetParts.net === 0;
   const walletQuote = useMemo(
-    () =>
-      quoteVendorWalletFIFO(
-        walletTopups,
-        fSupplier,
-        walletCurrency,
-        walletProductForeign,
-        walletShippingForeign,
-        walletFeeForeign,
-      ),
+    () => {
+      const quoted = quoteVendorWalletFIFO(walletTopups, fSupplier, walletCurrency, pointNetParts.product, pointNetParts.shipping, pointNetParts.fee);
+      return fullyPointPaid ? { ...quoted, ok: true } : quoted;
+    },
     [
       walletTopups,
       fSupplier,
@@ -3317,6 +3257,8 @@ export default function DocumentsPage() {
       walletProductForeign,
       walletShippingForeign,
       walletFeeForeign,
+      appliedPoints,
+      fullyPointPaid,
     ],
   );
 
@@ -3420,10 +3362,8 @@ export default function DocumentsPage() {
     if (!fUseWallet || buyMode !== "create") return;
     if (!fSupplier.trim() || !walletCurrency) return;
 
-    const requiredForeign = round4(
-      walletProductForeign + walletShippingForeign + walletFeeForeign,
-    );
-    if (requiredForeign <= 0) return;
+    const requiredForeign = pointNetParts.net;
+    if (requiredForeign <= 0 && !fullyPointPaid) return;
 
     setDraftPayments((prev) => {
       const current = prev[0];
@@ -3469,6 +3409,8 @@ export default function DocumentsPage() {
     walletProductForeign,
     walletShippingForeign,
     walletFeeForeign,
+    appliedPoints,
+    fullyPointPaid,
     fFeeIncluded,
     walletQuote.ok,
     walletQuote.totalKRW,
@@ -3506,6 +3448,8 @@ export default function DocumentsPage() {
     fTotalKRW,
     fMemo,
     fUseWallet,
+    fPointsUsed,
+    fPointsEarned,
     draftPayments,
     draftPurchaseCosts,
     draftItems,
@@ -3517,15 +3461,16 @@ export default function DocumentsPage() {
       0,
       enteredDraftItemForeignSum || n(fTotalForeign),
     );
-    const previewKRW = editingPurchaseHasRefund
+    const previewKRW = fUseWallet && buyMode === "create" ? walletQuote.productKRW : editingPurchaseHasRefund
       ? previewForeign * purchasePaymentComposition.productFx
       : purchasePaymentComposition.productKRW;
 
-    return computeDraftPreviewRows(
-      draftItems,
-      previewForeign,
-      previewKRW,
-    );
+    const preview = computeDraftPreviewRows(draftItems, previewForeign, previewKRW);
+    if (appliedPoints > 0 && preview.rows.length) {
+      const parts = allocateExactKRW(previewKRW, preview.rows.map((row) => row.previewForeignTotal));
+      preview.rows = preview.rows.map((row, index) => ({...row, previewKRWTotal: parts[index], previewKRWUnit: row.qty > 0 ? parts[index] / row.qty : 0}));
+    }
+    return preview;
   }, [
     draftItems,
     enteredDraftItemForeignSum,
@@ -3533,6 +3478,10 @@ export default function DocumentsPage() {
     editingPurchaseHasRefund,
     purchasePaymentComposition.productKRW,
     purchasePaymentComposition.productFx,
+    fUseWallet,
+    buyMode,
+    walletQuote.productKRW,
+    appliedPoints,
   ]);
 
   // 안내 전용: 기존 자동계산 및 저장 로직은 변경하지 않는다.
@@ -3564,7 +3513,7 @@ export default function DocumentsPage() {
     } else if (paymentKRWSum <= 0) {
       notes.push("결제내역에 실제로 지급한 원화금액을 입력해 주세요.");
     }
-    if (draftPayments.some((row) => n(row.krw_amount) > 0 && (!row.payment_date || row.payment_date.length !== 10))) {
+    if (draftPayments.some((row) => (n(row.krw_amount) > 0 || fullyPointPaid) && (!row.payment_date || row.payment_date.length !== 10))) {
       notes.push("금액을 입력한 결제 건의 결제일을 확인해 주세요.");
     }
     if (draftPayments.some((row) => n(row.krw_amount) > 0 && normalizeCurrencyCode(currencyValue(row.currency, row.currency_custom)) !== "KRW" && n(row.foreign_amount) <= 0)) {
@@ -3575,7 +3524,7 @@ export default function DocumentsPage() {
     }
     if (fUseWallet && fFeeIncluded && n(fFeeForeign) <= 0) notes.push("충전잔액에서 함께 차감할 수수료를 입력해 주세요.");
     const expectedPayment = fUseWallet
-      ? round4(productForeign + (fShippingIncluded ? n(fShippingForeign) : 0) + (fFeeIncluded ? n(fFeeForeign) : 0))
+      ? round4(productForeign + (fShippingIncluded ? n(fShippingForeign) : 0) + (fFeeIncluded ? n(fFeeForeign) : 0) - appliedPoints)
       : fShippingIncluded ? purchasePaymentComposition.combinedForeign : productForeign;
     if (!editingPurchaseHasRefund && !hasCrossCurrencyPayments && paymentForeignSum > 0 && Math.abs(paymentForeignSum - expectedPayment) > 0.01) {
       notes.push("결제내역의 외화금액과 상품·함께 결제한 비용의 합계가 다릅니다. 결제 통화와 금액을 확인해 주세요.");
@@ -3725,7 +3674,7 @@ export default function DocumentsPage() {
         supabase
           .from("purchase")
           .select(
-            "id,created_at,supplier,purchase_date,payment_met,card_name,currency,fx_rate,total_foreign,total_amount,memo",
+            "id,created_at,supplier,purchase_date,payment_met,card_name,currency,fx_rate,total_foreign,total_amount,memo,points_used,points_earned,cancelled_at",
           )
           .order("created_at", { ascending: false }),
 
@@ -3746,7 +3695,7 @@ export default function DocumentsPage() {
         supabase
           .from("purchase_costs")
           .select(
-            "id,created_at,purchase_id,cost_type,amount,currency,fx_rate,memo,vendor_name,cost_date",
+            "id,created_at,purchase_id,cost_type,amount,currency,fx_rate,memo,vendor_name,cost_date,cancelled_at",
           )
           .order("created_at", { ascending: false })
           .limit(500),
@@ -3792,10 +3741,11 @@ export default function DocumentsPage() {
       if (fRes.error) throw fRes.error;
       if (wtRes.error) throw wtRes.error;
 
-      const p = (pRes.data ?? []) as PurchaseRow[];
+      const p = (pRes.data ?? []).filter((row: any) => !row.cancelled_at) as PurchaseRow[];
       const pp = (ppRes.data ?? []) as PurchasePaymentRow[];
-      const it = (iRes.data ?? []) as PurchaseItemRow[];
-      const cs = (cRes.data ?? []) as PurchaseCostRow[];
+      const activePurchaseIds = new Set(p.map(row => row.id));
+      const it = (iRes.data ?? []).filter((row: any) => activePurchaseIds.has(row.purchase_id)) as PurchaseItemRow[];
+      const cs = (cRes.data ?? []).filter((row: any) => !row.cancelled_at) as PurchaseCostRow[];
       const as = (aRes.data ?? []) as CostAllocationRow[];
       const ars = (arRes.data ?? []) as ArrivalRow[];
       const vs = (vRes.data ?? []) as VendorRow[];
@@ -3810,7 +3760,16 @@ export default function DocumentsPage() {
       setArrivals(ars);
       setVendors(vs.filter((x) => x.is_active !== false));
       setWalletTopups(wts);
+      const pointRes = await supabase.from("vendor_point_ledger").select("vendor_name,amount");
+      if (pointRes.error) throw pointRes.error;
+      setPointRows(pointRes.data ?? []);
       setFiles(fs);
+      const cancelRes = await supabase.from("manager_cancellations").select("id,created_at,action_kind,source_id,reason,effects,snapshot").order("created_at", { ascending: false }).limit(100);
+      if (cancelRes.error) throw cancelRes.error;
+      setCancellationRows(cancelRes.data ?? []);
+      const targetsRes = await supabase.from("cost_allocation_targets").select("cost_id,item_id");
+      if (targetsRes.error) throw targetsRes.error;
+      setHistoryTargets(targetsRes.data ?? []);
 
       if (!selectedPurchaseId && p.length > 0) {
         const first = [...p].sort((a, b) => {
@@ -4029,6 +3988,8 @@ export default function DocumentsPage() {
   }
 
   function resetCostForm() {
+    setCPointMode(false); setCPointAmount(""); setCPointUsageType("상품");
+    setCPointQuote(null); cPointRequestRef.current = null;
     setCType("배송비(거래처)");
     setCAllocationBasis("auto");
     setCUseWallet(false);
@@ -4213,6 +4174,8 @@ export default function DocumentsPage() {
       fTotalKRW,
       fMemo,
       fUseWallet,
+      fPointsUsed,
+      fPointsEarned,
       draftPayments,
       draftPurchaseCosts,
       draftItems: draftItems.map((item) => ({
@@ -4272,6 +4235,8 @@ export default function DocumentsPage() {
       setFTotalKRW(String(draft.fTotalKRW ?? ""));
       setFMemo(draft.fMemo ?? "");
       setFUseWallet(!!draft.fUseWallet && draft.buyMode !== "edit");
+      setFPointsUsed(String(draft.fPointsUsed ?? ""));
+      setFPointsEarned(String(draft.fPointsEarned ?? ""));
       setDraftPayments(
         Array.isArray(draft.draftPayments) && draft.draftPayments.length > 0
           ? draft.draftPayments
@@ -4339,6 +4304,8 @@ export default function DocumentsPage() {
     setBuyMode("create");
     setEditingPurchaseId(null);
     setFSupplier("");
+    setFPointsUsed("");
+    setFPointsEarned("");
     setFPurchaseDate("");
     setFPaymentMet("카드");
     setFCardName("");
@@ -4397,6 +4364,7 @@ export default function DocumentsPage() {
   }
 
   function openPurchaseEditModal(p: PurchaseRow) {
+    if (n(p.points_used) > 0 || n(p.points_earned) > 0) { setErr("포인트가 연결된 매입은 금액 수정이 잠겨 있어요. 잔액·원가 불일치를 막기 위한 제한이에요."); return; }
     const purchaseItems = itemsByPurchase.get(p.id) ?? [];
 
     setBuyMode("edit");
@@ -4554,6 +4522,12 @@ export default function DocumentsPage() {
 
   async function savePurchaseWithItems() {
     setErr(null);
+    if ((n(fPointsUsed) || n(fPointsEarned)) && (!fUseWallet || buyMode !== "create" || walletCurrency !== "JPY")) {
+      setErr("포인트는 JPY 충전잔액으로 새 매입을 등록할 때 사용해 주세요."); return;
+    }
+    if (![n(fPointsUsed), n(fPointsEarned)].every((v) => Number.isSafeInteger(v) && v >= 0) || appliedPoints > pointBalance || appliedPoints > round4(walletProductForeign + walletShippingForeign + walletFeeForeign)) {
+      setErr("포인트는 0 이상의 정수로 입력하고, 사용액은 현재 잔액과 결제 전 금액을 넘지 않아야 해요."); return;
+    }
     setMsg(null);
 
     const isRefundedPurchaseEdit = editingPurchaseHasRefund;
@@ -4630,7 +4604,7 @@ export default function DocumentsPage() {
         ? calcFxRate(walletQuote.productKRW, productForeign)
         : purchasePaymentComposition.productFx;
     const validPayments = draftPayments.filter(
-      (row) => n(row.krw_amount) > 0,
+      (row) => n(row.krw_amount) > 0 || (fullyPointPaid && row.payment_method === "충전잔액"),
     );
 
     if (!cur) {
@@ -4663,11 +4637,11 @@ export default function DocumentsPage() {
         return;
       }
     }
-    if (validPayments.length === 0 || totalKRW <= 0) {
+    if (validPayments.length === 0 || (totalKRW <= 0 && !fullyPointPaid)) {
       setErr("결제내역을 1건 이상 입력하고 원화 실결제금액을 넣어줘.");
       return;
     }
-    if (invoiceProductForeign <= 0 || productForeign <= 0 || fx <= 0) {
+    if (invoiceProductForeign <= 0 || productForeign <= 0 || (fx <= 0 && !fullyPointPaid)) {
       setErr("전체 상품금액과 원화 결제금액을 확인해줘. 상품별 외화가격은 비워두면 수량 기준으로 자동 분배돼.");
       return;
     }
@@ -4710,7 +4684,7 @@ export default function DocumentsPage() {
     // 충전잔액 사용 시 상품·배송비·수수료가 모두 같은 잔액에서 차감된다.
     // 따라서 결제내역 외화합계도 실제 총 충전잔액 차감 외화와 맞아야 한다.
     const expectedPaymentForeign = fUseWallet
-      ? combinedForeign
+      ? round4(combinedForeign - appliedPoints)
       : fShippingIncluded
         ? combinedForeign
         : productForeign;
@@ -4747,12 +4721,12 @@ export default function DocumentsPage() {
         return;
       }
       if (!payment.payment_date || payment.payment_date.length !== 10) {
-        setErr("각 결제내역의 결제일을 YYYY-MM-DD 형식으로 입력해줘.");
+        setErr(fUseWallet ? "잔액 사용일을 YYYY-MM-DD 형식으로 입력해줘." : "각 결제내역의 결제일을 YYYY-MM-DD 형식으로 입력해줘.");
         return;
       }
       if (
         normalizeCurrencyCode(paymentCurrency) !== "KRW" &&
-        n(payment.foreign_amount) <= 0
+        n(payment.foreign_amount) <= 0 && !fullyPointPaid
       ) {
         setErr("외화 결제는 외화 결제금액도 입력해줘.");
         return;
@@ -4854,7 +4828,7 @@ export default function DocumentsPage() {
           .from("purchase")
           .update({
             supplier: fSupplier || null,
-            purchase_date: fPurchaseDate || null,
+            purchase_date: validPayments[0]?.payment_date || null,
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
@@ -4870,7 +4844,7 @@ export default function DocumentsPage() {
           .from("purchase")
           .insert({
             supplier: fSupplier || null,
-            purchase_date: fPurchaseDate || null,
+            purchase_date: validPayments[0]?.payment_date || null,
             payment_met: paymentPrimary?.payment_method || null,
             card_name: paymentPrimary?.card_name || null,
             currency: cur,
@@ -4911,7 +4885,7 @@ export default function DocumentsPage() {
       // 원화 원가는 서로 분리해서 저장한다.
       if (fUseWallet && buyMode === "create") {
         const consumeRes = await supabase.rpc(
-          "consume_vendor_wallet",
+          (appliedPoints > 0 || n(fPointsEarned) > 0) ? "consume_vendor_wallet_with_points" : "consume_vendor_wallet",
           {
             p_purchase_id: purchaseId,
             p_vendor_name: fSupplier.trim(),
@@ -4922,6 +4896,12 @@ export default function DocumentsPage() {
             p_shipping_foreign: shippingForeign,
             p_fee_foreign: feeForeign,
             p_memo: "매입관리 자동 차감",
+            ...((appliedPoints > 0 || n(fPointsEarned) > 0) ? {
+              p_points_used: appliedPoints, p_points_earned: n(fPointsEarned),
+              p_expected_product_krw: walletQuote.productKRW,
+              p_expected_shipping_krw: walletQuote.shippingKRW,
+              p_expected_fee_krw: walletQuote.feeKRW,
+            } : {}),
           },
         );
 
@@ -4958,7 +4938,7 @@ export default function DocumentsPage() {
           Math.round(n(consumed.total_krw)),
         );
 
-        if (consumedTotalKRW <= 0) {
+        if (consumedTotalKRW <= 0 && !fullyPointPaid) {
           throw new Error(
             "충전잔액 원화 계산 결과가 0원이야. 충전내역을 확인해줘.",
           );
@@ -5051,8 +5031,8 @@ export default function DocumentsPage() {
       }
 
       const savedPurchaseItemIds: string[] = [];
-      const crossCurrencyProductParts = hasCrossCurrencyPayments && !isRefundedPurchaseEdit
-        ? distributeByWeightsCeilIntSigned(Math.round(productKRW), cleaned.map((row) => Math.max(0, row.foreign_total)))
+      const crossCurrencyProductParts = (hasCrossCurrencyPayments || appliedPoints > 0) && !isRefundedPurchaseEdit
+        ? allocateExactKRW(Math.round(productKRW), cleaned.map((row) => Math.max(0, row.foreign_total)))
         : null;
 
       for (let idx = 0; idx < cleaned.length; idx++) {
@@ -5160,13 +5140,13 @@ export default function DocumentsPage() {
               memo: `${INCLUDED_SHIPPING_MEMO_HEADER}
   상품값과 같은 결제로 지급`,
               vendor_name: fShippingVendor.trim() || fSupplier || null,
-              cost_date: fPurchaseDate || null,
+              cost_date: validPayments[0]?.payment_date || null,
             })
             .select("id")
             .single();
           if (shippingCost.error) throw shippingCost.error;
   
-          const shippingAllocated = distributeByWeightsCeilIntSigned(
+          const shippingAllocated = (appliedPoints > 0 ? allocateExactKRW : distributeByWeightsCeilIntSigned)(
             shippingKRW,
             cleaned.map((row) => Math.max(0, row.qty)),
           );
@@ -5210,7 +5190,7 @@ export default function DocumentsPage() {
 
         if (feeCost.error) throw feeCost.error;
 
-        const feeAllocated = distributeByWeightsCeilIntSigned(
+        const feeAllocated = (appliedPoints > 0 ? allocateExactKRW : distributeByWeightsCeilIntSigned)(
           walletQuote.feeKRW,
           cleaned.map((row) => Math.max(0, row.foreign_total)),
         );
@@ -5544,85 +5524,64 @@ export default function DocumentsPage() {
     }
   }
 
-  async function deletePurchase(purchaseId: string) {
-    if (
-      !confirm(
-        "이 매입을 삭제할까? (연결된 상품/추가비용/배분도 같이 삭제될 수 있어)",
-      )
-    )
-      return;
-
-    setLoading(true);
-    setErr(null);
-    setMsg(null);
-    try {
-      const del = await supabase.from("purchase").delete().eq("id", purchaseId);
-      if (del.error) throw del.error;
-
-      setSelectedItemIds((prev) =>
-        prev.filter(
-          (id) => items.find((x) => x.id === id)?.purchase_id !== purchaseId,
-        ),
-      );
-      if (selectedPurchaseId === purchaseId) setSelectedPurchaseId(null);
-
-      setMsg("매입 삭제 완료");
-      await refreshAll();
-    } catch (e: any) {
-      setErr(e?.message ?? String(e));
-    } finally {
-      setLoading(false);
-    }
+  function processingProducts(cost: PurchaseCostRow) {
+    const refundItems = parseRefundMeta(cost.memo).items;
+    const ids = new Set([
+      ...historyTargets.filter(row => row.cost_id === cost.id).map(row => row.item_id),
+      ...allocations.filter(row => row.purchase_cost_id === cost.id).map(row => row.purchase_item_id),
+      ...refundItems.map(row => row.item_id),
+    ]);
+    return [...ids].map(id => {
+      const current = itemMap.get(id);
+      const original = refundItems.find(row => row.item_id === id);
+      return { id, name: current?.item_name || original?.override_name || original?.original_name || "상품명 확인 필요",
+        qty: n(current?.qty ?? original?.override_qty), before: original?.original_qty };
+    });
   }
 
-  async function deleteCost(costId: string) {
-    if (!confirm("이 추가비용을 삭제할까?")) return;
-
-    setLoading(true);
-    setErr(null);
-    setMsg(null);
-    try {
-      const targetCost = costs.find((c) => c.id === costId) ?? null;
-      const isRefund = normalizeCostType(targetCost?.cost_type) === "환불";
-      const affectedItemIds = isRefund
-        ? getRefundMetaItemIds(targetCost?.memo)
-        : [];
-
-      // 환불 비용을 지우면 해당 상품의 원래 수량/상품명부터 원복한다.
-      if (isRefund) {
-        await restoreRefundAdjustedItemsFromMemo(targetCost?.memo);
-      }
-
-      const del = await supabase
-        .from("purchase_costs")
-        .delete()
-        .eq("id", costId);
-      if (del.error) throw del.error;
-
-      // 버튼을 따로 누를 필요 없이, 환불 취소로 수량이 되돌아간 경우에도
-      // 연결된 공동 추가비용을 환불 후 남은 상품 총금액(개당 금액 × 남은 수량) 기준으로 자동 재배분한다.
-      if (isRefund && affectedItemIds.length > 0) {
-        await rebalanceSharedCostsAfterRefund(
-          affectedItemIds,
-          costs,
-          allocations,
-        );
-      }
-
-      setMsg(
-        isRefund
-          ? "환불 삭제 완료 · 상품 원복 및 공동비용 자동 재배분 완료"
-          : "추가비용 삭제 완료",
-      );
-      await refreshAll();
-    } catch (e: any) {
-      setErr(e?.message ?? String(e));
-    } finally {
-      setLoading(false);
-    }
+  function renderProcessingProducts(cost: PurchaseCostRow) {
+    const products = processingProducts(cost);
+    if (!products.length) return <div style={styles.small}>대상 상품 연결 기록이 없어요. 해당 매입의 상품을 임의로 표시하지 않아요.</div>;
+    return <div style={{ padding: 10, background: "#f8fafc", borderRadius: 8, display: "grid", gap: 6, overflowWrap: "anywhere" }}>
+      <b style={{ fontSize: 12 }}>대상 상품 {products.length}종 · 현재 총 {fmtNum(products.reduce((sum, row) => sum + row.qty, 0))}개</b>
+      {products.slice(0, 3).map(row => <div key={row.id} style={{ fontSize: 12 }}>{row.name} · {row.before !== undefined ? `환불 전 ${row.before}개 → 현재 ${row.qty}개` : `현재 ${row.qty}개`}</div>)}
+      {products.length > 3 ? <details><summary style={{ cursor: "pointer", fontSize: 12 }}>나머지 {products.length - 3}종 보기</summary><div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 5, paddingTop: 6 }}>{products.slice(3).map(row => <div key={row.id} style={{ fontSize: 12 }}>{row.name} · 현재 {row.qty}개</div>)}</div></details> : null}
+    </div>;
   }
+
+  async function cancelProcessing(kind: "cost" | "purchase", id: string) {
+    if (cancellationBusyRef.current) return;
+    const reason = window.prompt("취소 사유를 적어줘. 원래 기록과 취소 이력은 보관돼.", "잘못 입력해서 취소");
+    if (!reason?.trim()) return;
+    cancellationBusyRef.current = true; setLoading(true); setErr(null); setMsg(null);
+    try {
+      const preview = await supabase.rpc("cancel_manager_action", { p_kind: kind, p_id: id, p_reason: reason.trim(), p_apply: false });
+      if (preview.error) throw preview.error;
+      const effects = preview.data;
+      if (effects.already_cancelled) { await refreshAll(); setMsg("이미 취소된 처리야."); return; }
+      const quantities = (effects.quantity_changes ?? []).map((row: any) => `${row.name || "상품"}: ${row.before}개 → ${row.after}개`).join("\n");
+      const message = [kind === "purchase" ? "매입 전체를 취소할까? 상품은 현재 목록에서 제외되고 원본은 취소 이력에 남아." : "이 처리를 취소할까? 비용과 상품 원가를 함께 되돌려.", quantities,
+        `포인트: ${Number(effects.points_delta) > 0 ? "+" : ""}${fmtNum(Number(effects.points_delta))}점`,
+        `충전잔액: ${effects.wallet_changes ? effects.wallet_changes.map((row: any) => `+${fmtNum(Number(row.amount))} ${row.currency}`).join(" / ") || "변경 없음" : `${Number(effects.wallet_delta) > 0 ? "+" : ""}${fmtNum(Number(effects.wallet_delta))} ${effects.wallet_currency || ""}`}`,
+        "실제 카드 승인·송금은 취소되지 않아. 이 관리툴의 기록만 되돌려.", `사유: ${reason}`].filter(Boolean).join("\n\n");
+      if (!window.confirm(message)) return;
+      const result = await supabase.rpc("cancel_manager_action", { p_kind: kind, p_id: id, p_reason: reason.trim(), p_apply: true, p_expected_token: effects.token });
+      if (result.error) throw result.error;
+      setItemDetailOpen(false);
+      if (kind === "purchase") { setSelectedPurchaseId(null); setSelectedItemIds([]); }
+      await refreshAll(); setMsg(kind === "purchase" ? "매입 취소 완료 · 취소 이력에 원본 보관" : "처리 취소 완료 · 수량·원가·잔액을 함께 반영했어.");
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { cancellationBusyRef.current = false; setLoading(false); }
+  }
+
+  async function deletePurchase(purchaseId: string) { await cancelProcessing("purchase", purchaseId); }
+  async function deleteCost(costId: string) { await cancelProcessing("cost", costId); }
 
   function openCostEditModal(cost: PurchaseCostRow) {
+    if (cost.memo?.startsWith("[사후 포인트 사용]")) {
+      setErr("포인트 연결 할인은 처리내역·취소에서 취소한 뒤 다시 등록해줘."); return;
+    }
+    if (cost.memo?.startsWith("[충전잔액 사용]")) { setErr("충전잔액이 연결된 비용은 처리내역·취소에서 취소한 뒤 다시 등록해줘."); return; }
     const normalizedType =
       normalizeCostType(cost.cost_type) || "배송비(거래처)";
     const linkedAllocationRows = allocations.filter(
@@ -5980,6 +5939,11 @@ export default function DocumentsPage() {
         if (insAlloc.error) throw insAlloc.error;
       }
 
+      if (ecType !== "환불" && alloc.length > 0) {
+        const sync = await supabase.rpc("sync_cost_allocation_targets", { p_cost_id: editingCost.id, p_item_ids: chosen.map(item => item.id) });
+        if (sync.error) throw sync.error;
+      }
+
       if (ecReceiptFile) {
         await upsertPurchaseFile({
           cost_id: editingCost.id,
@@ -6189,7 +6153,41 @@ export default function DocumentsPage() {
     openCostEditModal(target);
   }
 
+  async function processCostPoints(apply: boolean) {
+    if (cPointBusyRef.current) return;
+    setErr(null); setMsg(null);
+    const points = Number(cPointAmount);
+    if (!Number.isSafeInteger(points) || points <= 0 || !selectedItemIds.length || !/^\d{4}-\d{2}-\d{2}$/.test(cDate)) {
+      setErr("상품을 선택하고 사용일과 사용할 포인트를 양의 정수로 입력해줘."); return;
+    }
+    if (apply && (!cPointQuote || cPointQuote.signature !== cPointSignature)) {
+      setErr("입력한 내용으로 복원 금액 확인을 먼저 눌러줘."); return;
+    }
+    cPointBusyRef.current = true; setLoading(true);
+    try {
+      if (!cPointRequestRef.current || cPointRequestRef.current.signature !== cPointSignature) {
+        cPointRequestRef.current = { signature: cPointSignature, id: crypto.randomUUID() };
+      }
+      const res = await supabase.rpc("apply_cost_points", {
+        p_item_ids: selectedItemIds.slice().sort(), p_points: points,
+        p_usage_date: cDate, p_usage_type: cPointUsageType, p_apply: apply,
+        p_expected_krw: apply ? cPointQuote!.krw : null,
+        p_request_id: apply ? cPointRequestRef.current.id : null, p_memo: cMemo || null,
+      });
+      if (res.error) throw res.error;
+      if (!apply) {
+        setCPointQuote({ signature: cPointSignature, krw: Number(res.data.krw), balance: Number(res.data.balance), vendor: String(res.data.vendor) });
+      } else {
+        setCostModalOpen(false); setCostDirty(false);
+        setMsg(`${points}점 사용 · 충전잔액 ${points}엔 복원 · 원가 ${fmtKRW(Number(res.data.krw))} 차감 완료`);
+        await refreshAll(); resetCostForm();
+      }
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { cPointBusyRef.current = false; setLoading(false); }
+  }
+
   async function saveCostAndAllocate() {
+    if (isCostPointUse) { await processCostPoints(true); return; }
     setErr(null);
     setMsg(null);
 
@@ -6469,8 +6467,10 @@ export default function DocumentsPage() {
 
       if (cUseWallet) {
         const consumeRes = await supabase.rpc(
-          "consume_vendor_wallet",
+          "consume_vendor_wallet_for_cost",
           {
+            p_cost_id: costId,
+            p_expected_krw: costWalletKRW,
             p_purchase_id: linkedPurchaseId,
             p_vendor_name: cVendorName.trim(),
             p_currency: costWalletCurrency,
@@ -6843,6 +6843,7 @@ export default function DocumentsPage() {
           새로고침
         </button>
 
+        <button style={styles.btn("ghost")} disabled={loading} onClick={() => setProcessingHistoryOpen(true)}>처리내역·취소</button>
         {legacyRefundRestoreCandidates.length > 0 ? (
           <button
             style={styles.btn("ghost")}
@@ -7177,7 +7178,7 @@ export default function DocumentsPage() {
                           deletePurchase(p.id);
                         }}
                       >
-                        삭제
+                        매입 취소
                       </button>
                     </div>
                   </div>
@@ -8560,19 +8561,7 @@ export default function DocumentsPage() {
               </select>
             </div>
 
-            <div style={styles.field}>
-              <div style={styles.label}>결제일(선택)</div>
-              <input
-                style={styles.input}
-                type="text"
-                inputMode="numeric"
-                placeholder="YYYY-MM-DD"
-                value={fPurchaseDate}
-                onChange={(e) =>
-                  setFPurchaseDate(formatDateInput(e.target.value))
-                }
-              />
-            </div>
+
 
             <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -8599,7 +8588,7 @@ export default function DocumentsPage() {
                     <button type="button" style={styles.btn("danger")} disabled={fUseWallet} onClick={() => setDraftPayments((prev) => prev.length === 1 ? prev : prev.filter((row) => row.key !== payment.key))}>삭제</button>
                   </div>
                   <div data-tablet-role="purchase-form-grid" style={styles.grid2}>
-                    <div style={styles.field}><div style={styles.label}>{fUseWallet ? "실제 결제일 (충전일과 별도)" : "결제일"}</div><input style={styles.input} value={payment.payment_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_date: formatDateInput(e.target.value) } : row))} /></div>
+                    <div style={styles.field}><div style={styles.label}>{fUseWallet ? "잔액 사용일(필수)" : "결제일(필수)"}</div><input style={styles.input} value={payment.payment_date} placeholder="YYYY-MM-DD" onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_date: formatDateInput(e.target.value) } : row))} /></div>
                     <div style={styles.field}><div style={styles.label}>결제수단</div><select style={styles.select} value={payment.payment_method} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, payment_method: e.target.value } : row))}><option value="카드">카드</option><option value="현금">현금</option><option value="계좌이체">계좌이체</option><option value="충전잔액">충전잔액</option><option value="기타">기타</option></select></div>
                     <div style={styles.field}><div style={styles.label}>카드명·계좌(선택)</div><input style={styles.input} value={payment.card_name} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, card_name: e.target.value } : row))} placeholder="예: 신한 / 사업자계좌" /></div>
                     <div style={styles.field}><div style={styles.label}>결제 통화</div><select style={styles.select} value={payment.currency} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency: e.target.value } : row))}>{CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>{payment.currency === "직접입력" && <input style={styles.input} value={payment.currency_custom} onChange={(e) => setDraftPayments((prev) => prev.map((row) => row.key === payment.key ? { ...row, currency_custom: e.target.value } : row))} placeholder="예: THB" />}</div>
@@ -9083,10 +9072,20 @@ export default function DocumentsPage() {
                   }}
                 >
                   거래처관리에서 등록한 충전내역을 여기서 불러와 사용해.
-                  충전일과 실제 상품 결제일은 서로 다르게 저장할 수 있어.
+                  잔액 사용일은 충전일과 별도예요. 배송이 시작될 때 잔액이 차감된다면 배송시작일을 입력하세요.
                 </div>
               </div>
 
+              {fUseWallet && buyMode === "create" && walletCurrency === "JPY" ? (
+                <div style={{ padding: 12, border: "1px solid #ddd6fe", borderRadius: 12, display: "grid", gap: 8 }}>
+                  <b style={{fontSize:13}}>포인트 · 현재 {fmtNum(pointBalance)}점 (1점＝1엔)</b>
+                  <div style={styles.grid2}>
+                    <div style={styles.field}><div style={styles.label}>이번에 사용한 포인트</div><input style={styles.input} type="number" min="0" step="1" value={fPointsUsed} onChange={(e)=>{setFPointsUsed(e.target.value);setBuyDirty(true)}} placeholder="사용하지 않으면 0"/></div>
+                    <div style={styles.field}><div style={styles.label}>이번 구매로 받은 포인트</div><input style={styles.input} type="number" min="0" step="1" value={fPointsEarned} onChange={(e)=>{setFPointsEarned(e.target.value);setBuyDirty(true)}} placeholder="주문내역의 획득 포인트"/></div>
+                  </div>
+                  <div style={styles.small}>상품·배송비·수수료에서 포인트를 금액 비율로 차감하고, 남은 {fmtNum(pointNetParts.net)}엔만 충전잔액에서 사용해요. 새 적립은 사용 처리 후 더해져요.</div>
+                </div>
+              ) : null}
               {!fSupplier.trim() ? (
                 <div
                   style={{
@@ -9990,6 +9989,24 @@ export default function DocumentsPage() {
         </div>
       </SafeModal>
 
+      <SafeModal open={processingHistoryOpen} title="처리내역·취소" onClose={() => setProcessingHistoryOpen(false)}>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={styles.small}>전체환불로 수량이 0인 상품도 여기서 환불을 취소할 수 있어요. 배송비는 남은 수량, 관부과세는 남은 상품금액으로 자동 재배분하며, 직접 지정한 배분 기준이 있으면 그 기준을 따라요. 같은 상품을 여러 번 환불했다면 최근 기록부터 취소하세요. 취소는 실제 카드·송금에 영향을 주지 않아요.</div>
+          <strong>등록한 처리 · 최근 {costs.length}건</strong>
+          {costs.length === 0 ? <div style={styles.small}>등록한 추가비용이나 환불이 없어요.</div> : costs.map(cost => (
+            <div key={cost.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, display: "grid", gap: 6 }}>
+              <b>{cost.cost_date || "날짜 없음"} · {cost.cost_type} · {cost.vendor_name || purchaseMap.get(cost.purchase_id || "")?.supplier || "거래처 미지정"}</b>
+              {renderProcessingProducts(cost)}
+              <div style={styles.small}>{stripCostAllocationBasisMeta(stripRefundMetaDetail(cost.memo)) || "메모 없음"}</div>
+              <div style={{ display: "flex", gap: 8 }}><button type="button" disabled={loading} style={styles.smallBtn} onClick={() => { setProcessingHistoryOpen(false); openCostEditModal(cost); }}>수정</button><button type="button" disabled={loading} style={styles.dangerSmallBtn} onClick={() => deleteCost(cost.id)}>{cost.cost_type === "환불" ? "환불 취소·수량 복구" : "처리 취소"}</button></div>
+            </div>
+          ))}
+          <strong>취소 이력 · 최근 100건</strong>
+          {cancellationRows.map(row => <div key={row.id} style={{ borderBottom: "1px solid #e5e7eb", padding: 10, fontSize: 12 }}><b>{new Date(row.created_at).toLocaleString("ko-KR")} · {({ cost: "추가비용/환불", purchase: "매입", points: "포인트", topup: "충전" } as Record<string, string>)[row.action_kind]} 취소</b><div>{row.reason}</div>{row.action_kind === "cost" ? renderProcessingProducts({ ...(row.snapshot?.cost || row.snapshot || {}), id: row.source_id } as PurchaseCostRow) : row.action_kind === "purchase" ? <div>{(row.snapshot?.items || []).map((item: any) => `${item.item_name || "상품"} ${item.qty}개`).join(" · ")}</div> : null}<div>{(row.effects.quantity_changes || []).map((q: any) => `${q.name}: ${q.before} → ${q.after}개`).join(" · ")}</div></div>)}
+          <div style={styles.small}>취소 이력은 확인용이에요. 취소를 다시 되돌리는 기능은 없으며, 필요하면 새 거래로 등록하세요.</div>
+        </div>
+      </SafeModal>
+
       <SafeModal
         open={costModalOpen}
         title="추가비용 저장 + 선택 상품 자동분배"
@@ -10047,10 +10064,17 @@ export default function DocumentsPage() {
                   </option>
                 ))}
               </select>
+              {cType === "할인/쿠폰" ? (
+                <select aria-label="할인 방식" style={styles.select} value={cPointMode ? "points" : "discount"}
+                  onChange={(e) => { setCPointMode(e.target.value === "points"); setCUseWallet(false); setCPointQuote(null); }}>
+                  <option value="discount">일반 할인 / 쿠폰</option>
+                  <option value="points">포인트 사용 · 충전잔액 복원</option>
+                </select>
+              ) : null}
             </div>
 
             <div style={styles.field}>
-              <div style={styles.label}>날짜</div>
+              <div style={styles.label}>{isCostPointUse ? "포인트 사용일(필수)" : "날짜"}</div>
               <input
                 style={styles.input}
                 type="text"
@@ -10061,6 +10085,25 @@ export default function DocumentsPage() {
               />
             </div>
 
+            {isCostPointUse ? (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #ddd6fe", borderRadius: 12, padding: 14, display: "grid", gap: 10 }}>
+                <strong>이미 결제한 금액에 포인트 적용</strong>
+                <div style={styles.small}>1점 = 1엔 · 포인트는 차감하고, 이미 사용한 충전잔액은 같은 금액만큼 복원해요. 한 매입의 상품만 선택하세요. 매입등록에서 이미 사용한 포인트는 여기에 다시 넣지 마세요.</div>
+                <div style={styles.grid2}>
+                  <label style={styles.field}>사용할 포인트<input style={styles.input} inputMode="numeric" value={cPointAmount} onChange={(e) => setCPointAmount(e.target.value)} placeholder="예: 200" /></label>
+                  <label style={styles.field}>잔액을 복원할 결제 항목<select style={styles.select} value={cPointUsageType} onChange={(e) => setCPointUsageType(e.target.value)}><option>상품</option><option>배송비</option><option>수수료</option></select></label>
+                </div>
+                <button type="button" style={styles.btn("ghost")} disabled={loading} onClick={() => processCostPoints(false)}>복원 금액 확인</button>
+                {cPointQuote?.signature === cPointSignature ? <div style={{ lineHeight: 1.8 }}>
+                  <b>{cPointQuote.vendor}</b> · 현재 {fmtNum(cPointQuote.balance)}점<br />
+                  포인트 −{fmtNum(Number(cPointAmount))}점 · 충전잔액 +{fmtNum(Number(cPointAmount))}엔<br />
+                  선택 상품 원가 −{fmtKRW(cPointQuote.krw)} · 원래 차감한 충전내역 기준
+                </div> : <div style={styles.small}>금액을 확인한 뒤 위의 저장을 누르면 포인트·잔액·원가가 함께 반영돼요.</div>}
+                <label style={styles.field}>메모(선택)<input style={styles.input} value={cMemo} onChange={(e) => setCMemo(e.target.value)} /></label>
+                <div style={styles.small}>원가 차감은 선택 상품의 상품금액 비율로 배분해요. 잘못 저장했다면 ‘처리내역·취소’에서 포인트 사용을 취소할 수 있어요.</div>
+              </div>
+            ) : null}
+            <div style={{ display: isCostPointUse ? "none" : "contents" }}>
             {cType === "환불" ? (
               <>
                 <div style={styles.field}>
@@ -10423,11 +10466,12 @@ export default function DocumentsPage() {
                 }
               />
             </div>
+            </div>
           </div>
 
           <div style={styles.hr} />
 
-          {cType !== "환불" ? (
+          {cType !== "환불" && !isCostPointUse ? (
             <div
               style={{
                 ...styles.card,
@@ -10472,6 +10516,7 @@ export default function DocumentsPage() {
             }}
           />
 
+          <div style={{ display: isCostPointUse ? "none" : "block" }}>
           <div style={{ height: 12 }} />
           <div style={{ fontWeight: 900, marginBottom: 8 }}>
             {cType === "환불" ? "환불 대상 상품" : "선택 상품별 외화 총액"}
@@ -10660,6 +10705,7 @@ export default function DocumentsPage() {
                 );
               })
             )}
+          </div>
           </div>
         </div>
       </SafeModal>
@@ -11394,13 +11440,10 @@ export default function DocumentsPage() {
                                 <button
                                   style={styles.dangerSmallBtn}
                                   onClick={() => {
-                                    if (!confirm("이 추가비용을 삭제할까?"))
-                                      return;
-                                    setItemDetailOpen(false);
                                     deleteCost(a.cost_id as string);
                                   }}
                                 >
-                                  삭제
+                                  처리 취소
                                 </button>
                               </div>
                             ) : null}
@@ -11477,12 +11520,10 @@ export default function DocumentsPage() {
                           <button
                             style={styles.dangerSmallBtn}
                             onClick={() => {
-                              if (!confirm("이 추가비용을 삭제할까?")) return;
-                              setItemDetailOpen(false);
                               deleteCost(a.cost_id as string);
                             }}
                           >
-                            삭제
+                            처리 취소
                           </button>
                         </div>
                       ) : null}

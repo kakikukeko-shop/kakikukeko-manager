@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import SafeModal from '../../components/SafeModal'
 
@@ -69,7 +69,7 @@ type WalletLedgerRow = {
   id: string
   date: string
   created_at: string
-  kind: '충전' | '상품사용' | '배송비사용' | '수수료사용'
+  kind: '충전' | '상품사용' | '배송비사용' | '수수료사용' | '포인트복원'
   currency: string
   foreign_delta: number
   krw_amount: number
@@ -128,6 +128,31 @@ export default function VendorsPage() {
   const [purchaseItems, setPurchaseItems] = useState<PurchaseItemLiteRow[]>([])
   const [walletTopups, setWalletTopups] = useState<VendorWalletTopupRow[]>([])
   const [walletUsages, setWalletUsages] = useState<VendorWalletUsageRow[]>([])
+  const [pointRestorations, setPointRestorations] = useState<Array<{ id: string; created_at: string; topup_id: string; purchase_id: string; vendor_name: string; currency: string; usage_date: string; foreign_amount: number; krw_amount: number }>>([])
+  const [cancelledSources, setCancelledSources] = useState<string[]>([])
+  const vendorCancelBusy = useRef(false)
+  const [pointRows, setPointRows] = useState<{id:string;vendor_name:string;point_date:string;amount:number;kind:string;memo:string|null;purchase_id:string|null}[]>([])
+  const [pointVendor, setPointVendor] = useState<VendorRow|null>(null)
+  const [pointDate, setPointDate] = useState(new Date().toLocaleDateString('en-CA'))
+  const [pointKind, setPointKind] = useState('purchase_earn')
+  const [pointAmount, setPointAmount] = useState('')
+  const [pointMemo, setPointMemo] = useState('')
+  const [pointSaving, setPointSaving] = useState(false)
+  function pointBalance(name?: string|null) {
+    return pointRows.filter(r=>normalizeName(r.vendor_name)===normalizeName(name)).reduce((sum,r)=>sum+Number(r.amount),0)
+  }
+  async function savePoints() {
+    if (!pointVendor?.name) return
+    const value=Number(pointAmount)
+    if (!Number.isSafeInteger(value) || value===0 || (!['adjustment'].includes(pointKind) && value<0) || !/^\d{4}-\d{2}-\d{2}$/.test(pointDate)) { setErr('포인트는 정수로, 날짜는 YYYY-MM-DD로 입력해 주세요.'); return }
+    setPointSaving(true);setErr(null)
+    try {
+      const result=await supabase.rpc('add_vendor_points',{p_vendor_name:pointVendor.name,p_point_date:pointDate,p_amount:pointKind==='use'?-Math.abs(value):value,p_kind:pointKind,p_memo:pointMemo.trim()||null})
+      if(result.error) throw result.error
+      setPointAmount('');setPointMemo('');await load();setMsg('포인트 내역을 등록했어요.')
+    } catch(e:any) {setErr(e?.message||String(e))} finally {setPointSaving(false)}
+  }
+
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [sort, setSort] =
@@ -201,7 +226,7 @@ export default function VendorsPage() {
         .from('vendor_wallet_topups')
         .select(
           'id,created_at,vendor_name,currency,topup_date,foreign_amount,krw_amount,fx_rate,remaining_foreign,memo',
-        )
+        ).is('cancelled_at', null)
         .order('topup_date', { ascending: true })
         .order('created_at', { ascending: true }),
 
@@ -209,7 +234,7 @@ export default function VendorsPage() {
         .from('vendor_wallet_usages')
         .select(
           'id,created_at,topup_id,purchase_id,vendor_name,currency,usage_date,usage_type,foreign_amount,krw_amount,fx_rate,memo',
-        )
+        ).is('cancelled_at', null)
         .order('usage_date', { ascending: true })
         .order('created_at', { ascending: true }),
     ])
@@ -256,6 +281,16 @@ export default function VendorsPage() {
     setPurchaseItems((purchaseItemRes.data ?? []) as PurchaseItemLiteRow[])
     setWalletTopups((walletTopupRes.data ?? []) as VendorWalletTopupRow[])
     setWalletUsages((walletUsageRes.data ?? []) as VendorWalletUsageRow[])
+    const cancelledRes = await supabase.from('manager_cancellations').select('source_id')
+    if(cancelledRes.error) setErr('취소 이력 조회 실패: '+cancelledRes.error.message)
+    else setCancelledSources((cancelledRes.data??[]).map(r=>r.source_id))
+    const restoresRes = await supabase.from('point_wallet_restorations').select('id,created_at,topup_id,purchase_id,vendor_name,currency,usage_date,foreign_amount,krw_amount').is('cancelled_at',null)
+    if(restoresRes.error) setErr('포인트 복원내역 조회 실패: '+restoresRes.error.message)
+    else setPointRestorations(restoresRes.data??[])
+    const pointsRes=await supabase.from('vendor_point_ledger').select('id,vendor_name,point_date,amount,kind,memo,purchase_id').order('created_at',{ascending:false})
+    if(pointsRes.error) setErr('포인트 조회 실패: '+pointsRes.error.message)
+    else setPointRows(pointsRes.data??[])
+
     setLoading(false)
   }
 
@@ -389,10 +424,10 @@ export default function VendorsPage() {
               (sum, row) => sum + Math.max(0, Number(row.foreign_amount) || 0),
               0,
             ),
-            totalUsed: usages.reduce(
-              (sum, row) => sum + Math.max(0, Number(row.foreign_amount) || 0),
-              0,
-            ),
+            totalUsed: Math.max(0, usages.reduce(
+              (sum, row) => sum + Math.max(0, Number(row.foreign_amount) || 0), 0,
+            ) - pointRestorations.filter(row => normalizeName(row.vendor_name) === vendorKey && row.currency === currency)
+              .reduce((sum,row) => sum + Number(row.foreign_amount),0)),
           }
         })
         .sort((a, b) => a.currency.localeCompare(b.currency))
@@ -401,7 +436,7 @@ export default function VendorsPage() {
     }
 
     return map
-  }, [walletTopups, walletUsages])
+  }, [walletTopups, walletUsages, pointRestorations])
 
   function getWalletSummary(v: VendorRow) {
     return walletSummaryMap.get(normalizeName(v.name)) ?? []
@@ -460,6 +495,25 @@ export default function VendorsPage() {
   function openWalletLedger(v: VendorRow) {
     setWalletVendor(v)
     setWalletLedgerModalOpen(true)
+  }
+
+  async function cancelVendorEntry(kind: 'points' | 'topup', id: string) {
+    if (vendorCancelBusy.current) return
+    const reason = window.prompt('취소 사유를 적어 주세요.', '잘못 입력해서 취소')
+    if (!reason?.trim()) return
+    vendorCancelBusy.current = true; setWalletSaving(true); setPointSaving(true); setErr(null)
+    try {
+      const preview = await supabase.rpc('cancel_manager_action', {p_kind: kind,p_id:id,p_reason:reason.trim(),p_apply:false})
+      if(preview.error) throw preview.error
+      const effect=preview.data
+      if(effect.already_cancelled) {await load();setMsg('이미 취소한 내역이에요.');return}
+      if(!window.confirm(`포인트 ${Number(effect.points_delta)>0?'+':''}${fmtNum(Number(effect.points_delta))}점 / 충전잔액 ${Number(effect.wallet_delta)>0?'+':''}${fmtNum(Number(effect.wallet_delta))} ${effect.wallet_currency||''} 변경\n이 내역을 취소할까요? 실제 송금은 취소되지 않아요.`)) return
+      const result=await supabase.rpc('cancel_manager_action',{p_kind:kind,p_id:id,p_reason:reason.trim(),p_apply:true,p_expected_token:effect.token})
+      if(result.error) throw result.error
+      if(kind==='topup') {setWalletTopupModalOpen(false);setEditingWalletTopupId(null)}
+      await load();setMsg('처리를 취소했어요. 원본과 취소 이력은 보관됩니다.')
+    } catch(e:any) {setErr(e?.message??String(e))}
+    finally {vendorCancelBusy.current=false;setWalletSaving(false);setPointSaving(false)}
   }
 
   async function saveWalletTopup() {
@@ -633,6 +687,13 @@ export default function VendorsPage() {
         })
       }
 
+      for (const row of pointRestorations) {
+        if (normalizeName(row.vendor_name) !== vendorKey || row.currency !== currency) continue
+        events.push({id: `points-${row.id}`, date: row.usage_date, created_at: row.created_at,
+          kind: '포인트복원', currency, foreign_delta: Number(row.foreign_amount),
+          krw_amount: Number(row.krw_amount), memo: '포인트 사용으로 충전잔액 복원', purchase_id: row.purchase_id})
+      }
+
       events.sort((a, b) => {
         const dateDiff = a.date.localeCompare(b.date)
         if (dateDiff !== 0) return dateDiff
@@ -658,6 +719,7 @@ export default function VendorsPage() {
     walletVendor,
     walletTopups,
     walletUsages,
+    pointRestorations,
     purchaseItemSummaryMap,
     purchaseMap,
   ])
@@ -1209,6 +1271,11 @@ export default function VendorsPage() {
                     }}
                   >
                     <div style={styles.detailLabel}>외화 충전잔액</div>
+                    <div style={{display:'flex',alignItems:'center',gap:8,margin:'8px 0',flexWrap:'wrap'}}>
+                      <b style={{fontSize:12,color:'#6d28d9'}}>포인트 {fmtNum(pointBalance(v.name))}점 · 1점＝1엔</b>
+                      <button type="button" style={styles.actionBtn} onClick={()=>{setPointVendor(v);setPointDate(new Date().toLocaleDateString('en-CA'));setPointAmount('');setPointMemo('')}}>포인트 적립·사용 내역</button>
+                    </div>
+
 
                     {getWalletSummary(v).length === 0 ? (
                       <div style={{ ...styles.detailValue, marginBottom: 8 }}>
@@ -1294,6 +1361,24 @@ export default function VendorsPage() {
       )}
 
 
+      <SafeModal open={!!pointVendor} title={`${pointVendor?.name||''} 포인트 관리`} onClose={()=>{if(!pointSaving)setPointVendor(null)}}>
+        <div style={{display:'grid',gap:12}}>
+          <b>현재 {fmtNum(pointBalance(pointVendor?.name??''))}점 · 1점＝1엔</b>
+          <div style={{fontSize:12,color:'#6b7280'}}>충전잔액과 별도예요. 무료 적립은 원화 지출에 포함하지 않아요. 처음 시작할 때 현재 보유 포인트를 ‘잔액 조정’으로 한 번 입력하세요. 이전 주문 사용분은 중복 등록하지 마세요.</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
+            <div><div style={styles.label}>날짜</div><input style={styles.input} value={pointDate} onChange={e=>setPointDate(formatDateInput(e.target.value))}/></div>
+            <div><div style={styles.label}>구분</div><select style={styles.input} value={pointKind} onChange={e=>setPointKind(e.target.value)}><option value="purchase_earn">구매 적립</option><option value="attendance">출석 적립</option><option value="use">과거 사용 · 직접 기록</option><option value="adjustment">잔액 조정 · 증가/감소</option></select></div>
+            <div><div style={styles.label}>포인트{pointKind==='adjustment'?' · 감소는 음수':''}</div><input style={styles.input} type="number" step="1" value={pointAmount} onChange={e=>setPointAmount(e.target.value)}/></div>
+            <div><div style={styles.label}>메모</div><input style={styles.input} value={pointMemo} onChange={e=>setPointMemo(e.target.value)}/></div>
+          </div>
+          <button type="button" style={styles.btnPrimary} disabled={pointSaving} onClick={savePoints}>{pointSaving?'저장 중':'포인트 등록'}</button>
+          <div style={{maxHeight:300,overflowY:'auto'}}>
+            {pointRows.filter(r=>normalizeName(r.vendor_name)===normalizeName(pointVendor?.name)).map(r=><div key={r.id} style={{padding:10,borderBottom:'1px solid #e5e7eb',fontSize:12}}><b>{r.point_date} · {r.amount>0?'+':''}{fmtNum(Number(r.amount))}점</b><div>{({purchase_earn:'구매 적립',attendance:'출석 적립',use:'사용',adjustment:'잔액 조정'} as Record<string,string>)[r.kind]}{r.purchase_id?' · 매입 연결':''} {r.memo||''}</div>{cancelledSources.includes(r.id)?<span>취소 완료</span>:!r.purchase_id&&!r.memo?.startsWith('[처리 취소]')?<button type="button" disabled={pointSaving} style={styles.actionBtn} onClick={()=>cancelVendorEntry('points',r.id)}>이 내역 취소</button>:null}</div>)}
+          </div>
+          <div style={{fontSize:11,color:'#6b7280'}}>직접 등록한 내역은 ‘이 내역 취소’로 되돌릴 수 있어요. 매입에 연결된 포인트는 매입관리에서 해당 거래를 취소하세요.</div>
+        </div>
+      </SafeModal>
+
       <SafeModal
         open={walletTopupModalOpen}
         title={
@@ -1311,6 +1396,7 @@ export default function VendorsPage() {
         }}
       >
         <div style={{ display: 'grid', gap: 14 }}>
+          {editingWalletTopupId ? <button type="button" disabled={walletSaving} style={styles.actionDeleteBtn} onClick={()=>cancelVendorEntry('topup',editingWalletTopupId)}>충전 등록 취소</button> : null}
           <div
             style={{
               border: '1px solid #ede9fe',
