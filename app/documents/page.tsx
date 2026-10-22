@@ -2040,7 +2040,28 @@ export default function DocumentsPage() {
   const [itemDetailOpen, setItemDetailOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<PurchaseItemRow | null>(null);
   const [detailAlloc, setDetailAlloc] = useState<ItemAllocationView[]>([]);
+  const [expandedAllocationKeys, setExpandedAllocationKeys] = useState<string[]>([]);
+  const draftProductListRef = useRef<HTMLDivElement | null>(null);
   const [detailQtyInput, setDetailQtyInput] = useState("");
+
+  function toggleAllocationList(key: string) {
+    setExpandedAllocationKeys((keys) => keys.includes(key)
+      ? keys.filter((value) => value !== key)
+      : [...keys, key]);
+  }
+
+  function renderRelatedAllocationItems(allocation: ItemAllocationView) {
+    return (
+      <div style={{ maxHeight: 220, overflowY: "auto", padding: 10, background: "#f8f9fc", borderRadius: 10, fontSize: 12, lineHeight: 1.6 }}>
+        <div style={{ padding: "6px 8px", background: "#ede9fe", color: "#5b21b6", borderRadius: 6, fontWeight: 800, overflowWrap: "anywhere" }}>
+          {detailItem?.item_name || "(이름 없음)"} · 현재 상품
+        </div>
+        {allocation.related_item_names.map((name, index) => (
+          <div key={index} style={{ padding: "6px 8px", borderBottom: "1px solid #e5e7eb", overflowWrap: "anywhere" }}>{name}</div>
+        ))}
+      </div>
+    );
+  }
   const [detailQtySaving, setDetailQtySaving] = useState(false);
 
   const [fSupplier, setFSupplier] = useState("");
@@ -2407,6 +2428,36 @@ export default function DocumentsPage() {
     }
     return map;
   }, [allocations]);
+
+  // 저장된 배분금액을 비용 종류별로 합산한다. 할인 등 음수도 그대로 표시한다.
+  const allocationDetailsByItem = useMemo(() => {
+    const costById = new Map(costs.map((cost) => [cost.id, cost]));
+    const result = new Map<string, Map<string, number>>();
+    for (const allocation of allocations) {
+      const cost = costById.get(allocation.purchase_cost_id);
+      const label = normalizeCostType(cost?.cost_type) || "항목 미확인";
+      const rows = result.get(allocation.purchase_item_id) ?? new Map<string, number>();
+      rows.set(label, (rows.get(label) ?? 0) + n(allocation.allocated_amount));
+      result.set(allocation.purchase_item_id, rows);
+    }
+    return result;
+  }, [allocations, costs]);
+
+  function renderAllocationDetails(itemId: string, qty: number, total: number) {
+    const rows = Array.from(allocationDetailsByItem.get(itemId) ?? [])
+      .filter(([, amount]) => amount !== 0);
+    return (
+      <div style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+        {rows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
+          <div key={label}>{label}: {fmtKRW(amount)}</div>
+        ))}
+        <div style={{ fontWeight: 800 }}>합계 {fmtKRW(total)}</div>
+        <div style={{ color: "#6b7280" }}>
+          {qty > 0 ? `개당 ${fmtKRW(ceilInt(total / qty))}` : "전체환불 · 개당 계산 제외"}
+        </div>
+      </div>
+    );
+  }
 
   const sortedVisibleItems = useMemo(() => {
     const list = [...visibleItems];
@@ -2827,6 +2878,12 @@ export default function DocumentsPage() {
     );
   }, [draftPayments, fCurrency, fCurrencyCustom]);
 
+  // Different currencies must never be added or subtracted as raw amounts.
+  const hasCrossCurrencyPayments = draftPayments.some((payment) =>
+    normalizeCurrencyCode(currencyValue(payment.currency, payment.currency_custom)) !==
+    normalizeCurrencyCode(currencyValue(fCurrency, fCurrencyCustom)),
+  );
+
   const paymentPrimary = useMemo(
     () => draftPayments.find((row) => n(row.krw_amount) > 0) ?? draftPayments[0] ?? null,
     [draftPayments],
@@ -2873,7 +2930,9 @@ export default function DocumentsPage() {
               ),
           )
         : fShippingIncluded
-          ? Math.max(0, paymentForeignSum || n(fCombinedForeign))
+          ? hasCrossCurrencyPayments
+            ? round4(actualProductForeign + Math.max(0, n(fShippingForeign)))
+            : Math.max(0, paymentForeignSum || n(fCombinedForeign))
           : editingPurchaseHasRefund
             ? Math.max(
                 0,
@@ -2968,6 +3027,7 @@ export default function DocumentsPage() {
   }, [
     fTotalForeign,
     enteredDraftItemForeignSum,
+    hasCrossCurrencyPayments,
     fUseWallet,
     fShippingIncluded,
     fFeeIncluded,
@@ -3029,6 +3089,7 @@ export default function DocumentsPage() {
       payment.currency_custom,
     );
     if (normalizeCurrencyCode(paymentCurrency) === "KRW") return;
+    if (normalizeCurrencyCode(paymentCurrency) !== normalizeCurrencyCode(currencyValue(fCurrency, fCurrencyCustom))) return;
 
     const autoForeign = fUseWallet
       ? Math.max(
@@ -3064,6 +3125,8 @@ export default function DocumentsPage() {
   }, [
     draftPayments,
     manualPaymentForeignKeys,
+    fCurrency,
+    fCurrencyCustom,
     fUseWallet,
     fShippingIncluded,
     fFeeIncluded,
@@ -3076,7 +3139,7 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (!fShippingIncluded) return;
-    if (fUseWallet) return;
+    if (fUseWallet || hasCrossCurrencyPayments) return;
     if (editingPurchaseHasRefund) return;
     if (paymentForeignSum <= 0) return;
 
@@ -3099,6 +3162,7 @@ export default function DocumentsPage() {
   }, [
     fShippingIncluded,
     fUseWallet,
+    hasCrossCurrencyPayments,
     editingPurchaseHasRefund,
     paymentForeignSum,
     fTotalForeign,
@@ -3470,6 +3534,60 @@ export default function DocumentsPage() {
     purchasePaymentComposition.productKRW,
     purchasePaymentComposition.productFx,
   ]);
+
+  // 안내 전용: 기존 자동계산 및 저장 로직은 변경하지 않는다.
+  const paymentTotalsByCurrency = (() => {
+    const totals = new Map<string, number>();
+    for (const row of draftPayments) {
+      const currency = currencyValue(row.currency, row.currency_custom);
+      if (!currency) continue;
+      const amount = normalizeCurrencyCode(currency) === "KRW" ? n(row.krw_amount) : n(row.foreign_amount);
+      totals.set(currency, round4((totals.get(currency) ?? 0) + Math.max(0, amount)));
+    }
+    return Array.from(totals);
+  })();
+
+  const purchaseEntryGuide = (() => {
+    const named = draftItems.filter((item) => item.item_name.trim());
+    const qty = named.reduce((sum, item) => sum + Math.max(0, n(item.qty)), 0);
+    const currency = currencyValue(fCurrency, fCurrencyCustom);
+    const productForeign = purchasePaymentComposition.productForeign;
+    const computed = computeDraftForeignTotals(draftItems, productForeign);
+    const notes: string[] = [];
+    if (!named.length) notes.push("상품명과 수량을 입력해 주세요.");
+    if (n(fTotalForeign) <= 0) notes.push("인보이스의 상품금액을 입력하거나 상품별 가격을 입력해 주세요.");
+    if (named.length && productForeign > 0 && !computed.ok) notes.push(computed.message);
+    if (!currency) notes.push("상품 기준 통화를 선택해 주세요.");
+    if (fUseWallet && buyMode === "create") {
+      if (!fSupplier.trim()) notes.push("충전잔액을 사용할 거래처를 선택해 주세요.");
+      if (!walletQuote.ok) notes.push("충전잔액이 부족합니다. 잔액과 차감할 금액을 확인해 주세요.");
+    } else if (paymentKRWSum <= 0) {
+      notes.push("결제내역에 실제로 지급한 원화금액을 입력해 주세요.");
+    }
+    if (draftPayments.some((row) => n(row.krw_amount) > 0 && (!row.payment_date || row.payment_date.length !== 10))) {
+      notes.push("금액을 입력한 결제 건의 결제일을 확인해 주세요.");
+    }
+    if (draftPayments.some((row) => n(row.krw_amount) > 0 && normalizeCurrencyCode(currencyValue(row.currency, row.currency_custom)) !== "KRW" && n(row.foreign_amount) <= 0)) {
+      notes.push("외화 결제 건에는 실제 결제한 외화금액도 입력해 주세요.");
+    }
+    if (!editingPurchaseHasRefund && fShippingIncluded && (fUseWallet ? n(fShippingForeign) : purchasePaymentComposition.shippingForeign) <= 0) {
+      notes.push(fUseWallet ? "충전잔액에서 함께 차감할 배송비를 입력해 주세요." : "배송비 포함 실제 결제금액이 상품금액보다 큰지 확인해 주세요.");
+    }
+    if (fUseWallet && fFeeIncluded && n(fFeeForeign) <= 0) notes.push("충전잔액에서 함께 차감할 수수료를 입력해 주세요.");
+    const expectedPayment = fUseWallet
+      ? round4(productForeign + (fShippingIncluded ? n(fShippingForeign) : 0) + (fFeeIncluded ? n(fFeeForeign) : 0))
+      : fShippingIncluded ? purchasePaymentComposition.combinedForeign : productForeign;
+    if (!editingPurchaseHasRefund && !hasCrossCurrencyPayments && paymentForeignSum > 0 && Math.abs(paymentForeignSum - expectedPayment) > 0.01) {
+      notes.push("결제내역의 외화금액과 상품·함께 결제한 비용의 합계가 다릅니다. 결제 통화와 금액을 확인해 주세요.");
+    }
+    const invoiceDiff = round4(n(fTotalForeign) - enteredDraftItemForeignSum);
+    const blankCount = named.filter((item) => item.foreign_total.trim() === "").length;
+    return { namedCount: named.length, qty, currency, notes, invoiceDiff, blankCount,
+      productKRW: fUseWallet && buyMode === "create" ? walletQuote.productKRW : purchasePaymentComposition.productKRW,
+      totalKRW: fUseWallet && buyMode === "create" ? walletQuote.totalKRW : paymentKRWSum,
+      separateCostKRW: draftPurchaseCosts.reduce((sum, cost) => sum + signedCostAmountByType(cost.cost_type, Math.max(0, n(cost.krw_amount))), 0),
+    };
+  })();
 
   const draftPreviewMap = useMemo(() => {
     const map = new Map<string, DraftPreviewRow>();
@@ -4550,7 +4668,7 @@ export default function DocumentsPage() {
       return;
     }
     if (invoiceProductForeign <= 0 || productForeign <= 0 || fx <= 0) {
-      setErr("인보이스 상품 외화총액과 원화 결제금액을 확인해줘. 상품별 외화가격은 비워두면 수량 기준으로 자동 분배돼.");
+      setErr("전체 상품금액과 원화 결제금액을 확인해줘. 상품별 외화가격은 비워두면 수량 기준으로 자동 분배돼.");
       return;
     }
 
@@ -4599,6 +4717,7 @@ export default function DocumentsPage() {
 
     if (
       !isRefundedPurchaseEdit &&
+      !hasCrossCurrencyPayments &&
       paymentForeignSum > 0 &&
       Math.abs(paymentForeignSum - expectedPaymentForeign) > 0.01
     ) {
@@ -4932,6 +5051,9 @@ export default function DocumentsPage() {
       }
 
       const savedPurchaseItemIds: string[] = [];
+      const crossCurrencyProductParts = hasCrossCurrencyPayments && !isRefundedPurchaseEdit
+        ? distributeByWeightsCeilIntSigned(Math.round(productKRW), cleaned.map((row) => Math.max(0, row.foreign_total)))
+        : null;
 
       for (let idx = 0; idx < cleaned.length; idx++) {
         const d = cleaned[idx];
@@ -4955,7 +5077,7 @@ export default function DocumentsPage() {
         const itemFx = isRefundedPurchaseEdit
           ? previousItemFx || historicalProductFx
           : fx;
-        const lineKRW = q > 0 ? ceil4(ft * itemFx) : 0;
+        const lineKRW = q > 0 ? (crossCurrencyProductParts ? crossCurrencyProductParts[idx] : ceil4(ft * itemFx)) : 0;
         const unitKRW =
           q > 0
             ? ceil4(lineKRW / q)
@@ -5927,6 +6049,7 @@ export default function DocumentsPage() {
   async function openItemDetail(it: PurchaseItemRow) {
     setDetailItem(it);
     setDetailAlloc([]);
+    setExpandedAllocationKeys([]);
     setItemDetailOpen(true);
     setErr(null);
 
@@ -7146,6 +7269,26 @@ export default function DocumentsPage() {
               </div>
             </div>
 
+            <div
+              style={{
+                marginBottom: 10,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: "#f5f6fa",
+                color: "#4b5563",
+                fontSize: 12,
+                lineHeight: 1.7,
+              }}
+            >
+              <div><b>원화합계</b> · 해당 상품의 수량 전체 금액 (추가비용 제외)</div>
+              <div><b>상품단가</b> · 상품 1개 가격 (추가비용 제외)</div>
+              <div><b>추가비용 내역</b> · 해당 상품에 배분된 배송비·수수료·관부가세 등의 금액</div>
+              <div><b>최종단가</b> · 추가비용까지 포함한 상품 1개 가격</div>
+              <div style={{ marginTop: 5, color: "#6b7280", fontSize: 11 }}>
+                예: 10개 상품값 80,000원 + 추가비용 15,000원 → 원화합계 80,000원 / 상품단가 8,000원 / 최종단가 9,500원
+              </div>
+            </div>
+
             <div style={{ ...styles.small, marginBottom: 10 }}>
               ✅ 체크는 매입을 바꿔도 유지돼. 검색해도 체크 유지됨.
             </div>
@@ -7205,14 +7348,15 @@ export default function DocumentsPage() {
                       결제일
                     </th>
                     <th style={{ ...styles.th, width: 130 }}>원화합계</th>
-                    <th style={{ ...styles.th, width: 100 }}>배분</th>
+                    <th style={{ ...styles.th, width: 110 }}>상품단가</th>
+                    <th style={{ ...styles.th, width: 180 }}>추가비용 내역</th>
                     <th style={{ ...styles.th, width: 120 }}>최종단가</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedVisibleItems.length === 0 ? (
                     <tr>
-                      <td style={styles.td} colSpan={7}>
+                      <td style={styles.td} colSpan={8}>
                         <span style={styles.small}>
                           조건에 맞는 상품이 없어.
                         </span>
@@ -7424,8 +7568,12 @@ export default function DocumentsPage() {
 
                           <td style={styles.td}>
                             <div style={{ fontWeight: 900 }}>
-                              {fmtKRW(allocSum)}
+                              {isFullyRefunded ? "-" : fmtKRW(ceilInt(lineTotal / Math.max(1, n(it.qty))))}
                             </div>
+                            <div style={styles.small}>추가비용 제외 · 개당</div>
+                          </td>
+                          <td style={styles.td}>
+                            {renderAllocationDetails(it.id, isFullyRefunded ? 0 : n(it.qty), allocSum)}
                           </td>
 
                           <td style={styles.td}>
@@ -7433,7 +7581,7 @@ export default function DocumentsPage() {
                               {isFullyRefunded ? "-" : fmtKRW(finalUnit)}
                             </div>
                             <div style={styles.small}>
-                              {isFullyRefunded ? "전체환불" : "(배분 포함)"}
+                              {isFullyRefunded ? "전체환불" : "추가비용 포함 · 개당"}
                             </div>
                           </td>
                         </tr>
@@ -7685,8 +7833,11 @@ export default function DocumentsPage() {
                           <b style={{ fontSize: 13 }}>{fmtKRW(lineTotal)}</b>
                         </div>
                         <div>
-                          <div style={{ color: "#6b7280" }}>추가비용</div>
-                          <b style={{ fontSize: 13 }}>{fmtKRW(allocSum)}</b>
+                          <div style={{ color: "#6b7280" }}>상품단가 · 개당</div>
+                          <b style={{ fontSize: 13 }}>
+                            {isFullyRefunded ? "-" : fmtKRW(ceilInt(lineTotal / Math.max(1, n(it.qty))))}
+                          </b>
+                          <div style={{ color: "#6b7280", fontSize: 10 }}>추가비용 제외</div>
                         </div>
                         <div>
                           <div style={{ color: "#6b7280" }}>최종단가</div>
@@ -7694,6 +7845,11 @@ export default function DocumentsPage() {
                             {isFullyRefunded ? "-" : fmtKRW(finalUnit)}
                           </b>
                         </div>
+                      </div>
+
+                      <div style={{ paddingTop: 8, borderTop: "1px solid #f0f0f5" }}>
+                        <div style={{ color: "#6b7280", fontSize: 11 }}>추가비용 내역 · 해당 상품 기준</div>
+                        {renderAllocationDetails(it.id, isFullyRefunded ? 0 : n(it.qty), allocSum)}
                       </div>
 
                       {(itemCostBadgeMap.get(it.id) ?? []).length > 0 ? (
@@ -8421,8 +8577,8 @@ export default function DocumentsPage() {
             <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                 <div>
-                  <div style={styles.label}>결제내역</div>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>카드·계좌·통화가 달라도 결제 건별로 입력해. 원화 실결제 합계가 상품에 자동 배분돼.</div>
+                  <div style={styles.label}>① 실제로 결제한 내역을 입력해 주세요</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>카드 승인내역이나 이체내역을 보고 입력하세요. 여러 번 나눠 결제했다면 ‘결제 추가’로 각각 적어 주세요. 배송비까지 한 번에 냈다면 그 비용을 포함한 실제 결제금액을 적으세요.</div>
                 </div>
                 <button
                   type="button"
@@ -8478,15 +8634,429 @@ export default function DocumentsPage() {
               ))}
 
               <div style={{ borderRadius: 14, background: "#f5f3ff", padding: 14, fontWeight: 900 }}>총 원화 실결제금액: {fmtKRW(paymentKRWSum)}</div>
-            </div>
-
+              <section style={{ border: "1px solid #e5e7eb", borderRadius: 14, padding: 12, display: "grid", gap: 10, background: "#fff" }}>
+                <strong style={{ fontSize: 14 }}>상품금액 및 포함 비용</strong>
+                {hasCrossCurrencyPayments && !fUseWallet ? <div style={styles.small}>결제 통화와 상품 통화가 달라요. 결제 외화는 그대로 기록하고, 실제 원화 결제액을 상품 통화 금액 비율로 나눠요. 배송비가 포함됐다면 상품과 같은 통화로 배송비를 입력해 주세요.</div> : null}
+                <div data-tablet-role="purchase-form-grid" style={{ ...styles.grid2, alignItems: "start" }}>
             <div style={styles.field}>
-              <div style={styles.label}>상품 기준 통화</div>
+              <div style={styles.label}>상품 통화</div>
               <select style={styles.select} value={fCurrency} onChange={(e) => setFCurrency(e.target.value)}>
                 {CURRENCY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
               </select>
               {fCurrency === "직접입력" && <input style={styles.input} value={fCurrencyCustom} onChange={(e) => setFCurrencyCustom(e.target.value)} placeholder="예: THB" />}
+            </div>            <div style={styles.field}>
+              <div style={styles.label}>상품금액 · 배송비 제외</div>
+              <input
+                style={styles.input}
+                value={fTotalForeign}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setFTotalForeignManuallyEdited(true);
+                  setFTotalForeign(value);
+                  if (fShippingIncluded && !hasCrossCurrencyPayments && n(fCombinedForeign) > 0) {
+                    setFShippingForeign(
+                      String(
+                        Math.max(
+                          0,
+                          round4(
+                            n(fCombinedForeign) -
+                              n(value) -
+                              (fUseWallet && fFeeIncluded
+                                ? Math.max(0, n(fFeeForeign))
+                                : 0),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                }}
+                placeholder="상품 입력 시 자동계산 / 직접 수정 가능"
+              />
             </div>
+            <div style={styles.field}>
+              <div style={styles.label}>적용 환율 · 자동계산</div>
+              <input
+                style={{ ...styles.input, background: "#f3f4f6" }}
+                readOnly
+                value={
+                  purchasePaymentComposition.productFx > 0
+                    ? purchasePaymentComposition.productFx.toFixed(4)
+                    : ""
+                }
+              />
+            </div>
+
+                  <div style={styles.field}>
+                    <div style={styles.label}>실제 결제금액 · 통화별 합계</div>
+                    <div style={{ ...styles.input, background: "#f3f4f6", minHeight: 42, boxSizing: "border-box", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      {paymentTotalsByCurrency.length ? paymentTotalsByCurrency.map(([currency, value]) => <span key={currency}>{fmtNum(value)} {currency}</span>) : "0"}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ ...styles.small, fontSize: 11, lineHeight: 1.7 }}>
+                  <div>상품별 가격 입력 → 상품금액 자동계산 · 따로 입력할 필요 없어요.</div>
+                  <div>상품별 가격을 비워두고 수량대로 나누기 → 전체 상품금액을 직접 입력하세요.</div>
+                  <div>배송비가 없으면 ‘배송비 포함’은 체크하지 마세요.</div>
+                </div>
+                        <div
+              style={{
+                gridColumn: "1 / -1",
+                border: "1px solid #e5e7eb",
+                borderRadius: 14,
+                padding: 12,
+                background: "#fff",
+                display: "grid",
+                gap: 12,
+              }}
+            >
+              {fUseWallet ? (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 10,
+                    }}
+                  >
+                    <label
+                      style={{
+                        border: fShippingIncluded
+                          ? "2px solid #7c3aed"
+                          : "1px solid #ddd6fe",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: fShippingIncluded ? "#f5f3ff" : "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontWeight: 900,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={fShippingIncluded}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setFShippingIncluded(checked);
+                          if (checked) {
+                            setFShippingVendor((prev) => prev || fSupplier);
+                          } else {
+                            setFShippingForeign("");
+                          }
+                          const productForeign =
+                            enteredDraftItemForeignSum > 0
+                              ? enteredDraftItemForeignSum
+                              : Math.max(0, n(fTotalForeign));
+                          setFCombinedForeign(
+                            String(
+                              round4(
+                                productForeign +
+                                  (checked
+                                    ? Math.max(0, n(fShippingForeign))
+                                    : 0) +
+                                  (fFeeIncluded
+                                    ? Math.max(0, n(fFeeForeign))
+                                    : 0),
+                              ),
+                            ),
+                          );
+                          setBuyDirty(true);
+                        }}
+                      />
+                      배송비 충전잔액 사용
+                    </label>
+
+                    <label
+                      style={{
+                        border: fFeeIncluded
+                          ? "2px solid #7c3aed"
+                          : "1px solid #ddd6fe",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: fFeeIncluded ? "#f5f3ff" : "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontWeight: 900,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={fFeeIncluded}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setFFeeIncluded(checked);
+                          if (!checked) setFFeeForeign("");
+                          const productForeign =
+                            enteredDraftItemForeignSum > 0
+                              ? enteredDraftItemForeignSum
+                              : Math.max(0, n(fTotalForeign));
+                          setFCombinedForeign(
+                            String(
+                              round4(
+                                productForeign +
+                                  (fShippingIncluded
+                                    ? Math.max(0, n(fShippingForeign))
+                                    : 0) +
+                                  (checked
+                                    ? Math.max(0, n(fFeeForeign))
+                                    : 0),
+                              ),
+                            ),
+                          );
+                          setBuyDirty(true);
+                        }}
+                      />
+                      수수료 충전잔액 사용
+                    </label>
+                  </div>
+
+                  {(fShippingIncluded || fFeeIncluded) ? (
+                    <>
+                      <div
+                        data-tablet-role="purchase-form-grid"
+                        style={styles.grid2}
+                      >
+                        {fShippingIncluded ? (
+                          <div style={styles.field}>
+                            <div style={styles.label}>
+                              배송비 외화금액 ({walletCurrency || "외화"})
+                            </div>
+                            <input
+                              style={styles.input}
+                              value={fShippingForeign}
+                              inputMode="decimal"
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setFShippingForeign(value);
+                                const productForeign =
+                                  enteredDraftItemForeignSum > 0
+                                    ? enteredDraftItemForeignSum
+                                    : Math.max(0, n(fTotalForeign));
+                                setFCombinedForeign(
+                                  String(
+                                    round4(
+                                      productForeign +
+                                        Math.max(0, n(value)) +
+                                        (fFeeIncluded
+                                          ? Math.max(0, n(fFeeForeign))
+                                          : 0),
+                                    ),
+                                  ),
+                                );
+                                setBuyDirty(true);
+                              }}
+                              placeholder="예: 3500"
+                            />
+                            <div style={styles.small}>
+                              배송비가 나중에 결제되면 지금은 체크하지 않고,
+                              나중에 추가비용에서 충전잔액으로 등록하면 돼.
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {fFeeIncluded ? (
+                          <div style={styles.field}>
+                            <div style={styles.label}>
+                              수수료 외화금액 ({walletCurrency || "외화"})
+                            </div>
+                            <input
+                              style={styles.input}
+                              value={fFeeForeign}
+                              inputMode="decimal"
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setFFeeForeign(value);
+                                const productForeign =
+                                  enteredDraftItemForeignSum > 0
+                                    ? enteredDraftItemForeignSum
+                                    : Math.max(0, n(fTotalForeign));
+                                setFCombinedForeign(
+                                  String(
+                                    round4(
+                                      productForeign +
+                                        (fShippingIncluded
+                                          ? Math.max(0, n(fShippingForeign))
+                                          : 0) +
+                                        Math.max(0, n(value)),
+                                    ),
+                                  ),
+                                );
+                                setBuyDirty(true);
+                              }}
+                              placeholder="예: 500"
+                            />
+                            <div style={styles.small}>
+                              수수료는 상품 가격 비율로 각 상품에 배분돼.
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div style={styles.field}>
+                          <div style={styles.label}>
+                            총 차감 외화(상품
+                            {fShippingIncluded ? " + 배송비" : ""}
+                            {fFeeIncluded ? " + 수수료" : ""})
+                          </div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={fCombinedForeign}
+                            readOnly
+                          />
+                        </div>
+                      </div>
+
+                      {fShippingIncluded ? (
+                        <div style={styles.field}>
+                          <div style={styles.label}>배송비 거래처</div>
+                          <select
+                            style={styles.select}
+                            value={fShippingVendor}
+                            onChange={(e) => setFShippingVendor(e.target.value)}
+                          >
+                            <option value="">선택 안함</option>
+                            {includedShippingVendorOptions.map((vendor) => (
+                              <option key={vendor.id} value={vendor.name ?? ""}>
+                                {vendor.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : null}
+
+                      <div
+                        style={{
+                          borderRadius: 12,
+                          background: "#ede9fe",
+                          padding: 12,
+                          display: "grid",
+                          gap: 4,
+                          fontSize: 13,
+                        }}
+                      >
+                        <div>
+                          상품 원화: <b>{fmtKRW(walletQuote.productKRW)}</b>
+                        </div>
+                        {fShippingIncluded ? (
+                          <div>
+                            배송비 원화: <b>{fmtKRW(walletQuote.shippingKRW)}</b>
+                            {" "}(수량 대비 배분)
+                          </div>
+                        ) : null}
+                        {fFeeIncluded ? (
+                          <div>
+                            수수료 원화: <b>{fmtKRW(walletQuote.feeKRW)}</b>
+                            {" "}(상품 가격 대비 배분)
+                          </div>
+                        ) : null}
+                        <div>
+                          합계: <b>{fmtKRW(walletQuote.totalKRW)}</b>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={styles.small}>
+                      배송비나 수수료가 아직 결제되지 않았다면 체크하지 않아도 돼.
+                      나중에 <b>추가비용</b>에서 충전잔액을 사용해 따로 등록할 수 있어.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontWeight: 900,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={fShippingIncluded}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setFShippingIncluded(checked);
+                        if (checked) {
+                          setFShippingVendor((prev) => prev || fSupplier);
+                          if (!fCombinedForeign && fTotalForeign) {
+                            setFCombinedForeign(fTotalForeign);
+                          }
+                        } else {
+                          setFShippingForeign("");
+                          setFCombinedForeign(fTotalForeign);
+                        }
+                      }}
+                    />
+                    위 결제금액에 배송비가 포함되어 있어요
+                  </label>
+
+                  {fShippingIncluded ? (
+                    <>
+                      <div
+                        data-tablet-role="purchase-form-grid"
+                        style={styles.grid2}
+                      >
+                        <div style={styles.field}>
+                          <div style={styles.label}>{hasCrossCurrencyPayments ? `포함 배송비 (${currencyValue(fCurrency, fCurrencyCustom)}) · 직접 입력` : "위 결제금액에 포함된 배송비 · 자동계산"}</div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={fShippingForeign}
+                            readOnly={!hasCrossCurrencyPayments}
+                            onChange={(e) => { setFShippingForeign(e.target.value); setBuyDirty(true); }}
+                            placeholder={hasCrossCurrencyPayments ? "상품과 같은 통화의 배송비" : "결제 외화합계 - 상품리스트 입력합계"}
+                          />
+                        </div>
+                        <div style={styles.field}>
+                          <div style={styles.label}>
+                            {hasCrossCurrencyPayments ? `상품＋배송비 합계 (${currencyValue(fCurrency, fCurrencyCustom)})` : "배송비 포함 실제 결제금액 · 자동계산"}
+                          </div>
+                          <input
+                            style={{ ...styles.input, background: "#f3f4f6" }}
+                            value={hasCrossCurrencyPayments ? String(round4(purchasePaymentComposition.productForeign + n(fShippingForeign))) : fCombinedForeign}
+                            readOnly
+                          />
+                        </div>
+                      </div>
+
+                      <div style={styles.field}>
+                        <div style={styles.label}>배송비 거래처</div>
+                        <select
+                          style={styles.select}
+                          value={fShippingVendor}
+                          onChange={(e) => setFShippingVendor(e.target.value)}
+                        >
+                          <option value="">선택 안함</option>
+                          {includedShippingVendorOptions.map((vendor) => (
+                            <option key={vendor.id} value={vendor.name ?? ""}>
+                              {vendor.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={styles.small}>
+                      배송비를 따로 결제했다면 아래 추가비용에서 별도로 등록해.
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+
+            
+
+                <details style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.7 }}>
+                  <summary style={{ cursor: "pointer" }}>입력 방법 보기</summary>
+                  <div style={{ paddingTop: 6 }}>결제내역에는 실제로 지급한 전체 금액을 적고, 상품금액에는 배송비를 뺀 상품값을 적으세요. 배송비가 포함됐다면 체크하세요. 예: 결제 11,000엔 / 상품 10,000엔 → 포함 배송비 1,000엔.</div>
+                  <div>환율은 결제내역이나 사용한 충전잔액을 기준으로 자동계산돼요. 여러 통화의 금액은 서로 더하지 않고 통화별로 확인하세요.</div>
+                </details>
+              </section>
+
+            </div>
+
+
 
             <div
               style={{
@@ -8503,7 +9073,7 @@ export default function DocumentsPage() {
             >
               <div>
                 <div style={{ fontWeight: 900, marginBottom: 4 }}>
-                  거래처 외화충전잔액
+                  충전잔액으로 결제하기
                 </div>
                 <div
                   style={{
@@ -8839,399 +9409,14 @@ export default function DocumentsPage() {
                 </>
               ) : null}
             </div>
-            <div style={styles.field}>
-              <div style={styles.label}>인보이스 상품 외화총액(상품·배송비 구분 기준)</div>
-              <input
-                style={styles.input}
-                value={fTotalForeign}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setFTotalForeignManuallyEdited(true);
-                  setFTotalForeign(value);
-                  if (fShippingIncluded && n(fCombinedForeign) > 0) {
-                    setFShippingForeign(
-                      String(
-                        Math.max(
-                          0,
-                          round4(
-                            n(fCombinedForeign) -
-                              n(value) -
-                              (fUseWallet && fFeeIncluded
-                                ? Math.max(0, n(fFeeForeign))
-                                : 0),
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-                }}
-                placeholder="상품 입력 시 자동계산 / 직접 수정 가능"
-              />
-            </div>
 
-            <div
-              style={{
-                gridColumn: "1 / -1",
-                border: "1px solid #ddd6fe",
-                borderRadius: 14,
-                padding: 12,
-                background: "#faf8ff",
-                display: "grid",
-                gap: 12,
-              }}
-            >
-              {fUseWallet ? (
-                <>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 10,
-                    }}
-                  >
-                    <label
-                      style={{
-                        border: fShippingIncluded
-                          ? "2px solid #7c3aed"
-                          : "1px solid #ddd6fe",
-                        borderRadius: 12,
-                        padding: 10,
-                        background: fShippingIncluded ? "#f5f3ff" : "#fff",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        fontWeight: 900,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={fShippingIncluded}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setFShippingIncluded(checked);
-                          if (checked) {
-                            setFShippingVendor((prev) => prev || fSupplier);
-                          } else {
-                            setFShippingForeign("");
-                          }
-                          const productForeign =
-                            enteredDraftItemForeignSum > 0
-                              ? enteredDraftItemForeignSum
-                              : Math.max(0, n(fTotalForeign));
-                          setFCombinedForeign(
-                            String(
-                              round4(
-                                productForeign +
-                                  (checked
-                                    ? Math.max(0, n(fShippingForeign))
-                                    : 0) +
-                                  (fFeeIncluded
-                                    ? Math.max(0, n(fFeeForeign))
-                                    : 0),
-                              ),
-                            ),
-                          );
-                          setBuyDirty(true);
-                        }}
-                      />
-                      배송비 충전잔액 사용
-                    </label>
 
-                    <label
-                      style={{
-                        border: fFeeIncluded
-                          ? "2px solid #7c3aed"
-                          : "1px solid #ddd6fe",
-                        borderRadius: 12,
-                        padding: 10,
-                        background: fFeeIncluded ? "#f5f3ff" : "#fff",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        fontWeight: 900,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={fFeeIncluded}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setFFeeIncluded(checked);
-                          if (!checked) setFFeeForeign("");
-                          const productForeign =
-                            enteredDraftItemForeignSum > 0
-                              ? enteredDraftItemForeignSum
-                              : Math.max(0, n(fTotalForeign));
-                          setFCombinedForeign(
-                            String(
-                              round4(
-                                productForeign +
-                                  (fShippingIncluded
-                                    ? Math.max(0, n(fShippingForeign))
-                                    : 0) +
-                                  (checked
-                                    ? Math.max(0, n(fFeeForeign))
-                                    : 0),
-                              ),
-                            ),
-                          );
-                          setBuyDirty(true);
-                        }}
-                      />
-                      수수료 충전잔액 사용
-                    </label>
-                  </div>
-
-                  {(fShippingIncluded || fFeeIncluded) ? (
-                    <>
-                      <div
-                        data-tablet-role="purchase-form-grid"
-                        style={styles.grid2}
-                      >
-                        {fShippingIncluded ? (
-                          <div style={styles.field}>
-                            <div style={styles.label}>
-                              배송비 외화금액 ({walletCurrency || "외화"})
-                            </div>
-                            <input
-                              style={styles.input}
-                              value={fShippingForeign}
-                              inputMode="decimal"
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setFShippingForeign(value);
-                                const productForeign =
-                                  enteredDraftItemForeignSum > 0
-                                    ? enteredDraftItemForeignSum
-                                    : Math.max(0, n(fTotalForeign));
-                                setFCombinedForeign(
-                                  String(
-                                    round4(
-                                      productForeign +
-                                        Math.max(0, n(value)) +
-                                        (fFeeIncluded
-                                          ? Math.max(0, n(fFeeForeign))
-                                          : 0),
-                                    ),
-                                  ),
-                                );
-                                setBuyDirty(true);
-                              }}
-                              placeholder="예: 3500"
-                            />
-                            <div style={styles.small}>
-                              배송비가 나중에 결제되면 지금은 체크하지 않고,
-                              나중에 추가비용에서 충전잔액으로 등록하면 돼.
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {fFeeIncluded ? (
-                          <div style={styles.field}>
-                            <div style={styles.label}>
-                              수수료 외화금액 ({walletCurrency || "외화"})
-                            </div>
-                            <input
-                              style={styles.input}
-                              value={fFeeForeign}
-                              inputMode="decimal"
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setFFeeForeign(value);
-                                const productForeign =
-                                  enteredDraftItemForeignSum > 0
-                                    ? enteredDraftItemForeignSum
-                                    : Math.max(0, n(fTotalForeign));
-                                setFCombinedForeign(
-                                  String(
-                                    round4(
-                                      productForeign +
-                                        (fShippingIncluded
-                                          ? Math.max(0, n(fShippingForeign))
-                                          : 0) +
-                                        Math.max(0, n(value)),
-                                    ),
-                                  ),
-                                );
-                                setBuyDirty(true);
-                              }}
-                              placeholder="예: 500"
-                            />
-                            <div style={styles.small}>
-                              수수료는 상품 가격 비율로 각 상품에 배분돼.
-                            </div>
-                          </div>
-                        ) : null}
-
-                        <div style={styles.field}>
-                          <div style={styles.label}>
-                            총 차감 외화(상품
-                            {fShippingIncluded ? " + 배송비" : ""}
-                            {fFeeIncluded ? " + 수수료" : ""})
-                          </div>
-                          <input
-                            style={{ ...styles.input, background: "#f3f4f6" }}
-                            value={fCombinedForeign}
-                            readOnly
-                          />
-                        </div>
-                      </div>
-
-                      {fShippingIncluded ? (
-                        <div style={styles.field}>
-                          <div style={styles.label}>배송비 거래처</div>
-                          <select
-                            style={styles.select}
-                            value={fShippingVendor}
-                            onChange={(e) => setFShippingVendor(e.target.value)}
-                          >
-                            <option value="">선택 안함</option>
-                            {includedShippingVendorOptions.map((vendor) => (
-                              <option key={vendor.id} value={vendor.name ?? ""}>
-                                {vendor.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : null}
-
-                      <div
-                        style={{
-                          borderRadius: 12,
-                          background: "#ede9fe",
-                          padding: 12,
-                          display: "grid",
-                          gap: 4,
-                          fontSize: 13,
-                        }}
-                      >
-                        <div>
-                          상품 원화: <b>{fmtKRW(walletQuote.productKRW)}</b>
-                        </div>
-                        {fShippingIncluded ? (
-                          <div>
-                            배송비 원화: <b>{fmtKRW(walletQuote.shippingKRW)}</b>
-                            {" "}(수량 대비 배분)
-                          </div>
-                        ) : null}
-                        {fFeeIncluded ? (
-                          <div>
-                            수수료 원화: <b>{fmtKRW(walletQuote.feeKRW)}</b>
-                            {" "}(상품 가격 대비 배분)
-                          </div>
-                        ) : null}
-                        <div>
-                          합계: <b>{fmtKRW(walletQuote.totalKRW)}</b>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div style={styles.small}>
-                      배송비나 수수료가 아직 결제되지 않았다면 체크하지 않아도 돼.
-                      나중에 <b>추가비용</b>에서 충전잔액을 사용해 따로 등록할 수 있어.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      fontWeight: 900,
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={fShippingIncluded}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setFShippingIncluded(checked);
-                        if (checked) {
-                          setFShippingVendor((prev) => prev || fSupplier);
-                          if (!fCombinedForeign && fTotalForeign) {
-                            setFCombinedForeign(fTotalForeign);
-                          }
-                        } else {
-                          setFShippingForeign("");
-                          setFCombinedForeign(fTotalForeign);
-                        }
-                      }}
-                    />
-                    상품값과 배송비를 한 번에 결제
-                  </label>
-
-                  {fShippingIncluded ? (
-                    <>
-                      <div
-                        data-tablet-role="purchase-form-grid"
-                        style={styles.grid2}
-                      >
-                        <div style={styles.field}>
-                          <div style={styles.label}>배송비 외화총액(자동계산)</div>
-                          <input
-                            style={{ ...styles.input, background: "#f3f4f6" }}
-                            value={fShippingForeign}
-                            readOnly
-                            placeholder="결제 외화합계 - 상품리스트 입력합계"
-                          />
-                        </div>
-                        <div style={styles.field}>
-                          <div style={styles.label}>
-                            총 결제 외화총액(결제내역 외화합계)
-                          </div>
-                          <input
-                            style={{ ...styles.input, background: "#f3f4f6" }}
-                            value={fCombinedForeign}
-                            readOnly
-                          />
-                        </div>
-                      </div>
-
-                      <div style={styles.field}>
-                        <div style={styles.label}>배송비 거래처</div>
-                        <select
-                          style={styles.select}
-                          value={fShippingVendor}
-                          onChange={(e) => setFShippingVendor(e.target.value)}
-                        >
-                          <option value="">선택 안함</option>
-                          {includedShippingVendorOptions.map((vendor) => (
-                            <option key={vendor.id} value={vendor.name ?? ""}>
-                              {vendor.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  ) : (
-                    <div style={styles.small}>
-                      배송비를 따로 결제했다면 아래 추가비용에서 별도로 등록해.
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div style={styles.field}>
-              <div style={styles.label}>상품 배분용 평균환율</div>
-              <input
-                style={{ ...styles.input, background: "#f3f4f6" }}
-                readOnly
-                value={
-                  purchasePaymentComposition.productFx > 0
-                    ? purchasePaymentComposition.productFx.toFixed(4)
-                    : ""
-                }
-              />
-            </div>
 
             {buyMode === "create" && (
               <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                   <div>
-                    <div style={styles.label}>추가비용 함께 등록(선택)</div>
+                    <div style={styles.label}>별도로 지급한 추가비용 · 선택</div>
                     <div style={{ fontSize: 12, color: "#6b7280" }}>배송비는 수량 비율로, 관부과세·기타비용은 상품금액 비율로 배분해.</div>
                   </div>
                   <button type="button" style={styles.btn("ghost")} onClick={() => setDraftPurchaseCosts((prev) => [...prev, { key: crypto.randomUUID(), cost_type: "배송비(거래처)", currency: "KRW", currency_custom: "", foreign_amount: "", krw_amount: "", vendor_name: fSupplier, cost_date: fPurchaseDate, memo: "" }])}>+ 추가비용</button>
@@ -9354,6 +9539,7 @@ export default function DocumentsPage() {
               }}
             >
               <div style={{ fontSize: 14, fontWeight: 900 }}>상품 등록</div>
+              <span style={{ ...styles.small, fontSize: 11 }}>가격 입력 기준: {currencyValue(fCurrency, fCurrencyCustom) || "상품 통화를 선택하세요"} · 상품 통화 기준</span>
               <select
                 style={{ ...styles.select, width: 190 }}
                 defaultValue=""
@@ -9378,140 +9564,68 @@ export default function DocumentsPage() {
                 ))}
               </select>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                style={styles.btn("ghost")}
-                onClick={() => {
-                  if (n(fTotalForeign) <= 0) {
-                    setErr("먼저 인보이스 상품 외화총액을 입력해줘.");
-                    return;
-                  }
-                  if (!draftItems.some((item) => item.item_name.trim())) {
-                    setErr("균등분배할 상품명을 1개 이상 입력해줘.");
-                    return;
-                  }
-                  const hasEnteredPrices = draftItems.some(
-                    (item) => item.foreign_unit_price.trim() !== "" || item.foreign_total.trim() !== "",
-                  );
-                  if (
-                    hasEnteredPrices &&
-                    !window.confirm("기존 상품별 외화가격을 지우고 전체 수량 기준으로 다시 균등분배할까?")
-                  ) return;
-                  setDraftItems((prev) =>
-                    prev.map((item) => ({
-                      ...item,
-                      foreign_unit_price: "",
-                      foreign_total: "",
-                    })),
-                  );
-                  setFTotalForeignManuallyEdited(true);
-                  setBuyDirty(true);
-                  setErr(null);
-                }}
-              >
-                수량 기준 균등분배
-              </button>
-              <button
-                type="button"
-                style={styles.btn("ghost")}
-                onClick={() =>
-                  setDraftItems((prev) => [
-                  ...prev,
-                  {
-                    key: crypto.randomUUID(),
-                    item_name: "",
-                    qty: "1",
-                    foreign_unit_price: "",
-                    foreign_total: "",
-                    memo: "",
-                    is_preorder: false,
-                    product_type: "기타",
-                    photoFile: null,
-                    existingPhotoPath: null,
-                  },
-                ])
-              }
-              >
-                + 상품 추가
-              </button>
+
+          </div>
+
+          <div style={{ ...styles.card, marginTop: 10, padding: 14, background: "#f8f9fc" }}>
+            <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 10 }}>입력한 매입 한눈에 보기</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+              <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
+                <div style={styles.small}>등록할 상품</div>
+                <b>{purchaseEntryGuide.namedCount}종 · 총 {fmtNum(purchaseEntryGuide.qty)}개</b>
+                <div style={styles.small}>상품명을 입력한 항목 기준</div>
+              </div>
+              <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
+                <div style={styles.small}>상품금액 · 추가비용 제외</div>
+                <b>{fmtNum(purchasePaymentComposition.productForeign)} {purchaseEntryGuide.currency}</b>
+                <div style={styles.small}>원화 {fmtKRW(purchaseEntryGuide.productKRW)}</div>
+              </div>
+              <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
+                <div style={styles.small}>{fUseWallet ? "충전잔액 차감 합계" : "결제내역의 통화별 합계"}</div>
+                {paymentTotalsByCurrency.length ? paymentTotalsByCurrency.map(([currency, amount]) => (
+                  <div key={currency}><b>{fmtNum(amount)} {currency}</b></div>
+                )) : <b>0 {purchaseEntryGuide.currency}</b>}
+                <div style={styles.small}>원화 {fmtKRW(purchaseEntryGuide.totalKRW)}</div>
+                {paymentTotalsByCurrency.length > 1 ? <div style={styles.small}>다른 통화끼리는 합산하지 않아요.</div> : null}
+                <div style={styles.small}>{fShippingIncluded || (fUseWallet && fFeeIncluded) ? "함께 결제한 비용 포함" : "상품 결제금액"} · 별도 추가비용 제외</div>
+              </div>
             </div>
-          </div>
-
-          <div
-            style={{ ...styles.small, marginTop: 6, whiteSpace: "pre-line" }}
-          >
-            ① <b>인보이스 상품 외화총액</b>만 입력하고 상품별 가격을 비워두면, 저장할 때 <b>전체 상품 수량 기준으로 자동 균등분배</b>돼. 위 버튼을 누르면 기존 가격도 지우고 다시 균등분배할 수 있어.
-            {"\n"}② 상품마다 <b>수량 × 개당 외화가격</b>을 입력하면 상품 외화총액이 자동계산돼.
-            {"\n"}③ 전체 상품합계는 <b>인보이스 상품 외화총액</b>과 1건 결제의 <b>외화 결제금액</b>에 자동 입력돼.
-            {"\n"}④ 상품리스트 합계와 인보이스 상품총액이 달라도 상품가격은 건드리지 않고, 차이는{" "}
-            <b>배송비에서 자동으로 더하거나 빼서 맞춰</b>.
-            {"\n"}⑤ 결제 외화합계는 배송비 포함 실제 송금액이고, 배송비 외화는{" "}
-            <b>결제 외화합계 - 상품리스트 입력합계</b>로 자동계산돼.
-            인보이스와 상품리스트 차이는 배송비가 흡수하고, 배송비 원화는 상품 수량 비율로 배분해.
-            {"\n"}
-            소수점 오차는 마지막 항목에서 정리돼.
-          </div>
-
-          <div
-            style={{
-              ...styles.card,
-              marginTop: 10,
-              background: "#fafafa",
-              borderColor:
-                draftPreview.hasNamedItems &&
-                Math.abs(draftPreview.diff) > 0.0001
-                  ? "#fecaca"
-                  : "#e6e6ef",
-              padding: 10,
-            }}
-          >
-            <div
-              style={{
-                ...styles.small,
-                display: "flex",
-                gap: 14,
-                flexWrap: "wrap",
-              }}
-            >
-              <span>
-                상품리스트 입력합계:{" "}
-                <b>{fmtNum(enteredDraftItemForeignSum)}</b>
-              </span>
-              <span>
-                인보이스 상품총액: <b>{fmtNum(n(fTotalForeign))}</b>
-              </span>
-              <span>
-                배송비 반영차액:{" "}
-                <b>
-                  {fmtNum(
-                    round4(
-                      n(fTotalForeign) - enteredDraftItemForeignSum,
-                    ),
-                  )}
-                </b>
-              </span>
-              <span>
-                저장될 외화합계:{" "}
-                <b>{fmtNum(draftPreview.previewForeignSum)}</b>
-              </span>
-              <span>
-                차이:{" "}
-                <b
-                  style={{
-                    color:
-                      Math.abs(draftPreview.diff) > 0.0001
-                        ? "#dc2626"
-                        : "#166534",
-                  }}
-                >
-                  {fmtNum(draftPreview.diff)}
-                </b>
-              </span>
+            {fShippingIncluded || (fUseWallet && fFeeIncluded) ? (
+              <div style={{ ...styles.small, marginTop: 10 }}>
+                함께 결제한 비용: {fShippingIncluded ? `배송비 ${fmtNum(fUseWallet ? n(fShippingForeign) : purchasePaymentComposition.shippingForeign)} ${purchaseEntryGuide.currency}` : ""}
+                {fUseWallet && fFeeIncluded ? ` · 수수료 ${fmtNum(n(fFeeForeign))} ${purchaseEntryGuide.currency}` : ""}
+              </div>
+            ) : null}
+            {buyMode === "create" && draftPurchaseCosts.length > 0 ? (
+              <div style={{ ...styles.small, marginTop: 6 }}>별도 추가비용: {draftPurchaseCosts.length}건 · 입력한 원화 순합계 {fmtKRW(purchaseEntryGuide.separateCostKRW)} (할인 차감)</div>
+            ) : null}
+            <div role="status" style={{ marginTop: 12, padding: 10, borderRadius: 10, background: purchaseEntryGuide.notes.length ? "#fff7ed" : "#eff6ff", fontSize: 12, lineHeight: 1.7 }}>
+              <b>{purchaseEntryGuide.notes.length ? "다음 내용을 확인해 주세요" : "입력한 주요 금액을 확인했어요"}</b>
+              {purchaseEntryGuide.notes.map((note, index) => <div key={index}>• {note}</div>)}
+              {!purchaseEntryGuide.notes.length ? <div>위 금액과 상품별 단가를 확인한 뒤 저장해 주세요. 추가비용·증빙 등 세부 입력은 저장 시 다시 검사합니다.</div> : null}
+              {purchaseEntryGuide.blankCount > 0 && n(fTotalForeign) > 0 ? (
+                <div>가격을 비워둔 상품 {purchaseEntryGuide.blankCount}종은 기존 자동분배 규칙으로 계산합니다. 아래 상품 카드에서 예상 단가를 확인해 주세요.</div>
+              ) : null}
+              {editingPurchaseHasRefund ? <div>환불된 매입입니다. 현재 남은 상품금액과 원래 결제금액이 다른 것은 정상이며, 기존 결제 기준을 유지합니다.</div> : null}
+              {!editingPurchaseHasRefund && purchaseEntryGuide.namedCount > 0 && n(fTotalForeign) > 0 && Math.abs(purchaseEntryGuide.invoiceDiff) > 0.0001 ? (
+                <div>인보이스 상품금액과 직접 입력한 상품합계의 차이: {fmtNum(purchaseEntryGuide.invoiceDiff)} {purchaseEntryGuide.currency}. {fShippingIncluded ? "함께 결제한 배송비는 실제 결제 외화금액에서 상품합계를 뺀 금액으로 계산됩니다." : "상품별 가격과 인보이스 금액을 확인해 주세요."}</div>
+              ) : null}
             </div>
+            <details style={{ marginTop: 10, fontSize: 12, lineHeight: 1.8 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 800 }}>가격 입력과 자동계산 방법 보기</summary>
+              <div style={{ paddingTop: 8 }}>
+                <div><b>상품별 가격을 아는 경우</b> · 수량과 개당 외화가격을 입력하세요. 상품별 총액은 자동계산되며 직접 수정할 수도 있어요.</div>
+                <div><b>총 상품금액만 아는 경우</b> · 전체 상품금액과 상품명·수량을 입력하고, 상품별 가격은 비워두세요. 수량 기준으로 나눠 계산해요.</div>
+                <div><b>일부 상품만 가격을 아는 경우</b> · 아는 가격만 입력하고 나머지는 비워둘 수 있어요. 아래 예상 단가를 확인해 주세요.</div>
+                <div><b>기존 가격을 모두 균등하게 바꾸려면</b> · ‘수량 기준 균등분배’를 누르세요. 확인 후 기존 상품별 가격을 지우고 다시 계산해요.</div>
+                <div><b>배송비까지 함께 결제했다면</b> · 함께 결제 옵션을 켜고 결제내역에 실제 지급한 전체 외화금액을 입력하세요. 별도로 낸 배송비는 ‘추가비용 함께 등록’에 입력해요.</div>
+                <div><b>자동입력된 금액을 직접 바꾸면</b> · 해당 금액은 자동으로 덮어쓰지 않는 경우가 있어요. 상품을 바꾼 뒤 결제내역과 예상 금액도 확인해 주세요.</div>
+              </div>
+            </details>
           </div>
 
           <div
+            ref={draftProductListRef}
             style={{
               display: "grid",
               gap: 10,
@@ -9638,7 +9752,7 @@ export default function DocumentsPage() {
                     </div>
 
                     <div style={styles.field}>
-                      <div style={styles.label}>개당 외화가격</div>
+                      <div style={styles.label}>개당 가격 ({currencyValue(fCurrency, fCurrencyCustom) || "상품 통화"})</div>
                       <input
                         style={styles.input}
                         value={d.foreign_unit_price}
@@ -9670,7 +9784,7 @@ export default function DocumentsPage() {
 
                     <div style={styles.field}>
                       <div style={styles.label}>
-                        상품 외화 총액(자동계산·수정 가능)
+                        상품 총액 ({currencyValue(fCurrency, fCurrencyCustom) || "상품 통화"}) · 자동계산·수정 가능
                       </div>
                       <input
                         style={styles.input}
@@ -9821,6 +9935,57 @@ export default function DocumentsPage() {
                 </div>
               );
             })}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", paddingTop: 10, paddingBottom: 4 }}>
+              <button
+                type="button"
+                style={styles.btn("ghost")}
+                onClick={() => {
+                  if (n(fTotalForeign) <= 0) {
+                    setErr("먼저 전체 상품금액을 입력해줘.");
+                    return;
+                  }
+                  if (!draftItems.some((item) => item.item_name.trim())) {
+                    setErr("균등분배할 상품명을 1개 이상 입력해줘.");
+                    return;
+                  }
+                  const hasEnteredPrices = draftItems.some(
+                    (item) => item.foreign_unit_price.trim() !== "" || item.foreign_total.trim() !== "",
+                  );
+                  if (
+                    hasEnteredPrices &&
+                    !window.confirm("기존 상품별 외화가격을 지우고 전체 수량 기준으로 다시 균등분배할까?")
+                  ) return;
+                  setDraftItems((prev) =>
+                    prev.map((item) => ({
+                      ...item,
+                      foreign_unit_price: "",
+                      foreign_total: "",
+                    })),
+                  );
+                  setFTotalForeignManuallyEdited(true);
+                  setBuyDirty(true);
+                  setErr(null);
+                }}
+              >
+                수량 기준 균등분배
+              </button>
+            <button type="button" style={{ ...styles.btn("primary"), minWidth: 160 }}
+              onClick={() => {
+                setDraftItems((prev) => [...prev, {
+                  key: crypto.randomUUID(), item_name: "", qty: "1",
+                  foreign_unit_price: "", foreign_total: "", memo: "",
+                  is_preorder: false, product_type: "기타", photoFile: null,
+                  existingPhotoPath: null,
+                }]);
+                setBuyDirty(true);
+                requestAnimationFrame(() => {
+                  const list = draftProductListRef.current;
+                  if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+                });
+              }}>
+              + 상품 추가
+            </button>
           </div>
         </div>
       </SafeModal>
@@ -11158,13 +11323,22 @@ export default function DocumentsPage() {
             ) : (
               <>
                 {/* PC에서는 기존 표 유지 */}
-                <div data-tablet-role="item-detail-allocation-table">
-                  <table style={styles.table}>
+                <div data-tablet-role="item-detail-allocation-table" style={{ overflowX: "auto" }}>
+                  <table style={{ ...styles.table, minWidth: 820, tableLayout: "fixed" }}>
+                    <colgroup>
+                      <col style={{ width: "14%" }} />
+                      <col style={{ width: "13%" }} />
+                      <col style={{ width: "15%" }} />
+                      <col style={{ width: "20%" }} />
+                      <col style={{ width: "13%" }} />
+                      <col style={{ width: "13%" }} />
+                      <col style={{ width: "12%" }} />
+                    </colgroup>
                     <thead>
                       <tr>
                         <th style={styles.th}>종류</th>
                         <th style={{ ...styles.th, width: 120 }}>날짜</th>
-                        <th style={{ ...styles.th, width: 150 }}>배분금액</th>
+                        <th style={{ ...styles.th, width: 150 }}>이 상품 부담액</th>
                         <th style={styles.th}>같이 배분된 상품</th>
                         <th style={styles.th}>거래처</th>
                         <th style={styles.th}>메모</th>
@@ -11173,18 +11347,25 @@ export default function DocumentsPage() {
                     </thead>
                     <tbody>
                       {detailAlloc.map((a, idx) => (
-                        <tr key={idx}>
+                        <React.Fragment key={`${detailItem.id}-${a.cost_id ?? idx}`}>
+                        <tr>
                           <td style={styles.td}>{a.cost_type ?? ""}</td>
                           <td style={styles.td}>{fmtDate(a.cost_date)}</td>
                           <td style={styles.td}>
                             <b>{fmtKRW(a.amount_krw)}</b>
                           </td>
                           <td style={styles.td}>
-                            {a.related_item_names.length > 0
-                              ? a.related_item_names.join(", ")
-                              : "-"}
+                            <button
+                              type="button"
+                              style={{ ...styles.smallBtn, width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.5 }}
+                              aria-expanded={expandedAllocationKeys.includes(String(a.cost_id ?? idx))}
+                              aria-controls={`allocation-products-${idx}`}
+                              onClick={() => toggleAllocationList(String(a.cost_id ?? idx))}
+                            >
+                              총 {a.related_item_names.length + 1}종 · {expandedAllocationKeys.includes(String(a.cost_id ?? idx)) ? "목록 접기 ▴" : "목록 보기 ▾"}
+                            </button>
                           </td>
-                          <td style={styles.td}>{a.vendor_name ?? "-"}</td>
+                          <td style={{ ...styles.td, whiteSpace: "normal", overflowWrap: "anywhere" }}>{a.vendor_name ?? "-"}</td>
                           <td style={{ ...styles.td, whiteSpace: "pre-line" }}>
                             {stripCostAllocationBasisMeta(
                               stripRefundMetaDetail(a.memo),
@@ -11225,6 +11406,17 @@ export default function DocumentsPage() {
                             ) : null}
                           </td>
                         </tr>
+                        {expandedAllocationKeys.includes(String(a.cost_id ?? idx)) ? (
+                          <tr>
+                            <td colSpan={7} style={{ ...styles.td, padding: 12 }}>
+                              <div id={`allocation-products-${idx}`}>
+                                <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>같이 배분된 상품 · 현재 상품 포함 {a.related_item_names.length + 1}종</div>
+                                {renderRelatedAllocationItems(a)}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -11247,17 +11439,18 @@ export default function DocumentsPage() {
                           </div>
                         </div>
                         <div data-tablet-role="item-detail-allocation-amount">
+                          <div style={{ fontSize: 11, fontWeight: 400 }}>이 상품 부담액</div>
                           {fmtKRW(a.amount_krw)}
                         </div>
                       </div>
 
                       <div data-tablet-role="item-detail-allocation-products">
-                        <b>같이 배분된 상품</b>
-                        <div>
-                          {a.related_item_names.length > 0
-                            ? a.related_item_names.join(", ")
-                            : "-"}
-                        </div>
+                        <button type="button" style={styles.smallBtn}
+                          aria-expanded={expandedAllocationKeys.includes(String(a.cost_id ?? idx))}
+                          onClick={() => toggleAllocationList(String(a.cost_id ?? idx))}>
+                          같이 배분된 상품 {a.related_item_names.length + 1}종 · {expandedAllocationKeys.includes(String(a.cost_id ?? idx)) ? "목록 접기 ▴" : "목록 보기 ▾"}
+                        </button>
+                        {expandedAllocationKeys.includes(String(a.cost_id ?? idx)) ? renderRelatedAllocationItems(a) : null}
                       </div>
 
                       <div data-tablet-role="item-detail-allocation-meta">
@@ -11301,7 +11494,10 @@ export default function DocumentsPage() {
 
             <div style={{ height: 12 }} />
             <div style={styles.small}>
-              최종 단가(배분 포함):{" "}
+              상품단가(추가비용 제외 · 개당):{" "}
+              <b>{n(detailItem.qty) <= 0 ? "전체환불" : fmtKRW(ceilInt(n(detailItem.line_total) / n(detailItem.qty)))}</b>
+              <br />
+              최종단가(추가비용 포함 · 개당):{" "}
               <b>
                 {n(detailItem.qty) <= 0
                   ? "전체환불"
