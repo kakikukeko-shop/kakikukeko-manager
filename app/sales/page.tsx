@@ -434,7 +434,13 @@ export default function SalesPage() {
   const [files, setFiles] = useState<FileRow[]>([])
   const [saleFiles, setSaleFiles] = useState<SaleFileRow[]>([])
 
+  const [inventoryEvents, setInventoryEvents] = useState<Array<{item_id: string; delta: number}>>([])
+  const [inventoryReady, setInventoryReady] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [deletePopup, setDeletePopup] = useState<{ row: SaleRow; effects?: any; error?: string } | null>(null)
+  const [deleteReason, setDeleteReason] = useState('잘못 입력해서 삭제')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const deleteBusyRef = useRef(false)
   const [search, setSearch] = useState('')
   const [channelFilter, setChannelFilter] = useState<'전체' | '온라인' | '오프라인'>('전체')
   const [saleSort, setSaleSort] =
@@ -523,7 +529,7 @@ export default function SalesPage() {
       .map((item) => {
         const arrivedQty = arrivedMap.get(item.id) ?? 0
         const soldQty = soldMap.get(item.id) ?? 0
-        const stockQty = arrivedQty - soldQty
+        const stockQty = Number(item.qty || 0) <= 0 ? 0 : Math.min(Number(item.qty || 0), arrivedQty) + inventoryEvents.filter(row => row.item_id === item.id).reduce((sum, row) => sum + Number(row.delta), 0) - soldQty
 
         const isBlockedPreorder =
           Boolean(item.is_preorder) && !balanceDoneItemIdSet.has(item.id)
@@ -562,6 +568,7 @@ export default function SalesPage() {
     purchaseItems,
     arrivals,
     saleItems,
+    inventoryEvents,
     balanceDoneItemIdSet,
     costAllocations,
     itemPhotoMap,
@@ -806,8 +813,9 @@ export default function SalesPage() {
 
   async function refreshAll() {
     setLoading(true)
+    setInventoryReady(false)
 
-    const [piRes, arRes, siRes, sRes, pcRes, caRes, pfRes, sfRes] = await Promise.all([
+    const [piRes, arRes, siRes, sRes, pcRes, caRes, pfRes, sfRes, inventoryRes, purchaseStateRes] = await Promise.all([
       supabase
         .from('purchase_items')
         .select(
@@ -852,8 +860,15 @@ export default function SalesPage() {
       supabase.from('cost_allocations').select('purchase_cost_id,purchase_item_id,allocated_amount'),
       supabase.from('purchase_files').select('id,item_id,file_type,file_path,created_at').order('created_at', { ascending: false }),
       supabase.from('sale_files').select('id,sale_id,file_type,file_path,created_at').order('created_at', { ascending: false }),
+      supabase.from('inventory_item_state').select('item_id,archived_at'),
+      supabase.from('purchase').select('id,cancelled_at'),
     ])
 
+    const stockRes = await supabase.rpc('inventory_adjustment_totals', { p_item_ids: (piRes.data || []).map(row => row.id) })
+    const stockError = [piRes, arRes, siRes, inventoryRes, stockRes, purchaseStateRes].find(result => result.error)?.error
+    if (stockError) { console.error(stockError); setLoading(false); alert('재고 정보를 불러오지 못했습니다. SQL 적용과 권한을 확인해 주세요.\n' + stockError.message); return }
+    setInventoryEvents(stockRes.data || [])
+    setInventoryReady(true)
     if (piRes.error) console.error(piRes.error)
     if (arRes.error) console.error(arRes.error)
     if (siRes.error) console.error(siRes.error)
@@ -863,7 +878,7 @@ export default function SalesPage() {
     if (pfRes.error) console.error(pfRes.error)
     if (sfRes.error) console.error(sfRes.error)
 
-    setPurchaseItems((piRes.data as PurchaseItemRow[]) || [])
+    setPurchaseItems(((piRes.data as PurchaseItemRow[]) || []).filter(row => !(inventoryRes.data || []).some((state: any) => state.item_id === row.id && state.archived_at) && (purchaseStateRes.data || []).some((p: any) => p.id === row.purchase_id && !p.cancelled_at)))
     setArrivals((arRes.data as ArrivalRow[]) || [])
     setSaleItems((siRes.data as SaleItemRow[]) || [])
     setSales((sRes.data as SaleRow[]) || [])
@@ -1142,30 +1157,34 @@ export default function SalesPage() {
   }
 
   async function saveSale() {
+    if (!inventoryReady) { alert('최신 재고를 먼저 불러와 주세요.'); return }
     if (editingSaleId) await updateSale()
     else await createSale()
   }
 
   async function deleteSale(row: SaleRow) {
-    const ok = window.confirm('이 매출을 삭제할까요?')
-    if (!ok) return
+    if(deleteBusyRef.current) return
+    setDeletePopup({row});setDeleteReason('잘못 입력해서 삭제');setDeleteBusy(true);deleteBusyRef.current=true
+    try {
+      const result=await supabase.rpc('delete_sale_with_preview',{p_sale_id:row.id,p_reason:'삭제 내용 미리보기',p_apply:false})
+      if(result.error) throw result.error
+      if(result.data.already_deleted) throw new Error('이미 삭제한 매출이에요. 새로고침해서 확인해 주세요.')
+      setDeletePopup({row,effects:result.data})
+    } catch(e:any) {setDeletePopup({row,error:e?.message??String(e)})}
+    finally {setDeleteBusy(false);deleteBusyRef.current=false}
+  }
 
-    const targetFiles = (saleFileMap.get(row.id) || []).filter((file) => file.file_path)
-
-    if (targetFiles.length > 0) {
-      await supabase.storage.from(STORAGE_BUCKET).remove(
-        targetFiles.map((file) => String(file.file_path))
-      )
-      await supabase.from('sale_files').delete().eq('sale_id', row.id)
-    }
-
-    const delRes = await supabase.from('sales').delete().eq('id', row.id)
-    if (delRes.error) {
-      alert(`삭제 실패\n${delRes.error.message}`)
-      return
-    }
-
-    await refreshAll()
+  async function confirmSaleDeletion() {
+    if(deleteBusyRef.current || !deletePopup?.effects || !deleteReason.trim()) return
+    const pending=deletePopup;setDeleteBusy(true);deleteBusyRef.current=true
+    try {
+      const result=await supabase.rpc('delete_sale_with_preview',{p_sale_id:pending.row.id,p_reason:deleteReason.trim(),p_apply:true,p_expected_token:pending.effects.token})
+      if(result.error) throw result.error
+      setDeletePopup(null)
+      if(editingSaleId===pending.row.id){setOpen(false);resetForm()}
+      await refreshAll()
+    } catch(e:any) {setDeletePopup({...pending,error:e?.message??String(e)})}
+    finally {setDeleteBusy(false);deleteBusyRef.current=false}
   }
 
   function receiptInputChange(e: ChangeEvent<HTMLInputElement>) {
@@ -2116,6 +2135,21 @@ export default function SalesPage() {
             </button>
           </div>
         </div>
+      </SafeModal>
+      <SafeModal open={!!deletePopup} title="이 매출을 삭제할까요?" onClose={()=>{if(!deleteBusy)setDeletePopup(null)}}>
+        {deletePopup?<div className="space-y-4">
+          <div className="rounded-2xl bg-slate-50 p-4">
+            <div className="font-extrabold">{deletePopup.row.sale_date} · {deletePopup.row.sales_channel||deletePopup.row.channel||'판매 채널 미지정'}</div>
+            {deletePopup.row.customer_name?<div className="mt-1 text-sm">고객: {deletePopup.row.customer_name}</div>:null}
+            <div className="mt-3 max-h-52 space-y-2 overflow-y-auto">{(deletePopup.effects?.products||(deletePopup.row.sale_items||[]).map(item=>({name:item.purchase_items?.item_name||'상품명 없음',qty:item.qty,line_total:item.line_total}))).map((item:any,index:number)=><div key={index} className="flex flex-wrap justify-between gap-2 text-sm"><span>{item.name}</span><b>{Number(item.qty||0).toLocaleString()}개 · {Number(item.line_total||0).toLocaleString()}원</b></div>)}</div>
+            <div className="mt-3 border-t border-slate-200 pt-3 font-extrabold">결제금액 {Number(deletePopup.effects?.final_amount??deletePopup.row.final_amount??0).toLocaleString()}원</div>
+          </div>
+          <div className="rounded-2xl bg-amber-50 p-4 text-sm leading-6">판매 수량이 매출 집계에서 빠지고 가용 재고 계산에 반영돼요. 원본 내역과 증빙 연결은 삭제 이력에 보관해요. 실제 카드 결제나 계좌 입금이 취소되는 것은 아니에요.</div>
+          <label className="block space-y-2 text-sm font-bold"><span>삭제 사유</span><input className="w-full rounded-xl border border-slate-300 px-3 py-2" value={deleteReason} disabled={deleteBusy} onChange={e=>setDeleteReason(e.target.value)}/></label>
+          {deleteBusy?<div className="text-sm text-slate-500">삭제할 내용을 확인하고 있어요…</div>:null}
+          {deletePopup.error?<div role="alert" className="whitespace-pre-wrap text-sm text-rose-600">{deletePopup.error}</div>:null}
+          <div className="flex justify-end gap-2"><button type="button" className={whiteBtn} disabled={deleteBusy} onClick={()=>setDeletePopup(null)}>돌아가기</button><button type="button" className={dangerBtn} disabled={deleteBusy||!deletePopup.effects||!!deletePopup.error||!deleteReason.trim()} onClick={confirmSaleDeletion}>확인 후 매출 삭제</button></div>
+        </div>:null}
       </SafeModal>
     </div>
   )

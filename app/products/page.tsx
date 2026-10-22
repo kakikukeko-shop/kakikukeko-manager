@@ -2,6 +2,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import SafeModal from '../../components/SafeModal'
+import InventoryLocationPanel from '../../components/InventoryLocationPanel'
 
 type PurchaseRow = {
   id: string
@@ -191,6 +193,17 @@ export default function ProductsPage() {
   const [arrivals, setArrivals] = useState<ArrivalRow[]>([])
   const [files, setFiles] = useState<FileRow[]>([])
   const [saleItems, setSaleItems] = useState<SaleItemRow[]>([])
+  const [inventoryStates, setInventoryStates] = useState<Array<{ item_id: string; archived_at: string | null }>>([])
+  const [stockEvents, setStockEvents] = useState<Array<{ item_id: string; delta: number }>>([])
+  const [activeTab, setActiveTab] = useState<'products' | 'inventory'>('products')
+  const [actionPopup, setActionPopup] = useState<{ action: string; ids: string[]; arrivalId?: string; changes?: any[]; token?: string; error?: string; requestId: string } | null>(null)
+  const [actionReason, setActionReason] = useState('잘못 입력해서 정리')
+  const [actionBusy, setActionBusy] = useState(false)
+  const actionBusyRef = useRef(false)
+  useEffect(() => { if (new URLSearchParams(window.location.search).get('tab') === 'inventory') setActiveTab('inventory') }, [])
+  const stockAdjustmentMap = useMemo(() => { const map = new Map<string, number>(); stockEvents.forEach(row => map.set(row.item_id, (map.get(row.item_id) || 0) + Number(row.delta))); return map }, [stockEvents])
+  const archivedIds = useMemo(() => new Set(inventoryStates.filter(row => row.archived_at).map(row => row.item_id)), [inventoryStates])
+
 
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState<string | null>(null)
@@ -319,7 +332,7 @@ export default function ProductsPage() {
     setMsg(null)
 
     try {
-      const [itemRes, purchaseRes, allocRes, costRes, arrivalRes, fileRes, saleItemRes] =
+      const [itemRes, purchaseRes, allocRes, costRes, arrivalRes, fileRes, saleItemRes, inventoryRes] =
         await Promise.all([
           supabase
             .from('purchase_items')
@@ -330,7 +343,7 @@ export default function ProductsPage() {
 
           supabase
             .from('purchase')
-            .select('id,purchase_date,supplier')
+            .select('id,purchase_date,supplier,cancelled_at')
             .order('created_at', { ascending: false }),
 
           supabase
@@ -355,7 +368,9 @@ export default function ProductsPage() {
               'id,sale_id,purchase_item_id,qty,sale_price,shipping_fee,discount_amount,memo,created_at'
             )
             .order('created_at', { ascending: false }),
+          supabase.from('inventory_item_state').select('item_id,archived_at'),
         ])
+      const stockRes = await supabase.rpc('inventory_adjustment_totals', { p_item_ids: (itemRes.data || []).map(row => row.id) })
 
       if (itemRes.error) throw itemRes.error
       if (purchaseRes.error) throw purchaseRes.error
@@ -365,15 +380,22 @@ export default function ProductsPage() {
       if (fileRes.error) throw fileRes.error
       if (saleItemRes.error) throw saleItemRes.error
 
-      setItems((itemRes.data ?? []) as ItemRow[])
+      if (inventoryRes.error) throw inventoryRes.error
+      if (stockRes.error) throw stockRes.error
+      setInventoryStates(inventoryRes.data || [])
+      setStockEvents(stockRes.data || [])
+      const activePurchases = new Set((purchaseRes.data || []).filter((row: any) => !row.cancelled_at).map((row: any) => row.id))
+      setItems(((itemRes.data ?? []) as ItemRow[]).filter(row => activePurchases.has(row.purchase_id)))
       setPurchases((purchaseRes.data ?? []) as PurchaseRow[])
       setAllocations((allocRes.data ?? []) as AllocationRow[])
       setCosts((costRes.data ?? []) as CostRow[])
       setArrivals((arrivalRes.data ?? []) as ArrivalRow[])
       setFiles((fileRes.data ?? []) as FileRow[])
       setSaleItems((saleItemRes.data ?? []) as SaleItemRow[])
+      return true
     } catch (e: any) {
       setErr(e?.message ?? String(e))
+      return false
     } finally {
       setLoading(false)
     }
@@ -410,7 +432,7 @@ export default function ProductsPage() {
   }, [loading])
 
   const rows = useMemo(() => {
-    const mapped: FlatRow[] = items.map((item) => {
+    const mapped: FlatRow[] = items.filter(item => !archivedIds.has(item.id)).map((item) => {
       const purchase = purchaseMap.get(item.purchase_id) ?? null
       const totalQty = Math.max(0, n(item.qty))
       const alloc = allocationSumByItem.get(item.id) ?? 0
@@ -422,7 +444,7 @@ export default function ProductsPage() {
       const remainingArrivalQty = Math.max(0, totalQty - arrivedQty)
 
       const soldQty = soldQtyByItem.get(item.id) ?? 0
-      const stockQty = Math.max(0, arrivedQty - soldQty)
+      const stockQty = totalQty <= 0 ? 0 : Math.max(0, Math.min(totalQty, arrivedQty) + (stockAdjustmentMap.get(item.id) || 0) - soldQty)
 
       const lastArrivedDate =
         myArrivals.length > 0 ? normalizeDate(myArrivals[0].arrived_date) : null
@@ -519,6 +541,8 @@ export default function ProductsPage() {
     sortMode,
     hasBalanceByItem,
     soldQtyByItem,
+    stockAdjustmentMap,
+    archivedIds,
   ])
 
   const rowMap = useMemo(() => {
@@ -732,184 +756,33 @@ export default function ProductsPage() {
     }
   }
 
-  async function deleteArrival(arrivalId: string) {
-    if (!confirm('이 입고이력을 삭제할까?')) return
-
+  async function requestInventoryAction(action: string, ids: string[], arrivalId?: string) {
+    if (actionBusyRef.current) return
+    if (!ids.length) { setErr('상품을 먼저 선택해 주세요.'); return }
+    const pending = { action, ids: [...ids].sort(), arrivalId, requestId: crypto.randomUUID() }
+    setActionPopup(pending); setActionReason('잘못 입력해서 정리'); setActionBusy(true); actionBusyRef.current = true
     try {
-      setLoading(true)
-      setErr(null)
-      setMsg(null)
-
-      const del = await supabase.from('purchase_item_arrivals').delete().eq('id', arrivalId)
-      if (del.error) throw del.error
-
-      setMsg('입고이력 삭제 완료')
-      await load({ preserveScroll: true })
-    } catch (e: any) {
-      setErr(e?.message ?? String(e))
-    } finally {
-      setLoading(false)
-    }
+      const result = await supabase.rpc('inventory_product_action', { p_action: action, p_item_ids: pending.ids, p_arrival_id: arrivalId || null, p_apply: false, p_reason: '내용 미리보기' })
+      if (result.error) throw result.error
+      setActionPopup({ ...pending, changes: result.data.changes, token: result.data.token })
+    } catch (e: any) { setActionPopup({ ...pending, error: e.message }) }
+    finally { actionBusyRef.current = false; setActionBusy(false) }
   }
-
-  async function revertToUndelivered(itemId: string) {
-    const histories = arrivalsByItem.get(itemId) ?? []
-    if (histories.length === 0) {
-      setErr('되돌릴 입고이력이 없어.')
-      return
-    }
-
-    const latest = histories[0]
-
-    if (!confirm('가장 최근 입고처리를 취소하고 미도착으로 되돌릴까?')) return
-
+  async function confirmInventoryAction() {
+    if (!actionPopup?.token || actionBusyRef.current || !actionReason.trim()) return
+    const pending = actionPopup; setActionBusy(true); actionBusyRef.current = true
     try {
-      setLoading(true)
-      setErr(null)
-      setMsg(null)
-
-      const del = await supabase.from('purchase_item_arrivals').delete().eq('id', latest.id)
-      if (del.error) throw del.error
-
-      setMsg('가장 최근 입고처리를 취소했어.')
-      await load({ preserveScroll: true })
-    } catch (e: any) {
-      setErr(e?.message ?? String(e))
-    } finally {
-      setLoading(false)
-    }
+      const result = await supabase.rpc('inventory_product_action', { p_action: pending.action, p_item_ids: pending.ids, p_arrival_id: pending.arrivalId || null, p_apply: true, p_expected_token: pending.token, p_request_id: pending.requestId, p_reason: actionReason.trim() })
+      if (result.error) throw result.error
+      setActionPopup(null); setHistoryModalOpen(false); clearSelectedItems(); await load({ preserveScroll: true }); setMsg('확인한 내용을 반영했어요. 원본 이력은 보관돼요.')
+    } catch (e: any) { setActionPopup({ ...pending, error: e.message }) }
+    finally { actionBusyRef.current = false; setActionBusy(false) }
   }
-
-  async function revertSelectedLatest() {
-    if (selectedItemIds.length === 0) {
-      setErr('선택된 상품이 없어.')
-      return
-    }
-
-    try {
-      setLoading(true)
-      setErr(null)
-      setMsg(null)
-
-      for (const itemId of selectedItemIds) {
-        const histories = arrivalsByItem.get(itemId) ?? []
-        if (histories.length === 0) continue
-        const latest = histories[0]
-
-        const del = await supabase.from('purchase_item_arrivals').delete().eq('id', latest.id)
-        if (del.error) throw del.error
-      }
-
-      setMsg('선택 상품 최근 입고 취소 완료')
-      clearSelectedItems()
-      await load({ preserveScroll: true })
-    } catch (e: any) {
-      setErr(e?.message ?? String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function revertSelectedAll() {
-    if (selectedItemIds.length === 0) {
-      setErr('선택된 상품이 없어.')
-      return
-    }
-
-    if (
-      !confirm(
-        '선택 상품들의 입고이력을 전부 삭제하고 미도착으로 되돌릴까?'
-      )
-    )
-      return
-
-    try {
-      setLoading(true)
-      setErr(null)
-      setMsg(null)
-
-      for (const itemId of selectedItemIds) {
-        const del = await supabase
-          .from('purchase_item_arrivals')
-          .delete()
-          .eq('purchase_item_id', itemId)
-        if (del.error) throw del.error
-      }
-
-      setMsg('선택 상품 전체 입고이력 삭제 완료')
-      clearSelectedItems()
-      await load({ preserveScroll: true })
-    } catch (e: any) {
-      setErr(e?.message ?? String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function deleteSelectedItems() {
-    if (selectedItemIds.length === 0) {
-      setErr('선택된 상품이 없어.')
-      return
-    }
-
-    if (
-      !confirm(
-        '선택한 상품을 삭제할까?\n입고이력/배분/상품사진/매출연결까지 함께 지워질 수 있어.'
-      )
-    )
-      return
-
-    try {
-      setLoading(true)
-      setErr(null)
-      setMsg(null)
-
-      for (const itemId of selectedItemIds) {
-        const linkedSaleCount = saleItems.filter((s) => s.purchase_item_id === itemId).length
-        if (linkedSaleCount > 0) {
-          throw new Error(
-            `판매내역과 연결된 상품은 삭제할 수 없어. 먼저 매출관리에서 해당 상품 판매내역을 정리해줘.`
-          )
-        }
-      }
-
-      const targetFiles = files.filter((f) => f.item_id && selectedItemIds.includes(f.item_id))
-      const fileIds = targetFiles.map((f) => f.id)
-      const filePaths = targetFiles.map((f) => f.file_path).filter(Boolean) as string[]
-
-      if (fileIds.length > 0) {
-        const delFiles = await supabase.from('purchase_files').delete().in('id', fileIds)
-        if (delFiles.error) throw delFiles.error
-      }
-
-      if (filePaths.length > 0) {
-        await supabase.storage.from(STORAGE_BUCKET).remove(filePaths)
-      }
-
-      const delArrivals = await supabase
-        .from('purchase_item_arrivals')
-        .delete()
-        .in('purchase_item_id', selectedItemIds)
-      if (delArrivals.error) throw delArrivals.error
-
-      const delAlloc = await supabase
-        .from('cost_allocations')
-        .delete()
-        .in('purchase_item_id', selectedItemIds)
-      if (delAlloc.error) throw delAlloc.error
-
-      const delItems = await supabase.from('purchase_items').delete().in('id', selectedItemIds)
-      if (delItems.error) throw delItems.error
-
-      setMsg(`선택 상품 ${selectedItemIds.length}개 삭제 완료`)
-      clearSelectedItems()
-      await load({ preserveScroll: true })
-    } catch (e: any) {
-      setErr(e?.message ?? String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
+  async function deleteArrival(arrivalId: string) { const target = arrivals.find(row => row.id === arrivalId); if (target) await requestInventoryAction('arrival', [target.purchase_item_id], arrivalId) }
+  async function revertToUndelivered(itemId: string) { await requestInventoryAction('latest', [itemId]) }
+  async function revertSelectedLatest() { await requestInventoryAction('latest', selectedItemIds) }
+  async function revertSelectedAll() { await requestInventoryAction('all', selectedItemIds) }
+  async function deleteSelectedItems() { await requestInventoryAction('archive', selectedItemIds) }
 
   function openEditModal(item: ItemRow) {
     setEditTarget(item)
@@ -1259,6 +1132,10 @@ export default function ProductsPage() {
 
   return (
     <div ref={pageRef} style={styles.page}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
+      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
+      <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
+
       <div style={styles.topbar}>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={styles.title}>상품 / 재고관리</div>
@@ -1293,7 +1170,7 @@ export default function ProductsPage() {
               onClick={deleteSelectedItems}
               disabled={selectedItemIds.length === 0 || loading}
             >
-              체크상품삭제
+              선택 상품 보관 삭제
             </button>
 
             <button
@@ -1398,7 +1275,7 @@ export default function ProductsPage() {
             체크된 상품 {selectedItemIds.length}개
           </div>
           <div style={{ fontSize: 13, color: '#6b7280' }}>
-            선택 입고처리 / 선택 미도착 / 체크상품삭제를 한 번에 할 수 있어.
+            선택 입고처리 / 선택 미도착 / 선택 상품 보관 삭제를 한 번에 할 수 있어.
           </div>
         </div>
       ) : null}
@@ -1915,6 +1792,8 @@ export default function ProductsPage() {
         </div>
       )}
 
+      </div>
+
       {bulkModalOpen && (
         <div style={styles.modalOverlay} onMouseDown={() => setBulkModalOpen(false)}>
           <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
@@ -2325,6 +2204,15 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+      <SafeModal open={!!actionPopup} title={actionPopup?.action === 'archive' ? '선택 상품을 보관 삭제할까요?' : '입고이력을 취소할까요?'} onClose={() => { if (!actionBusy) setActionPopup(null) }}>
+        {actionPopup ? <div style={{ display: 'grid', gap: 12 }}>
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>{(actionPopup.changes || actionPopup.ids.map(id => ({ item_id: id, name: items.find(row => row.id === id)?.item_name || id }))).map(row => <div key={row.item_id} style={{ padding: 8, borderBottom: '1px solid #eee' }}><b>{row.name}</b>{row.before !== undefined ? ` · 재고 ${row.before} → ${row.after}개` : ''}</div>)}</div>
+          <div style={{ padding: 12, background: '#fff7ed', borderRadius: 10 }}>{actionPopup.action === 'archive' ? '상품을 목록에서 숨기는 보관 삭제예요. 매입·원가·사진 원본은 유지되며 위치·재고실사의 보관 상품 보기에서 복원할 수 있어요.' : actionPopup.action === 'all' ? '선택 상품의 입고이력을 전부 취소해요. 판매나 실사와 충돌하면 실행하지 않아요.' : '대상 입고이력을 취소하고 재고를 다시 계산해요. 판매·실사 이력은 유지돼요.'}</div>
+          <label>사유<input style={styles.input} value={actionReason} disabled={actionBusy} onChange={e => setActionReason(e.target.value)} /></label>
+          {actionBusy ? <div>내용을 확인하고 있어요…</div> : null}{actionPopup.error ? <div role="alert" style={{ color: '#b91c1c' }}>{actionPopup.error}</div> : null}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><button style={styles.btn('ghost')} disabled={actionBusy} onClick={() => setActionPopup(null)}>돌아가기</button><button style={styles.btn('danger')} disabled={actionBusy || !actionPopup.token || !!actionPopup.error || !actionReason.trim()} onClick={confirmInventoryAction}>확인 후 실행</button></div>
+        </div> : null}
+      </SafeModal>
     </div>
   )
 }
