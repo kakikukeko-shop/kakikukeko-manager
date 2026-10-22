@@ -335,6 +335,35 @@ function getRefundSummaryFromCost(row: NormalizedPurchaseCostRow) {
   }
 }
 
+
+async function loadAllDashboardSales() {
+  const data: SaleSummaryRow[] = []
+  for (let offset = 0; ; offset += 500) {
+    const result = await supabase
+            .from('sales')
+            .select(`
+              id,
+              sale_date,
+              final_amount,
+              profit_amount,
+              channel,
+              sales_channel,
+              memo,
+              sale_items (
+                qty,
+                purchase_items (
+                  item_name
+                )
+              )
+            `)
+            .order('sale_date', { ascending: true }).order('id', { ascending: true }).range(offset, offset + 499)
+    if (result.error) throw result.error
+    const page = (result.data || []) as unknown as SaleSummaryRow[]
+    data.push(...page)
+    if (page.length < 500) return { data, error: null }
+  }
+}
+
 export default function DashboardPage() {
   const [sales, setSales] = useState<SaleSummaryRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseSummaryRow[]>([])
@@ -352,24 +381,7 @@ export default function DashboardPage() {
 
       try {
         const [salesRes, purchaseRes, purchaseCostRes] = await Promise.all([
-          supabase
-            .from('sales')
-            .select(`
-              id,
-              sale_date,
-              final_amount,
-              profit_amount,
-              channel,
-              sales_channel,
-              memo,
-              sale_items (
-                qty,
-                purchase_items (
-                  item_name
-                )
-              )
-            `)
-            .order('sale_date', { ascending: true }),
+          loadAllDashboardSales(),
 
           supabase
             .from('purchase')
@@ -870,6 +882,8 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
+      <SalesCalendar sales={normalizedSales} loading={loading} error={err} />
+
       <section
         data-mobile-role="dashboard-sales-cards"
         style={{
@@ -1345,4 +1359,67 @@ export default function DashboardPage() {
       </SafeModal>
     </div>
   )
+}
+
+function koreaDateKey() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+  const value = (type: string) => parts.find(part => part.type === type)?.value || ''
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+function calendarDays(month: string) {
+  const [year, number] = month.split('-').map(Number)
+  const start = new Date(year, number - 1, 1).getDay()
+  const length = new Date(year, number, 0).getDate()
+  return Array.from({ length: Math.ceil((start + length) / 7) * 7 }, (_, index) => {
+    const day = index - start + 1
+    return day >= 1 && day <= length ? `${month}-${String(day).padStart(2, '0')}` : ''
+  })
+}
+function SalesCalendar({ sales, loading, error }: { sales: NormalizedSaleRow[]; loading: boolean; error: string | null }) {
+  const [today, setToday] = useState(koreaDateKey)
+  const [month, setMonth] = useState(() => koreaDateKey().slice(0, 7))
+  const [selected, setSelected] = useState<string | null>(null)
+  useEffect(() => { const timer = window.setInterval(() => setToday(koreaDateKey()), 30000); return () => window.clearInterval(timer) }, [])
+  const days = useMemo(() => calendarDays(month), [month])
+  const byDate = useMemo(() => {
+    const map = new Map<string, NormalizedSaleRow[]>()
+    sales.forEach(row => { if (row.normalizedDate) map.set(row.normalizedDate, [...(map.get(row.normalizedDate) || []), row]) })
+    return map
+  }, [sales])
+  const monthRows = sales.filter(row => row.normalizedDate.startsWith(`${month}-`))
+  const total = (rows: NormalizedSaleRow[], field: 'final_amount' | 'profit_amount') => rows.reduce((sum, row) => sum + Number(row[field] || 0), 0)
+  const move = (offset: number) => { const [year, number] = month.split('-').map(Number); const date = new Date(year, number - 1 + offset, 1); setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`) }
+  const control = { border: '1px solid #ddd6fe', background: '#fff', borderRadius: 10, padding: '9px 13px', cursor: 'pointer', fontWeight: 800 } as const
+  return <section style={{ background: '#fff', padding: 18, borderRadius: 20, border: '1px solid #e5e7eb', minWidth: 0 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 20 }}>월별 매출 달력</h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><button style={control} aria-label="이전 달" onClick={() => move(-1)}>‹</button><input type="month" aria-label="조회 월" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value) }} style={{ ...control, minWidth: 140 }} /><button style={control} aria-label="다음 달" onClick={() => move(1)}>›</button><button style={control} onClick={() => { setToday(koreaDateKey()); setMonth(koreaDateKey().slice(0, 7)) }}>이번 달</button></div>
+    </div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, margin: '16px 0', padding: 14, background: '#f5f3ff', borderRadius: 12 }}>
+      <div>월 매출 <b>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'final_amount'))}</b></div>
+      <div>월 매출이익 <b style={{ color: total(monthRows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'profit_amount'))}</b></div>
+      <div>{loading || error ? '—' : `${monthRows.length}건 판매`}</div>
+    </div>
+    <p style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>판매일 기준 · 매출은 저장된 실입금액, 매출이익은 매출관리의 저장된 이익 기준이에요. 월세 등 운영비를 모두 뺀 순이익은 아니에요. 날짜를 누르면 판매 내역을 볼 수 있어요.</p>
+    {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 5 }}>
+      {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <div key={day} style={{ padding: 8, textAlign: 'center', fontWeight: 800, color: index === 0 ? '#b91c1c' : index === 6 ? '#2563eb' : '#6b7280' }}>{day}</div>)}
+      {days.map((date, index) => {
+        const rows = byDate.get(date) || []
+        const isToday = date === today
+        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 108, minWidth: 0, padding: 8, border: isToday ? '2px solid #7c3aed' : '1px solid #e5e7eb', borderRadius: 10, background: isToday ? '#f5f3ff' : '#fff', cursor: 'pointer', overflowWrap: 'anywhere' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, fontWeight: isToday ? 900 : 700, color: index % 7 === 0 ? '#b91c1c' : index % 7 === 6 ? '#2563eb' : '#111827' }}>{Number(date.slice(-2))}{isToday ? <span style={{ background: '#7c3aed', color: '#fff', padding: '2px 5px', borderRadius: 6, fontSize: 10 }}>오늘</span> : null}</div>
+          {rows.length ? <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.7 }}><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div><small style={{ color: '#6b7280' }}>{rows.length}건</small></div> : <div style={{ marginTop: 15, color: '#9ca3af', fontSize: 11 }}>판매 없음</div>}
+        </button> : <div key={`empty-${index}`} style={{ background: '#fafafa', borderRadius: 10 }} />
+      })}
+    </div></div>}
+    <SafeModal open={!!selected} title={`${selected || ''} 판매 내역`} onClose={() => setSelected(null)}><div style={{ display: 'grid', gap: 12 }}>
+      <b>매출 {fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))} · 매출이익 {fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b>
+      {!(byDate.get(selected || '') || []).length ? <p>이 날짜에는 판매 내역이 없어요.</p> : (byDate.get(selected || '') || []).map(row => <div key={row.id} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 10 }}>
+        <div style={{ fontWeight: 800 }}>{row.channel || row.sales_channel || '판매처 미입력'}</div>
+        {(row.sale_items || []).map((item, index) => <div key={index} style={{ marginTop: 5 }}>{getSaleItemName(item)} · {item.qty || 0}개</div>)}
+        <div style={{ marginTop: 8 }}>매출 {fmtKRW(Number(row.final_amount || 0))} · 매출이익 {fmtKRW(Number(row.profit_amount || 0))}</div>
+      </div>)}
+      <Link href="/sales">매출관리로 이동</Link>
+    </div></SafeModal>
+  </section>
 }
