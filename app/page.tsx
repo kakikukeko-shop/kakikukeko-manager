@@ -364,6 +364,56 @@ async function loadAllDashboardSales() {
   }
 }
 
+
+async function loadAllDashboardPurchases() {
+  const data: PurchaseSummaryRow[] = []
+  for (let offset = 0; ; offset += 500) {
+    const result = await supabase
+            .from('purchase')
+            .select(`
+              id,
+              purchase_date,
+              supplier,
+              total_amount,
+              memo,
+              purchase_items (
+                item_name,
+                qty
+              )
+            `)
+            .order('purchase_date', { ascending: true }).order('id', { ascending: true }).range(offset, offset + 499)
+    if (result.error) throw result.error
+    const page = (result.data || []) as unknown as PurchaseSummaryRow[]
+    data.push(...page)
+    if (page.length < 500) return { data, error: null }
+  }
+}
+
+
+async function loadAllDashboardCosts() {
+  const data: PurchaseCostSummaryRow[] = []
+  for (let offset = 0; ; offset += 500) {
+    const result = await supabase
+            .from('purchase_costs')
+            .select(`
+              id,
+              purchase_id,
+              cost_date,
+              cost_type,
+              vendor_name,
+              amount,
+              currency,
+              fx_rate,
+              memo
+            `)
+            .order('cost_date', { ascending: true }).order('id', { ascending: true }).range(offset, offset + 499)
+    if (result.error) throw result.error
+    const page = (result.data || []) as unknown as PurchaseCostSummaryRow[]
+    data.push(...page)
+    if (page.length < 500) return { data, error: null }
+  }
+}
+
 export default function DashboardPage() {
   const [sales, setSales] = useState<SaleSummaryRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseSummaryRow[]>([])
@@ -383,35 +433,9 @@ export default function DashboardPage() {
         const [salesRes, purchaseRes, purchaseCostRes] = await Promise.all([
           loadAllDashboardSales(),
 
-          supabase
-            .from('purchase')
-            .select(`
-              id,
-              purchase_date,
-              supplier,
-              total_amount,
-              memo,
-              purchase_items (
-                item_name,
-                qty
-              )
-            `)
-            .order('purchase_date', { ascending: true }),
+          loadAllDashboardPurchases(),
 
-          supabase
-            .from('purchase_costs')
-            .select(`
-              id,
-              purchase_id,
-              cost_date,
-              cost_type,
-              vendor_name,
-              amount,
-              currency,
-              fx_rate,
-              memo
-            `)
-            .order('cost_date', { ascending: true }),
+          loadAllDashboardCosts(),
         ])
 
         if (salesRes.error) throw salesRes.error
@@ -882,7 +906,7 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
-      <SalesCalendar sales={normalizedSales} loading={loading} error={err} />
+      <SalesCalendar purchases={normalizedPurchases} costs={normalizedPurchaseCosts} sales={normalizedSales} loading={loading} error={err} />
 
       <section
         data-mobile-role="dashboard-sales-cards"
@@ -1375,7 +1399,7 @@ function calendarDays(month: string) {
     return day >= 1 && day <= length ? `${month}-${String(day).padStart(2, '0')}` : ''
   })
 }
-function SalesCalendar({ sales, loading, error }: { sales: NormalizedSaleRow[]; loading: boolean; error: string | null }) {
+function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: NormalizedSaleRow[]; purchases: NormalizedPurchaseRow[]; costs: NormalizedPurchaseCostRow[]; loading: boolean; error: string | null }) {
   const [today, setToday] = useState(koreaDateKey)
   const [month, setMonth] = useState(() => koreaDateKey().slice(0, 7))
   const [selected, setSelected] = useState<string | null>(null)
@@ -1386,40 +1410,59 @@ function SalesCalendar({ sales, loading, error }: { sales: NormalizedSaleRow[]; 
     sales.forEach(row => { if (row.normalizedDate) map.set(row.normalizedDate, [...(map.get(row.normalizedDate) || []), row]) })
     return map
   }, [sales])
+  const purchaseByDate = useMemo(() => {
+    const map = new Map<string, { amount: number; goods: NormalizedPurchaseRow[]; costs: NormalizedPurchaseCostRow[] }>()
+    const entry = (date: string) => { if (!map.has(date)) map.set(date, { amount: 0, goods: [], costs: [] }); return map.get(date)! }
+    purchases.forEach(row => { if (row.normalizedDate) { const day = entry(row.normalizedDate); day.amount += Number(row.total_amount || 0); day.goods.push(row) } })
+    costs.forEach(row => { if (row.normalizedDate) { const day = entry(row.normalizedDate); day.amount += Number(row.amountKrw || 0); day.costs.push(row) } })
+    return map
+  }, [purchases, costs])
+  const monthPurchase = [...purchaseByDate.entries()].filter(([date]) => date.startsWith(`${month}-`)).reduce((sum, [, day]) => sum + day.amount, 0)
+  const selectedPurchase = purchaseByDate.get(selected || '')
   const monthRows = sales.filter(row => row.normalizedDate.startsWith(`${month}-`))
   const total = (rows: NormalizedSaleRow[], field: 'final_amount' | 'profit_amount') => rows.reduce((sum, row) => sum + Number(row[field] || 0), 0)
   const move = (offset: number) => { const [year, number] = month.split('-').map(Number); const date = new Date(year, number - 1 + offset, 1); setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`) }
   const control = { border: '1px solid #ddd6fe', background: '#fff', borderRadius: 10, padding: '6px 10px', cursor: 'pointer', fontWeight: 800 } as const
   return <section style={{ background: '#fff', padding: 14, borderRadius: 20, border: '1px solid #ede9fe', backgroundImage: 'linear-gradient(135deg, #ffffff, #faf8ff)', minWidth: 0 }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-      <h2 style={{ margin: 0, fontSize: 18 }}>월별 매출 달력</h2>
+      <h2 style={{ margin: 0, fontSize: 18 }}>월별 매출 / 매입 달력</h2>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><button style={control} aria-label="이전 달" onClick={() => move(-1)}>‹</button><input type="month" aria-label="조회 월" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value) }} style={{ ...control, minWidth: 140 }} /><button style={control} aria-label="다음 달" onClick={() => move(1)}>›</button><button style={control} onClick={() => { setToday(koreaDateKey()); setMonth(koreaDateKey().slice(0, 7)) }}>이번 달</button></div>
     </div>
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, margin: '10px 0', padding: 10, background: '#f5f3ff', borderRadius: 12 }}>
       <div>월 매출 <b>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'final_amount'))}</b></div>
       <div>월 매출이익 <b style={{ color: total(monthRows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(total(monthRows, 'profit_amount'))}</b></div>
+      <div>월 매입 <b style={{ color: '#0f766e' }}>{loading ? '불러오는 중…' : error ? '조회 실패' : fmtKRW(monthPurchase)}</b></div>
       <div>{loading || error ? '—' : `${monthRows.length}건 판매`}</div>
     </div>
-    <p style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.4, margin: '8px 0' }}>판매일 기준 · 매출은 실입금액, 이익은 매출관리의 저장값이에요(운영비 차감 전). 날짜를 누르면 내역을 볼 수 있어요.</p>
+    <p style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.4, margin: '8px 0' }}>판매일 기준 · 매출은 실입금액, 이익은 매출관리의 저장값이에요(운영비 차감 전). 매입은 매입일의 상품금액 + 비용일의 추가비용(환불 차감)이에요. 날짜를 누르면 내역을 볼 수 있어요.</p>
     {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
       {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <div key={day} style={{ padding: 4, textAlign: 'center', fontWeight: 800, color: index === 0 ? '#b91c1c' : index === 6 ? '#2563eb' : '#6b7280' }}>{day}</div>)}
       {days.map((date, index) => {
         const rows = byDate.get(date) || []
+        const purchase = purchaseByDate.get(date)
         const isToday = date === today
-        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 72, minWidth: 0, padding: '6px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', border: isToday ? '2px solid #7c3aed' : '1px solid #eeeaf5', borderRadius: 12, background: isToday ? '#ede9fe' : rows.length ? '#fff' : '#faf9fc', cursor: 'pointer', overflowWrap: 'anywhere' }}>
+        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}, 매입 ${fmtKRW(purchase?.amount || 0)}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 72, minWidth: 0, padding: '6px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', border: isToday ? '2px solid #7c3aed' : '1px solid #eeeaf5', borderRadius: 12, background: isToday ? '#ede9fe' : rows.length || purchase ? '#fff' : '#faf9fc', cursor: 'pointer', overflowWrap: 'anywhere' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, fontWeight: isToday ? 900 : 700, color: index % 7 === 0 ? '#b91c1c' : index % 7 === 6 ? '#2563eb' : '#111827' }}>{Number(date.slice(-2))}{isToday ? <span style={{ background: '#7c3aed', color: '#fff', padding: '2px 5px', borderRadius: 6, fontSize: 10 }}>오늘</span> : null}</div>
-          {rows.length ? <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.5 }}><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div></div> : <div style={{ marginTop: 7, color: '#d1cbdc', fontSize: 11 }}>—</div>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '2px 8px', width: '100%', marginTop: 5, fontSize: 11, lineHeight: 1.5 }}>
+            <div>{rows.length ? <><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div></> : <span style={{ color: '#d1cbdc' }}>—</span>}</div>
+            {purchase ? <div style={{ color: '#0f766e' }}>매입 <b>{fmtKRW(purchase.amount)}</b></div> : null}
+          </div>
         </button> : <div key={`empty-${index}`} style={{ background: '#fafafa', borderRadius: 10 }} />
       })}
     </div></div>}
-    <SafeModal open={!!selected} title={`${selected || ''} 판매 내역`} onClose={() => setSelected(null)}><div style={{ display: 'grid', gap: 12 }}>
+    <SafeModal open={!!selected} title={`${selected || ''} 매출 / 매입 내역`} onClose={() => setSelected(null)}><div style={{ display: 'grid', gap: 12 }}>
       <b>매출 {fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))} · 매출이익 {fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b>
       {!(byDate.get(selected || '') || []).length ? <p>이 날짜에는 판매 내역이 없어요.</p> : (byDate.get(selected || '') || []).map(row => <div key={row.id} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <div style={{ fontWeight: 800 }}>{row.channel || row.sales_channel || '판매처 미입력'}</div>
         {(row.sale_items || []).map((item, index) => <div key={index} style={{ marginTop: 5 }}>{getSaleItemName(item)} · {item.qty || 0}개</div>)}
         <div style={{ marginTop: 8 }}>매출 {fmtKRW(Number(row.final_amount || 0))} · 매출이익 {fmtKRW(Number(row.profit_amount || 0))}</div>
       </div>)}
-      <Link href="/sales">매출관리로 이동</Link>
+      <h3 style={{ margin: '8px 0 0', color: '#0f766e' }}>매입 {fmtKRW(selectedPurchase?.amount || 0)}</h3>
+      {!selectedPurchase ? <p>이 날짜에는 매입 내역이 없어요.</p> : <>
+        {selectedPurchase.goods.map(row => <div key={row.id} style={{ padding: 10, background: '#f0fdfa', borderRadius: 10 }}><b>{row.supplier || '거래처 미입력'} · 상품매입 {fmtKRW(Number(row.total_amount || 0))}</b>{(row.purchase_items || []).map((item, index) => <div key={index}>{item.item_name || '상품명 없음'} · {item.qty || 0}개</div>)}</div>)}
+        {selectedPurchase.costs.map(row => <div key={row.id} style={{ padding: 10, background: '#f0fdfa', borderRadius: 10 }}>{row.cost_type || '추가비용'} · {row.vendor_name || '거래처 미입력'} · <b>{fmtKRW(row.amountKrw)}</b></div>)}
+      </>}
+      <div style={{ display: 'flex', gap: 16 }}><Link href="/sales">매출관리로 이동</Link><Link href="/documents">매입관리로 이동</Link></div>
     </div></SafeModal>
   </section>
 }
