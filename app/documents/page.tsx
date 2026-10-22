@@ -656,7 +656,7 @@ function fmtKRW(v: number) {
 }
 
 function fmtNum(v: number) {
-  return Number.isFinite(v) ? v.toLocaleString("ko-KR") : "0";
+  return Number.isFinite(v) ? v.toLocaleString("ko-KR", { maximumFractionDigits: 4 }) : "0";
 }
 
 function fmtDateTime(iso: string) {
@@ -1887,6 +1887,7 @@ export default function DocumentsPage() {
   const [allocations, setAllocations] = useState<CostAllocationRow[]>([]);
   const [arrivals, setArrivals] = useState<ArrivalRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [pointSettings, setPointSettings] = useState<{vendor_key:string;currency:string;foreign_per_point:number}[]>([]);
   const [pointRows, setPointRows] = useState<{vendor_name:string;amount:number}[]>([]);
   const [fPointsUsed, setFPointsUsed] = useState("");
   const [fPointsEarned, setFPointsEarned] = useState("");
@@ -2061,18 +2062,18 @@ export default function DocumentsPage() {
   const [cancelPopupBusy, setCancelPopupBusy] = useState(false);
   const [editPointOpen, setEditPointOpen] = useState(false);
   const [editPointBusy, setEditPointBusy] = useState(false);
-  const [editPointSource, setEditPointSource] = useState<{ purchaseId: string; vendor: string; ids: string[]; products: string[]; wallet: number; points: number; usedPoints: number; available: Record<string, number> } | null>(null);
+  const [editPointSource, setEditPointSource] = useState<{ purchaseId: string; vendor: string; ids: string[]; products: string[]; currency: string; rate: number; wallet: number; points: number; usedPoints: number; available: Record<string, number> } | null>(null);
   const [editPointAmount, setEditPointAmount] = useState("");
   const [editPointDate, setEditPointDate] = useState("");
   const [editPointType, setEditPointType] = useState("상품");
   const [editPointError, setEditPointError] = useState("");
-  const [editPointQuote, setEditPointQuote] = useState<{ signature: string; krw: number } | null>(null);
+  const [editPointQuote, setEditPointQuote] = useState<{ signature: string; krw: number; currency: string; rate: number; foreign: number } | null>(null);
   const editPointBusyRef = useRef(false);
   const editPointRequestRef = useRef<{ signature: string; id: string } | null>(null);
   const [cPointMode, setCPointMode] = useState(false);
   const [cPointAmount, setCPointAmount] = useState("");
   const [cPointUsageType, setCPointUsageType] = useState("상품");
-  const [cPointQuote, setCPointQuote] = useState<{ signature: string; krw: number; balance: number; vendor: string } | null>(null);
+  const [cPointQuote, setCPointQuote] = useState<{ signature: string; krw: number; balance: number; vendor: string; currency: string; foreign: number; rate: number } | null>(null);
   const cPointRequestRef = useRef<{ signature: string; id: string } | null>(null);
   const cPointBusyRef = useRef(false);
   const isCostPointUse = cType === "할인/쿠폰" && cPointMode;
@@ -3255,8 +3256,12 @@ export default function DocumentsPage() {
     : 0;
 
   const pointBalance = pointRows.filter((row) => normalizeName(row.vendor_name) === normalizeName(fSupplier)).reduce((sum,row) => sum+n(row.amount),0);
-  const appliedPoints = fUseWallet && buyMode === "create" && normalizeCurrencyCode(currencyValue(fCurrency, fCurrencyCustom)) === "JPY" ? Math.max(0,n(fPointsUsed)) : 0;
-  const pointNetParts = pointPaymentParts(walletProductForeign, walletShippingForeign, walletFeeForeign, appliedPoints);
+  const pointSetting = pointSettings.find(row => row.vendor_key === String(fSupplier || '').trim().toLowerCase());
+  const pointCurrencyMatches = !!pointSetting && pointSetting.currency === walletCurrency;
+  const pointRuleLabel = pointSetting ? `1점 = ${Number(pointSetting.foreign_per_point).toLocaleString('ko-KR', {maximumFractionDigits:4})} ${pointSetting.currency}` : '거래처관리에서 포인트 환산 기준을 먼저 저장하세요';
+  const appliedPoints = fUseWallet && buyMode === "create" && pointCurrencyMatches ? Math.max(0,n(fPointsUsed)) : 0;
+  const appliedPointForeign = round4(appliedPoints * n(pointSetting?.foreign_per_point));
+  const pointNetParts = pointPaymentParts(walletProductForeign, walletShippingForeign, walletFeeForeign, appliedPointForeign);
   const fullyPointPaid = fUseWallet && buyMode === "create" && appliedPoints > 0 && pointNetParts.net === 0;
   const walletQuote = useMemo(
     () => {
@@ -3271,6 +3276,7 @@ export default function DocumentsPage() {
       walletShippingForeign,
       walletFeeForeign,
       appliedPoints,
+      appliedPointForeign,
       fullyPointPaid,
     ],
   );
@@ -3537,7 +3543,7 @@ export default function DocumentsPage() {
     }
     if (fUseWallet && fFeeIncluded && n(fFeeForeign) <= 0) notes.push("충전잔액에서 함께 차감할 수수료를 입력해 주세요.");
     const expectedPayment = fUseWallet
-      ? round4(productForeign + (fShippingIncluded ? n(fShippingForeign) : 0) + (fFeeIncluded ? n(fFeeForeign) : 0) - appliedPoints)
+      ? round4(productForeign + (fShippingIncluded ? n(fShippingForeign) : 0) + (fFeeIncluded ? n(fFeeForeign) : 0) - appliedPointForeign)
       : fShippingIncluded ? purchasePaymentComposition.combinedForeign : productForeign;
     if (!editingPurchaseHasRefund && !hasCrossCurrencyPayments && paymentForeignSum > 0 && Math.abs(paymentForeignSum - expectedPayment) > 0.01) {
       notes.push("결제내역의 외화금액과 상품·함께 결제한 비용의 합계가 다릅니다. 결제 통화와 금액을 확인해 주세요.");
@@ -3776,6 +3782,10 @@ export default function DocumentsPage() {
       const pointRes = await supabase.from("vendor_point_ledger").select("vendor_name,amount");
       if (pointRes.error) throw pointRes.error;
       setPointRows(pointRes.data ?? []);
+      const pointSettingsRes = await supabase.from("vendor_point_settings").select("vendor_key,currency,foreign_per_point");
+      if (pointSettingsRes.error) throw pointSettingsRes.error;
+      setPointSettings(pointSettingsRes.data ?? []);
+
       setFiles(fs);
       const cancelRes = await supabase.from("manager_cancellations").select("id,created_at,action_kind,source_id,reason,effects,snapshot").order("created_at", { ascending: false }).limit(100);
       if (cancelRes.error) throw cancelRes.error;
@@ -4541,10 +4551,10 @@ export default function DocumentsPage() {
         setErr("포인트가 연결된 매입의 일반 금액 수정은 잠겨 있어요. 포인트 추가는 아래 ‘잔액·포인트 불러오기’에서 저장해 주세요."); return;
       }
     }
-    if ((n(fPointsUsed) || n(fPointsEarned)) && (!fUseWallet || buyMode !== "create" || walletCurrency !== "JPY")) {
-      setErr("포인트는 JPY 충전잔액으로 새 매입을 등록할 때 사용해 주세요."); return;
+    if ((n(fPointsUsed) || n(fPointsEarned)) && (!fUseWallet || buyMode !== "create" || !pointCurrencyMatches)) {
+      setErr("포인트 환산 기준을 거래처관리에서 저장하고, 같은 통화의 충전잔액으로 새 매입을 등록해 주세요."); return;
     }
-    if (![n(fPointsUsed), n(fPointsEarned)].every((v) => Number.isSafeInteger(v) && v >= 0) || appliedPoints > pointBalance || appliedPoints > round4(walletProductForeign + walletShippingForeign + walletFeeForeign)) {
+    if (![n(fPointsUsed), n(fPointsEarned)].every((v) => Number.isSafeInteger(v) && v >= 0) || appliedPoints > pointBalance || appliedPointForeign > round4(walletProductForeign + walletShippingForeign + walletFeeForeign)) {
       setErr("포인트는 0 이상의 정수로 입력하고, 사용액은 현재 잔액과 결제 전 금액을 넘지 않아야 해요."); return;
     }
     setMsg(null);
@@ -4703,7 +4713,7 @@ export default function DocumentsPage() {
     // 충전잔액 사용 시 상품·배송비·수수료가 모두 같은 잔액에서 차감된다.
     // 따라서 결제내역 외화합계도 실제 총 충전잔액 차감 외화와 맞아야 한다.
     const expectedPaymentForeign = fUseWallet
-      ? round4(combinedForeign - appliedPoints)
+      ? round4(combinedForeign - appliedPointForeign)
       : fShippingIncluded
         ? combinedForeign
         : productForeign;
@@ -4904,7 +4914,7 @@ export default function DocumentsPage() {
       // 원화 원가는 서로 분리해서 저장한다.
       if (fUseWallet && buyMode === "create") {
         const consumeRes = await supabase.rpc(
-          (appliedPoints > 0 || n(fPointsEarned) > 0) ? "consume_vendor_wallet_with_points" : "consume_vendor_wallet",
+          (appliedPoints > 0 || n(fPointsEarned) > 0) ? "consume_vendor_wallet_with_points_v2" : "consume_vendor_wallet",
           {
             p_purchase_id: purchaseId,
             p_vendor_name: fSupplier.trim(),
@@ -4916,7 +4926,7 @@ export default function DocumentsPage() {
             p_fee_foreign: feeForeign,
             p_memo: "매입관리 자동 차감",
             ...((appliedPoints > 0 || n(fPointsEarned) > 0) ? {
-              p_points_used: appliedPoints, p_points_earned: n(fPointsEarned),
+              p_point_currency: pointSetting!.currency, p_point_rate: n(pointSetting!.foreign_per_point), p_points_used: appliedPoints, p_points_earned: n(fPointsEarned),
               p_expected_product_krw: walletQuote.productKRW,
               p_expected_shipping_krw: walletQuote.shippingKRW,
               p_expected_fee_krw: walletQuote.feeKRW,
@@ -5583,14 +5593,18 @@ export default function DocumentsPage() {
         supabase.from("point_wallet_restorations").select("usage_id,foreign_amount").eq("purchase_id", source.id).is("cancelled_at", null),
       ]);
       for (const result of results) if (result.error) throw result.error;
-      const usages = (results[2].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === "JPY");
-      if (!usages.length) throw new Error("이 매입에 JPY 충전잔액 차감 기록이 없어요. 카드 결제를 충전잔액 결제로 바꾸는 기능은 아니에요.");
+      const ruleRes = await supabase.from("vendor_point_settings").select("currency,foreign_per_point").eq("vendor_key", source.supplier.trim().toLowerCase()).maybeSingle();
+      if (ruleRes.error) throw ruleRes.error;
+      if (!ruleRes.data) throw new Error("거래처관리에서 포인트 환산 기준을 먼저 저장해 주세요.");
+      const rule = ruleRes.data;
+      const usages = (results[2].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === rule.currency);
+      if (!usages.length) throw new Error("이 매입에 설정한 포인트 통화의 충전잔액 차감 기록이 없어요. 카드 결제를 충전잔액 결제로 바꾸는 기능은 아니에요.");
       const available: Record<string, number> = { 상품: 0, 배송비: 0, 수수료: 0 };
       for (const row of usages) available[row.usage_type] = round4((available[row.usage_type] || 0) + n(row.foreign_amount) - (results[3].data || []).filter((r: any) => r.usage_id === row.id).reduce((sum: number, r: any) => sum + n(r.foreign_amount), 0));
       const savedItems = itemsByPurchase.get(source.id) || [];
-      setEditPointSource({ purchaseId: source.id, vendor: source.supplier,
+      setEditPointSource({ purchaseId: source.id, vendor: source.supplier, currency: rule.currency, rate: n(rule.foreign_per_point),
         ids: savedItems.map(row => row.id).sort(), products: savedItems.map(row => `${row.item_name || "상품"} · ${fmtNum(n(row.qty))}개`),
-        wallet: (results[0].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === "JPY").reduce((sum: number, row: any) => sum + n(row.remaining_foreign), 0),
+        wallet: (results[0].data || []).filter((row: any) => normalizeCurrencyCode(row.currency) === rule.currency).reduce((sum: number, row: any) => sum + n(row.remaining_foreign), 0),
         points: (results[1].data || []).filter((row: any) => normalizeName(row.vendor_name) === normalizeName(source.supplier)).reduce((sum: number, row: any) => sum + n(row.amount), 0),
         usedPoints: n(source.points_used), available,
       });
@@ -5609,15 +5623,15 @@ export default function DocumentsPage() {
     editPointBusyRef.current = true; setEditPointBusy(true);
     try {
       if (editPointRequestRef.current?.signature !== signature) editPointRequestRef.current = { signature, id: crypto.randomUUID() };
-      const result = await supabase.rpc("apply_cost_points", { p_item_ids: editPointSource.ids, p_points: points, p_usage_date: editPointDate, p_usage_type: editPointType,
+      const result = await supabase.rpc("apply_cost_points_v2", { p_item_ids: editPointSource.ids, p_points: points, p_usage_date: editPointDate, p_usage_type: editPointType,
         p_apply: apply, p_expected_krw: apply ? editPointQuote!.krw : null, p_request_id: apply ? editPointRequestRef.current!.id : null,
-        p_memo: "매입 수정에서 추가 적용한 포인트",
+        p_point_currency: apply ? editPointQuote!.currency : null, p_point_rate: apply ? editPointQuote!.rate : null, p_memo: "매입 수정에서 추가 적용한 포인트",
       });
       if (result.error) throw result.error;
-      if (!apply) setEditPointQuote({ signature, krw: n(result.data.krw) });
+      if (!apply) setEditPointQuote({ signature, krw: n(result.data.krw), currency: result.data.currency, rate: n(result.data.rate), foreign: n(result.data.foreign) });
       else {
         setEditPointOpen(false); setBuyModalOpen(false); setBuyDirty(false);
-        await refreshAll(); setMsg(`포인트 ${fmtNum(points)}점 적용 · 충전잔액 ${fmtNum(points)}엔 복원 · 원가 ${fmtKRW(n(result.data.krw))} 차감 완료`);
+        await refreshAll(); setMsg(`포인트 ${fmtNum(points)}점 적용 · 충전잔액 ${fmtNum(n(result.data.foreign))} ${result.data.currency} 복원 · 원가 ${fmtKRW(n(result.data.krw))} 차감 완료`);
       }
     } catch (e: any) { setEditPointError(e?.message ?? String(e)); }
     finally { editPointBusyRef.current = false; setEditPointBusy(false); }
@@ -6251,18 +6265,18 @@ export default function DocumentsPage() {
       if (!cPointRequestRef.current || cPointRequestRef.current.signature !== cPointSignature) {
         cPointRequestRef.current = { signature: cPointSignature, id: crypto.randomUUID() };
       }
-      const res = await supabase.rpc("apply_cost_points", {
+      const res = await supabase.rpc("apply_cost_points_v2", {
         p_item_ids: selectedItemIds.slice().sort(), p_points: points,
         p_usage_date: cDate, p_usage_type: cPointUsageType, p_apply: apply,
         p_expected_krw: apply ? cPointQuote!.krw : null,
-        p_request_id: apply ? cPointRequestRef.current.id : null, p_memo: cMemo || null,
+        p_point_currency: apply ? cPointQuote!.currency : null, p_point_rate: apply ? cPointQuote!.rate : null, p_request_id: apply ? cPointRequestRef.current.id : null, p_memo: cMemo || null,
       });
       if (res.error) throw res.error;
       if (!apply) {
-        setCPointQuote({ signature: cPointSignature, krw: Number(res.data.krw), balance: Number(res.data.balance), vendor: String(res.data.vendor) });
+        setCPointQuote({ signature: cPointSignature, krw: Number(res.data.krw), balance: Number(res.data.balance), vendor: String(res.data.vendor), currency: String(res.data.currency), foreign: Number(res.data.foreign), rate: Number(res.data.rate) });
       } else {
         setCostModalOpen(false); setCostDirty(false);
-        setMsg(`${points}점 사용 · 충전잔액 ${points}엔 복원 · 원가 ${fmtKRW(Number(res.data.krw))} 차감 완료`);
+        setMsg(`${points}점 사용 · 충전잔액 ${Number(res.data.foreign)} ${res.data.currency} 복원 · 원가 ${fmtKRW(Number(res.data.krw))} 차감 완료`);
         await refreshAll(); resetCostForm();
       }
     } catch (e: any) { setErr(e?.message ?? String(e)); }
@@ -9161,17 +9175,18 @@ export default function DocumentsPage() {
 
               {buyMode === "edit" ? <div style={{ border: "1px solid #ddd6fe", background: "#faf5ff", padding: 12, borderRadius: 10, display: "grid", gap: 8 }}>
                 <b>이미 결제한 매입에 포인트 추가 적용</b>
-                <div style={styles.small}>현재 충전잔액과 포인트, 이 매입에서 이미 차감한 금액을 불러와요. 포인트로 바꾼 금액만큼 충전잔액을 돌려주므로 다시 차감하지 않아요. JPY 충전잔액으로 결제한 매입에서 사용할 수 있어요.</div>
+                <div style={styles.small}>현재 충전잔액과 포인트, 이 매입에서 이미 차감한 금액을 불러와요. 포인트로 바꾼 금액만큼 충전잔액을 돌려주므로 다시 차감하지 않아요. 거래처의 포인트 통화와 같은 통화로 충전 결제한 매입에서 사용할 수 있어요.</div>
                 <button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={loadEditPurchasePoints}>잔액·포인트 불러오기</button>
               </div> : null}
-              {fUseWallet && buyMode === "create" && walletCurrency === "JPY" ? (
+              {fUseWallet && buyMode === "create" && !pointCurrencyMatches ? <div style={styles.small}>{pointRuleLabel}{pointSetting ? ` · 충전 결제 통화(${walletCurrency})와 달라 포인트를 사용할 수 없어요.` : ''}</div> : null}
+              {fUseWallet && buyMode === "create" && pointCurrencyMatches ? (
                 <div style={{ padding: 12, border: "1px solid #ddd6fe", borderRadius: 12, display: "grid", gap: 8 }}>
-                  <b style={{fontSize:13}}>포인트 · 현재 {fmtNum(pointBalance)}점 (1점＝1엔)</b>
+                  <b style={{fontSize:13}}>포인트 · 현재 {fmtNum(pointBalance)}점 ({pointRuleLabel})</b>
                   <div style={styles.grid2}>
                     <div style={styles.field}><div style={styles.label}>이번에 사용한 포인트</div><input style={styles.input} type="number" min="0" step="1" value={fPointsUsed} onChange={(e)=>{setFPointsUsed(e.target.value);setBuyDirty(true)}} placeholder="사용하지 않으면 0"/></div>
                     <div style={styles.field}><div style={styles.label}>이번 구매로 받은 포인트</div><input style={styles.input} type="number" min="0" step="1" value={fPointsEarned} onChange={(e)=>{setFPointsEarned(e.target.value);setBuyDirty(true)}} placeholder="주문내역의 획득 포인트"/></div>
                   </div>
-                  <div style={styles.small}>상품·배송비·수수료에서 포인트를 금액 비율로 차감하고, 남은 {fmtNum(pointNetParts.net)}엔만 충전잔액에서 사용해요. 새 적립은 사용 처리 후 더해져요.</div>
+                  <div style={styles.small}>상품·배송비·수수료에서 포인트를 금액 비율로 차감하고, 남은 {fmtNum(pointNetParts.net)} {walletCurrency}만 충전잔액에서 사용해요. 새 적립은 사용 처리 후 더해져요.</div>
                 </div>
               ) : null}
               {!fSupplier.trim() ? (
@@ -10172,7 +10187,7 @@ export default function DocumentsPage() {
             {isCostPointUse ? (
               <div style={{ gridColumn: "1 / -1", border: "1px solid #ddd6fe", borderRadius: 12, padding: 14, display: "grid", gap: 10 }}>
                 <strong>이미 결제한 금액에 포인트 적용</strong>
-                <div style={styles.small}>1점 = 1엔 · 포인트는 차감하고, 이미 사용한 충전잔액은 같은 금액만큼 복원해요. 한 매입의 상품만 선택하세요. 매입등록에서 이미 사용한 포인트는 여기에 다시 넣지 마세요.</div>
+                <div style={styles.small}>거래처별 환산 기준으로 포인트를 금액으로 바꿔 이미 사용한 같은 통화의 충전잔액을 복원해요. 한 매입의 상품만 선택하세요. 매입등록에서 이미 사용한 포인트는 여기에 다시 넣지 마세요.</div>
                 <div style={styles.grid2}>
                   <label style={styles.field}>사용할 포인트<input style={styles.input} inputMode="numeric" value={cPointAmount} onChange={(e) => setCPointAmount(e.target.value)} placeholder="예: 200" /></label>
                   <label style={styles.field}>잔액을 복원할 결제 항목<select style={styles.select} value={cPointUsageType} onChange={(e) => setCPointUsageType(e.target.value)}><option>상품</option><option>배송비</option><option>수수료</option></select></label>
@@ -10180,7 +10195,7 @@ export default function DocumentsPage() {
                 <button type="button" style={styles.btn("ghost")} disabled={loading} onClick={() => processCostPoints(false)}>복원 금액 확인</button>
                 {cPointQuote?.signature === cPointSignature ? <div style={{ lineHeight: 1.8 }}>
                   <b>{cPointQuote.vendor}</b> · 현재 {fmtNum(cPointQuote.balance)}점<br />
-                  포인트 −{fmtNum(Number(cPointAmount))}점 · 충전잔액 +{fmtNum(Number(cPointAmount))}엔<br />
+                  포인트 −{fmtNum(Number(cPointAmount))}점 · 충전잔액 +{fmtNum(cPointQuote.foreign)} {cPointQuote.currency}<br />
                   선택 상품 원가 −{fmtKRW(cPointQuote.krw)} · 원래 차감한 충전내역 기준
                 </div> : <div style={styles.small}>금액을 확인한 뒤 위의 저장을 누르면 포인트·잔액·원가가 함께 반영돼요.</div>}
                 <label style={styles.field}>메모(선택)<input style={styles.input} value={cMemo} onChange={(e) => setCMemo(e.target.value)} /></label>
@@ -11646,16 +11661,16 @@ export default function DocumentsPage() {
           {editPointBusy ? <div>잔액과 적용 금액을 확인하고 있어요…</div> : null}
           {editPointSource ? <>
             <b>{editPointSource.vendor} · 저장된 매입</b>
-            <div style={{ background: "#faf5ff", borderRadius: 10, padding: 12 }}>현재 충전잔액 <b>{fmtNum(editPointSource.wallet)}엔</b> · 보유 포인트 <b>{fmtNum(editPointSource.points)}점</b><br />이 매입에 이미 사용한 포인트 {fmtNum(editPointSource.usedPoints)}점</div>
+            <div style={{ background: "#faf5ff", borderRadius: 10, padding: 12 }}>현재 충전잔액 <b>{fmtNum(editPointSource.wallet)} {editPointSource.currency}</b> · 보유 포인트 <b>{fmtNum(editPointSource.points)}점</b><br />이 매입에 이미 사용한 포인트 {fmtNum(editPointSource.usedPoints)}점</div>
             <div style={{ maxHeight: 150, overflowY: "auto", fontSize: 12 }}>{editPointSource.products.map((name, index) => <div key={index}>{name}</div>)}</div>
-            <div style={styles.small}>이미 사용한 포인트를 다시 적지 말고, 추가로 적용할 포인트만 입력하세요. 현재 충전잔액이 0엔이어도 기존 차감분을 포인트로 바꿀 수 있어요.</div>
+            <div style={styles.small}>이미 사용한 포인트를 다시 적지 말고, 추가로 적용할 포인트만 입력하세요. 현재 충전잔액이 0이어도 기존 차감분을 포인트로 바꿀 수 있어요.</div>
             <div style={styles.grid2}>
               <label style={styles.field}>포인트 사용일<input style={styles.input} value={editPointDate} placeholder="YYYY-MM-DD" onChange={e => { setEditPointDate(formatDateInput(e.target.value)); setEditPointQuote(null); }} disabled={editPointBusy} /></label>
               <label style={styles.field}>추가로 적용할 포인트<input style={styles.input} inputMode="numeric" value={editPointAmount} onChange={e => { setEditPointAmount(e.target.value); setEditPointQuote(null); }} disabled={editPointBusy} /></label>
-              <label style={styles.field}>포인트로 대신 결제할 항목<select style={styles.select} value={editPointType} onChange={e => { setEditPointType(e.target.value); setEditPointQuote(null); }} disabled={editPointBusy}>{["상품", "배송비", "수수료"].map(type => <option key={type} value={type}>{type} · 남은 차감분 {fmtNum(editPointSource.available[type] || 0)}엔</option>)}</select></label>
+              <label style={styles.field}>포인트로 대신 결제할 항목<select style={styles.select} value={editPointType} onChange={e => { setEditPointType(e.target.value); setEditPointQuote(null); }} disabled={editPointBusy}>{["상품", "배송비", "수수료"].map(type => <option key={type} value={type}>{type} · 남은 차감분 {fmtNum(editPointSource.available[type] || 0)} {editPointSource.currency}</option>)}</select></label>
             </div>
             <button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={() => processEditPurchasePoints(false)}>적용 금액 확인</button>
-            {editPointQuote ? <div style={{ padding: 12, borderRadius: 10, background: "#fff7ed" }}>포인트 <b>−{fmtNum(Number(editPointAmount))}점</b> / 충전잔액 <b>+{fmtNum(Number(editPointAmount))}엔</b><br />상품 원가 <b>−{fmtKRW(editPointQuote.krw)}</b><div style={styles.small}>원래 차감한 충전분과 환율로 복원해요. 기존 결제 전체를 다시 차감하지 않아요.</div></div> : null}
+            {editPointQuote ? <div style={{ padding: 12, borderRadius: 10, background: "#fff7ed" }}>포인트 <b>−{fmtNum(Number(editPointAmount))}점</b> / 충전잔액 <b>+{fmtNum(editPointQuote.foreign)} {editPointQuote.currency}</b><br />상품 원가 <b>−{fmtKRW(editPointQuote.krw)}</b><div style={styles.small}>원래 차감한 충전분과 환율로 복원해요. 기존 결제 전체를 다시 차감하지 않아요.</div></div> : null}
           </> : null}
           {editPointError ? <div role="alert" style={{ color: "#b91c1c", whiteSpace: "pre-wrap" }}>{editPointError}</div> : null}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}><button type="button" style={styles.btn("ghost")} disabled={editPointBusy} onClick={() => setEditPointOpen(false)}>돌아가기</button><button type="button" style={styles.btn("primary")} disabled={editPointBusy || !editPointQuote || !!editPointError} onClick={() => processEditPurchasePoints(true)}>확인 후 포인트 적용</button></div>

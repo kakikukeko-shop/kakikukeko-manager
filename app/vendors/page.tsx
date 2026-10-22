@@ -100,7 +100,7 @@ function normalizeName(v?: string | null) {
 }
 
 function fmtNum(v: number) {
-  return Number.isFinite(v) ? v.toLocaleString('ko-KR') : '0'
+  return Number.isFinite(v) ? v.toLocaleString('ko-KR', { maximumFractionDigits: 4 }) : '0'
 }
 
 function fmtKRW(v: number) {
@@ -141,6 +141,23 @@ export default function VendorsPage() {
   const [pointAmount, setPointAmount] = useState('')
   const [pointMemo, setPointMemo] = useState('')
   const [pointSaving, setPointSaving] = useState(false)
+  const [pointSettings, setPointSettings] = useState<{vendor_key:string;currency:string;foreign_per_point:number}[]>([])
+  const [pointCurrency, setPointCurrency] = useState('')
+  const [pointRate, setPointRate] = useState('')
+  function pointSetting(name?: string|null) { return pointSettings.find(row => row.vendor_key === String(name || '').trim().toLowerCase()) }
+  function pointRule(name?: string|null) { const rule = pointSetting(name); return rule ? `1점 = ${Number(rule.foreign_per_point).toLocaleString('ko-KR', { maximumFractionDigits: 4 })} ${rule.currency}` : '환산 기준 미설정' }
+  async function savePointRule() {
+    if (!pointVendor?.name || pointSaving) return
+    const rate = Number(pointRate)
+    if (!/^[A-Z]{3,10}$/.test(pointCurrency.trim().toUpperCase()) || !Number.isFinite(rate) || rate <= 0 || Math.abs(rate * 10000 - Math.round(rate * 10000)) > 0.00001) { setErr('통화 코드와 1포인트의 금액을 입력해 주세요. 소수점 4자리까지 지원해요.'); return }
+    setPointSaving(true);setErr(null)
+    try {
+      const result = await supabase.rpc('set_vendor_point_settings', { p_vendor_name:pointVendor.name,p_currency:pointCurrency.trim().toUpperCase(),p_foreign_per_point:rate })
+      if (result.error) throw result.error
+      await load();setMsg('포인트 환산 기준을 저장했어요. 기존 거래 금액은 바뀌지 않아요.')
+    } catch(e:any) {setErr(e.message)} finally {setPointSaving(false)}
+  }
+
   function pointBalance(name?: string|null) {
     return pointRows.filter(r=>normalizeName(r.vendor_name)===normalizeName(name)).reduce((sum,r)=>sum+Number(r.amount),0)
   }
@@ -290,6 +307,9 @@ export default function VendorsPage() {
     const restoresRes = await supabase.from('point_wallet_restorations').select('id,created_at,topup_id,purchase_id,vendor_name,currency,usage_date,foreign_amount,krw_amount').is('cancelled_at',null)
     if(restoresRes.error) setErr('포인트 복원내역 조회 실패: '+restoresRes.error.message)
     else setPointRestorations(restoresRes.data??[])
+    const settingsRes=await supabase.from('vendor_point_settings').select('vendor_key,currency,foreign_per_point')
+    if(settingsRes.error) setErr('포인트 기준 조회 실패: '+settingsRes.error.message)
+    else setPointSettings(settingsRes.data??[])
     const pointsRes=await supabase.from('vendor_point_ledger').select('id,vendor_name,point_date,amount,kind,memo,purchase_id').order('created_at',{ascending:false})
     if(pointsRes.error) setErr('포인트 조회 실패: '+pointsRes.error.message)
     else setPointRows(pointsRes.data??[])
@@ -1283,8 +1303,8 @@ export default function VendorsPage() {
                   >
                     <div style={styles.detailLabel}>외화 충전잔액</div>
                     <div style={{display:'flex',alignItems:'center',gap:8,margin:'8px 0',flexWrap:'wrap'}}>
-                      <b style={{fontSize:12,color:'#6d28d9'}}>포인트 {fmtNum(pointBalance(v.name))}점 · 1점＝1엔</b>
-                      <button type="button" style={styles.actionBtn} onClick={()=>{setPointVendor(v);setPointDate(new Date().toLocaleDateString('en-CA'));setPointAmount('');setPointMemo('')}}>포인트 적립·사용 내역</button>
+                      <b style={{fontSize:12,color:'#6d28d9'}}>포인트 {fmtNum(pointBalance(v.name))}점 · {pointRule(v.name)}</b>
+                      <button type="button" style={styles.actionBtn} onClick={()=>{setPointVendor(v);setPointCurrency(pointSetting(v.name)?.currency || '');setPointRate(pointSetting(v.name) ? String(pointSetting(v.name)!.foreign_per_point) : '');setPointDate(new Date().toLocaleDateString('en-CA'));setPointAmount('');setPointMemo('')}}>포인트 적립·사용 내역</button>
                     </div>
 
 
@@ -1374,7 +1394,8 @@ export default function VendorsPage() {
 
       <SafeModal open={!!pointVendor} title={`${pointVendor?.name||''} 포인트 관리`} onClose={()=>{if(!pointSaving)setPointVendor(null)}}>
         <div style={{display:'grid',gap:12}}>
-          <b>현재 {fmtNum(pointBalance(pointVendor?.name??''))}점 · 1점＝1엔</b>
+          <b>현재 {fmtNum(pointBalance(pointVendor?.name??''))}점 · {pointRule(pointVendor?.name)}</b>
+          <div style={{ padding:12, border:'1px solid #ddd6fe',borderRadius:10,display:'grid',gap:8 }}><b>이 거래처의 포인트 환산 기준</b><div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}><span>1포인트 =</span><input aria-label="1포인트 가치" style={{...styles.input,width:120}} type="number" min="0.0001" step="0.0001" value={pointRate} onChange={e=>setPointRate(e.target.value)} placeholder="예: 1 또는 0.01"/><input aria-label="포인트 통화" style={{...styles.input,width:140}} value={pointCurrency} onChange={e=>setPointCurrency(e.target.value.toUpperCase())} placeholder="JPY / CNY / USD / KRW"/><button type="button" disabled={pointSaving} style={styles.actionBtn} onClick={savePointRule}>환산 기준 저장</button></div><div style={{fontSize:12,color:'#6b7280'}}>예: 시바마루는 1점 = 1 JPY. 다른 거래처는 실제 기준을 입력하세요. 미설정 시 금액 적용을 막아요. 변경한 기준은 이후 포인트 사용에 적용되며 과거 금액은 유지돼요.</div></div>
           <div style={{fontSize:12,color:'#6b7280'}}>충전잔액과 별도예요. 무료 적립은 원화 지출에 포함하지 않아요. 처음 시작할 때 현재 보유 포인트를 ‘잔액 조정’으로 한 번 입력하세요. 이전 주문 사용분은 중복 등록하지 마세요.</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
             <div><div style={styles.label}>날짜</div><input style={styles.input} value={pointDate} onChange={e=>setPointDate(formatDateInput(e.target.value))}/></div>
