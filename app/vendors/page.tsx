@@ -1174,7 +1174,7 @@ export default function VendorsPage() {
 
             return (
               <details key={v.id} data-vendor-card style={styles.card}>
-                <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'grid', gap: 10 }}>
+                <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'grid', gap: 7 }}>
                   <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><b style={{fontSize:18,lineHeight:1.4,overflowWrap:'anywhere'}}>{v.name || '(이름 없음)'}</b><span style={{fontSize:12,color:'#6b7280',whiteSpace:'nowrap'}}>{usage.label} · 상세 ▾</span></div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {v.is_online ? (
@@ -1357,7 +1357,7 @@ export default function VendorsPage() {
 
       <style jsx global>{`
         [data-vendor-card] > summary::-webkit-details-marker { display: none; }
-        [data-vendor-card] { min-width: 0 !important; align-self: start; }
+        [data-vendor-card] { min-width: 0 !important; min-height: 0 !important; height: auto !important; display: block !important; padding: 12px !important; align-self: start; }
         [data-vendor-card] > summary > div { min-width: 0; }
         [data-vendor-card] > summary span { flex-shrink: 0; }
         [data-vendor-actions] button { padding: 5px 9px !important; min-height: 28px !important; height: auto !important; min-width: 0 !important; font-size: 12px !important; width: auto !important; }
