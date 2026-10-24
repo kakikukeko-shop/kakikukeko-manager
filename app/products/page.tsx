@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import RefreshButton from '../../components/RefreshButton'
 import SafeModal from '../../components/SafeModal'
 import InventoryLocationPanel from '../../components/InventoryLocationPanel'
 
@@ -186,6 +187,7 @@ type FlatRow = {
 }
 
 export default function ProductsPage() {
+  const inventoryRefreshRef = useRef<(() => Promise<void>) | null>(null)
   const [items, setItems] = useState<ItemRow[]>([])
   const [purchases, setPurchases] = useState<PurchaseRow[]>([])
   const [allocations, setAllocations] = useState<AllocationRow[]>([])
@@ -1133,7 +1135,7 @@ export default function ProductsPage() {
   return (
     <div ref={pageRef} style={styles.page}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
-      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
+      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
 
       <div style={styles.topbar}>
@@ -1232,9 +1234,7 @@ export default function ProductsPage() {
             <option value="created_old">등록 오래된순</option>
           </select>
 
-          <button style={styles.btn('ghost')} onClick={() => load()} disabled={loading}>
-            새로고침
-          </button>
+          <RefreshButton style={styles.btn('ghost')} disabled={loading} run={async()=>{if(await load()===false)return false;await inventoryRefreshRef.current?.();return true}} />
         </div>
       </div>
 

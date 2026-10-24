@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '@/lib/supabase'
+import RefreshButton from './RefreshButton'
 import SafeModal from './SafeModal'
 
 type StockItem = { id: string; name: string; photoUrl?: string | null; supplier: string; date: string; bookQty: number; orderedQty: number }
@@ -9,7 +10,7 @@ type Position = { item_id: string; locations: string[]; archived_at: string | nu
 const button: React.CSSProperties = { border: '1px solid #d8d6e5', borderRadius: 10, padding: '9px 13px', background: '#fff', fontWeight: 700, cursor: 'pointer' }
 const input: React.CSSProperties = { width: '100%', padding: 9, border: '1px solid #d8d6e5', borderRadius: 9, boxSizing: 'border-box' }
 const cell: React.CSSProperties = { padding: 10, borderBottom: '1px solid #e5e7eb', textAlign: 'left', verticalAlign: 'top' }
-export default function InventoryLocationPanel({ items, onRefresh, active = true }: { items: StockItem[]; onRefresh: () => Promise<void>; active?: boolean }) {
+export default function InventoryLocationPanel({ items, onRefresh, active = true, refreshRef }: { items: StockItem[]; onRefresh: () => Promise<void>; active?: boolean; refreshRef?: React.MutableRefObject<(() => Promise<void>) | null> }) {
   const [positions, setPositions] = useState<Position[]>([])
   const [query, setQuery] = useState('')
   const [location, setLocation] = useState('all')
@@ -30,6 +31,7 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
     setPositions(result.data || [])
   }
   useEffect(() => { setMounted(true); load().catch(e => setError(e.message)) }, [])
+  useEffect(() => { if (!refreshRef) return; refreshRef.current = async () => { try { await load() } catch(e:any) { setError(e.message); throw e } }; return () => { refreshRef.current = null } }, [refreshRef])
   const positionMap = useMemo(() => new Map(positions.map(row => [row.item_id, row])), [positions])
   const options = useMemo(() => [...new Set(positions.flatMap(row => row.locations || []))].sort((a, b) => a.localeCompare(b, 'ko')), [positions])
   const visible = useMemo(() => items.filter(item => {
@@ -94,7 +96,7 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       <input style={{ ...input, maxWidth: 300 }} aria-label="실사 상품 검색" value={query} onChange={e => setQuery(e.target.value)} placeholder="상품명 / 거래처 / 위치 검색" />
       <select style={{ ...input, maxWidth: 260 }} aria-label="보관 위치 필터" value={location} onChange={e => setLocation(e.target.value)}><option value="all">모든 위치</option><option value="none">위치 미지정</option>{options.map(name => <option key={name} value={`loc:${name}`}>{name}</option>)}</select>
-      <button type="button" style={button} disabled={busy} onClick={async () => { try { await Promise.all([load(), onRefresh()]); setNotice('새로 불러왔어요.') } catch (e: any) { setError(e.message) } }}>새로고침</button>
+      <RefreshButton style={button} disabled={busy} run={async () => { await Promise.all([load(), onRefresh()]) }} />
       <button type="button" style={{ ...button, color: '#6d28d9' }} disabled={busy || !visible.length || showArchived} onClick={async () => { setBusy(true); try { const images = Array.from(document.querySelectorAll<HTMLImageElement>('#inventory-print-root img')); await Promise.all(images.map(img => img.decode().catch(() => undefined))); window.print() } finally { setBusy(false) } }}>실사표 인쇄 / PDF 저장</button>
       <label style={{ padding: 8 }}><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> 보관 삭제한 상품 보기</label>
     </div>

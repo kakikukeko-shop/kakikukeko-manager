@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import RefreshButton from '../../components/RefreshButton'
 import SafeModal from '../../components/SafeModal'
 
 type PurchaseItemRow = {
@@ -815,6 +816,7 @@ export default function SalesPage() {
     setLoading(true)
     setInventoryReady(false)
 
+    try {
     const [piRes, arRes, siRes, sRes, pcRes, caRes, pfRes, sfRes, inventoryRes, purchaseStateRes] = await Promise.all([
       supabase
         .from('purchase_items')
@@ -865,8 +867,8 @@ export default function SalesPage() {
     ])
 
     const stockRes = await supabase.rpc('inventory_adjustment_totals', { p_item_ids: (piRes.data || []).map(row => row.id) })
-    const stockError = [piRes, arRes, siRes, inventoryRes, stockRes, purchaseStateRes].find(result => result.error)?.error
-    if (stockError) { console.error(stockError); setLoading(false); alert('재고 정보를 불러오지 못했습니다. SQL 적용과 권한을 확인해 주세요.\n' + stockError.message); return }
+    const stockError = [piRes, arRes, siRes, sRes, pcRes, caRes, pfRes, sfRes, inventoryRes, stockRes, purchaseStateRes].find(result => result.error)?.error
+    if (stockError) { console.error(stockError); setLoading(false); alert('재고 정보를 불러오지 못했습니다. SQL 적용과 권한을 확인해 주세요.\n' + stockError.message); return false }
     setInventoryEvents(stockRes.data || [])
     setInventoryReady(true)
     if (piRes.error) console.error(piRes.error)
@@ -887,7 +889,8 @@ export default function SalesPage() {
     setFiles((pfRes.data as FileRow[]) || [])
     setSaleFiles((sfRes.data as SaleFileRow[]) || [])
 
-    setLoading(false)
+    return true
+    } catch(e:any) { setInventoryReady(false); console.error(e); return false } finally { setLoading(false) }
   }
 
   useEffect(() => {
@@ -1259,9 +1262,7 @@ export default function SalesPage() {
             <button className={purpleBtn} onClick={openCreateModal}>
               + 매출 등록
             </button>
-            <button className={whiteBtn} onClick={refreshAll}>
-              새로고침
-            </button>
+            <RefreshButton className={whiteBtn} disabled={loading} run={refreshAll} />
           </div>
         </div>
 

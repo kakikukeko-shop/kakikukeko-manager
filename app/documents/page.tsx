@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { supabase } from "@/lib/supabase";
 import SafeModal from "../../components/SafeModal";
+import RefreshButton from "../../components/RefreshButton";
 import ImportCertificatePanel from "../../components/ImportCertificatePanel";
 
 type PurchaseRow = {
@@ -1881,6 +1882,7 @@ function quoteVendorWalletFIFO(
 }
 
 export default function DocumentsPage() {
+  const certificateRefreshRef = useRef<(() => Promise<void>) | null>(null);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [purchasePayments, setPurchasePayments] = useState<PurchasePaymentRow[]>([]);
   const [items, setItems] = useState<PurchaseItemRow[]>([]);
@@ -3805,8 +3807,10 @@ export default function DocumentsPage() {
         })[0];
         setSelectedPurchaseId(first.id);
       }
+      return true;
     } catch (e: any) {
       setErr(e?.message ?? String(e));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -6933,13 +6937,7 @@ export default function DocumentsPage() {
           환불 진행중 체크/해제
         </button>
 
-        <button
-          style={styles.btn("ghost")}
-          onClick={refreshAll}
-          disabled={loading}
-        >
-          새로고침
-        </button>
+        <RefreshButton style={styles.btn("ghost")} disabled={loading} run={async () => { if (await refreshAll() === false) return false; await certificateRefreshRef.current?.(); return true; }} />
 
         <button style={styles.btn("ghost")} disabled={loading} onClick={() => setProcessingHistoryOpen(true)}>처리내역·취소</button>
         {legacyRefundRestoreCandidates.length > 0 ? (
@@ -6973,7 +6971,7 @@ export default function DocumentsPage() {
         </div>
       </div>
 
-      <ImportCertificatePanel selectedIds={selectedItemIds} items={items.map(item => ({ id: item.id, name: item.item_name || "상품명 없음", vendor: purchaseMap.get(item.purchase_id)?.supplier || "" }))} />
+      <ImportCertificatePanel refreshRef={certificateRefreshRef} selectedIds={selectedItemIds} items={items.map(item => ({ id: item.id, name: item.item_name || "상품명 없음", vendor: purchaseMap.get(item.purchase_id)?.supplier || "" }))} />
 
       {msg && (
         <div
@@ -7573,6 +7571,13 @@ export default function DocumentsPage() {
                                     <span style={styles.badge("gray")}>
                                       {it.product_type ?? "기타"}
                                     </span>
+                                    {isUnreceived ? (
+                                      <span style={styles.badge("orange")}>
+                                        미입고 {fmtNum(unreceivedQty)}개
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 5 }}>
                                     {refundPendingItemIds.has(it.id) ? (
                                       <span
                                         style={{
@@ -7596,12 +7601,7 @@ export default function DocumentsPage() {
                                         {refundStatus}
                                       </span>
                                     ) : null}
-                                    {isUnreceived ? (
-                                      <span style={styles.badge("orange")}>
-                                        미입고 {fmtNum(unreceivedQty)}개
-                                      </span>
-                                    ) : null}
-                                    <span data-tablet-role="documents-cost-badges">
+                                    <span data-tablet-role="documents-cost-badges" style={{ display: "inline-flex", flexWrap: "wrap", gap: 5 }}>
                                       {(itemCostBadgeMap.get(it.id) ?? []).map(
                                         (badge) => (
                                           <button

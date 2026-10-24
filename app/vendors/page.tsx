@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import RefreshButton from '../../components/RefreshButton'
 import SafeModal from '../../components/SafeModal'
 
 type VendorRow = {
@@ -217,6 +218,7 @@ export default function VendorsPage() {
     setErr(null)
     setMsg(null)
 
+    try {
     const [
       vendorRes,
       purchaseRes,
@@ -262,37 +264,37 @@ export default function VendorsPage() {
     if (vendorRes.error) {
       setErr(vendorRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     if (purchaseRes.error) {
       setErr(purchaseRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     if (purchaseCostRes.error) {
       setErr(purchaseCostRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     if (purchaseItemRes.error) {
       setErr(purchaseItemRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     if (walletTopupRes.error) {
       setErr(walletTopupRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     if (walletUsageRes.error) {
       setErr(walletUsageRes.error.message)
       setLoading(false)
-      return
+      return false
     }
 
     setVendors((vendorRes.data ?? []) as VendorRow[])
@@ -302,19 +304,20 @@ export default function VendorsPage() {
     setWalletTopups((walletTopupRes.data ?? []) as VendorWalletTopupRow[])
     setWalletUsages((walletUsageRes.data ?? []) as VendorWalletUsageRow[])
     const cancelledRes = await supabase.from('manager_cancellations').select('source_id')
-    if(cancelledRes.error) setErr('취소 이력 조회 실패: '+cancelledRes.error.message)
+    if(cancelledRes.error) throw cancelledRes.error
     else setCancelledSources((cancelledRes.data??[]).map(r=>r.source_id))
     const restoresRes = await supabase.from('point_wallet_restorations').select('id,created_at,topup_id,purchase_id,vendor_name,currency,usage_date,foreign_amount,krw_amount').is('cancelled_at',null)
-    if(restoresRes.error) setErr('포인트 복원내역 조회 실패: '+restoresRes.error.message)
+    if(restoresRes.error) throw restoresRes.error
     else setPointRestorations(restoresRes.data??[])
     const settingsRes=await supabase.from('vendor_point_settings').select('vendor_key,currency,foreign_per_point')
-    if(settingsRes.error) setErr('포인트 기준 조회 실패: '+settingsRes.error.message)
+    if(settingsRes.error) throw settingsRes.error
     else setPointSettings(settingsRes.data??[])
     const pointsRes=await supabase.from('vendor_point_ledger').select('id,vendor_name,point_date,amount,kind,memo,purchase_id').order('created_at',{ascending:false})
-    if(pointsRes.error) setErr('포인트 조회 실패: '+pointsRes.error.message)
+    if(pointsRes.error) throw pointsRes.error
     else setPointRows(pointsRes.data??[])
 
-    setLoading(false)
+    return true
+    } catch(e:any) { setErr(e?.message || String(e)); return false } finally { setLoading(false) }
   }
 
   useEffect(() => {
@@ -1129,9 +1132,7 @@ export default function VendorsPage() {
           <button style={styles.btnPrimary} onClick={openCreate}>
             + 거래처 등록
           </button>
-          <button style={styles.btnGhost} onClick={load}>
-            새로고침
-          </button>
+          <RefreshButton style={styles.btnGhost} disabled={loading} run={load} />
           <div style={{ width: 240 }}>
             <input
               style={styles.input}
