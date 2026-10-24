@@ -2040,7 +2040,7 @@ export default function SalesPage() {
                       </div>
                     </div>
 
-                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    <div data-sale-line-totals className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                       <div className="rounded-xl bg-slate-50 px-3 py-3">
                         <div className="text-[11px] font-bold text-slate-500">수량</div>
                         <div className="mt-1 text-sm font-extrabold text-slate-900">
@@ -2115,7 +2115,7 @@ export default function SalesPage() {
               )}
             </div>
 
-            <div className="mt-4 grid gap-2 md:grid-cols-2">
+            <div data-sale-form-totals className="mt-4 grid gap-2 md:grid-cols-2">
               <div className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 text-sm font-bold text-slate-800">
                 <span>총상품금액</span>
                 <span>{totalProductAmount.toLocaleString()}원</span>

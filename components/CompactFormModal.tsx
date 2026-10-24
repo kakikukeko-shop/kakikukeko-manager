@@ -54,6 +54,16 @@ export default function CompactFormModal({ open, title, onClose, children }: { o
 [data-compact-form-body] [data-tablet-role="purchase-buy-form"]>div:first-child{display:flex!important;flex-wrap:wrap!important;gap:5px!important}
 [data-compact-form-body] img{max-width:60px!important;max-height:60px!important;object-fit:contain}
 [data-compact-form-body] .h-24.w-24{width:60px!important;height:60px!important}
+
+[data-compact-form-body] [data-sale-line-totals]{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;gap:6px!important}
+[data-sale-line-totals]>div{grid-column:span 3;padding:8px!important}
+[data-sale-line-totals]>div:nth-child(-n+3){grid-column:span 2}
+[data-compact-form-body] [data-sale-line-totals]>div>div:first-child{font-size:10px!important;line-height:1.35!important}
+[data-compact-form-body] [data-sale-line-totals]>div>div:last-child{font-size:11px!important;white-space:nowrap!important;letter-spacing:-.4px}
+[data-compact-form-body] [data-sale-form-totals]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}
+[data-compact-form-body] [data-sale-form-totals]>div{display:flex!important;flex-direction:column;align-items:flex-start!important;justify-content:start!important;gap:3px!important;padding:8px!important;border-radius:10px!important}
+[data-compact-form-body] [data-sale-form-totals]>div>span:first-child{font-size:10px!important;line-height:1.35!important;color:#64748b}
+[data-compact-form-body] [data-sale-form-totals]>div>span:last-child{font-size:12px!important;white-space:nowrap!important}
 `}</style><header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexShrink: 0, padding: '12px 14px', borderBottom: '1px solid #ede9fe', background: '#fff' }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, minWidth: 0, overflowWrap: 'anywhere' }}>{title}</h2>
         <button ref={closeRef} type="button" onClick={onClose} style={{ flexShrink: 0, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff', color: '#4338ca', padding: '10px 14px', fontSize: 13, fontWeight: 800, cursor: 'pointer' }}>닫기</button>
