@@ -6917,16 +6917,16 @@ export default function DocumentsPage() {
   };
 
   return (
-    <div style={styles.page} data-page="documents">
+    <div style={styles.page} data-page="documents"><style>{`[data-purchase-label-short]{display:none}`}</style>
       <div style={styles.topbar} data-mobile-role="documents-topbar">
         <div style={styles.title} data-mobile-role="documents-page-title">매입관리</div>
 
         <button style={styles.btn("primary")} onClick={openCreatePurchaseModal}>
-          + 매입 등록(안에 상품까지)
+          <span data-purchase-label-full>+ 매입 등록(안에 상품까지)</span><span data-purchase-label-short>+ 매입 등록</span>
         </button>
 
         <button style={styles.btn("primary")} onClick={openCostCreateModal}>
-          + 추가비용(자동분배)
+          <span data-purchase-label-full>+ 추가비용(자동분배)</span><span data-purchase-label-short>+ 추가비용</span>
         </button>
 
         <button
@@ -6935,7 +6935,7 @@ export default function DocumentsPage() {
           disabled={loading || selectedItems.length === 0}
           title="선택 상품의 환불 진행중 표시를 켜거나 해제"
         >
-          환불 진행중 체크/해제
+          <span data-purchase-label-full>환불 진행중 체크/해제</span><span data-purchase-label-short>환불 체크/해제</span>
         </button>
 
         <RefreshButton style={styles.btn("ghost")} disabled={loading} run={async () => { if (await refreshAll() === false) return false; await certificateRefreshRef.current?.(); return true; }} />
@@ -8338,6 +8338,17 @@ export default function DocumentsPage() {
 [data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-line] b{font-size:11px}
 [data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-total]{grid-column:1/-1;margin-top:4px;padding-top:4px;border-top:1px solid #eeeaf5}
 [data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-total]+div{grid-column:1/-1}
+
+          [data-page="documents"] [data-mobile-role="documents-topbar"]{position:static!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:6px!important;width:100%!important;max-width:100%!important;margin:0 0 10px!important;padding:0!important;overflow:visible!important;touch-action:auto;scroll-snap-type:none;align-items:start!important;border:0!important;backdrop-filter:none!important}
+          [data-page="documents"] [data-mobile-role="documents-topbar"]>button,
+          [data-page="documents"] [data-mobile-role="documents-topbar"]>span>button,
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"]>button{width:100%!important;min-width:0!important;max-width:100%!important;min-height:34px!important;padding:7px 3px!important;font-size:10px!important;line-height:1.3!important;white-space:normal!important;word-break:keep-all;letter-spacing:-.4px;border-radius:9px!important}
+          [data-page="documents"] [data-mobile-role="documents-topbar"]>span{min-width:0;max-width:100%;gap:3px!important}
+          [data-page="documents"] [data-mobile-role="documents-topbar"]>span>[role=status]{font-size:9px!important}
+          [data-page="documents"] [data-mobile-role="documents-selection-summary"]{display:contents!important}
+          [data-page="documents"] [data-purchase-label-full]{display:none!important}
+          [data-page="documents"] [data-purchase-label-short]{display:inline!important}
+
 /* 매입목록 + 상품목록은 휴대폰에서 세로로 */
           [data-page="documents"] [data-tablet-layout="documents-main"] {
             display: grid !important;
