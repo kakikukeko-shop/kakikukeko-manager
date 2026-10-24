@@ -1134,16 +1134,33 @@ export default function ProductsPage() {
   }
 
   return (
-    <div data-mobile-products ref={pageRef} style={styles.page}><style>{`@media(max-width:699px){[data-mobile-products]{min-width:0!important;padding:0!important}[data-mobile-product-table]{display:block!important;min-width:0!important;width:100%!important}[data-mobile-product-table] thead{display:none}[data-mobile-product-table] tbody{display:grid;gap:12px;padding:8px}[data-mobile-product-table] tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding:12px;border:1px solid #e9e5f5;border-radius:14px;background:#fff}[data-mobile-product-table] td{display:block!important;width:auto!important;min-width:0!important;padding:5px 0!important;border:0!important;white-space:normal!important;overflow-wrap:anywhere;font-size:12px!important;text-align:left!important}[data-mobile-product-table] td::before{display:block;color:#64748b;font-size:10px;font-weight:600;margin-bottom:3px}[data-mobile-product-table] td:nth-child(1){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2){grid-column:1/-1}[data-mobile-product-table] td:nth-child(19){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2)>div>div>div:first-child{white-space:normal!important;overflow:visible!important}[data-mobile-product-table] td:nth-child(2) b{white-space:normal!important}[data-mobile-product-table] td:nth-child(2)>div{min-width:0!important}[data-mobile-product-table] input:not([type=checkbox]),[data-mobile-product-table] select{width:100%!important;min-width:0!important;box-sizing:border-box}[data-mobile-product-table] button{white-space:nowrap;font-size:11px!important}[data-mobile-product-table] td:nth-child(3)::before{content:"매입일"}[data-mobile-product-table] td:nth-child(4)::before{content:"거래처"}[data-mobile-product-table] td:nth-child(5)::before{content:"개당 원가"}[data-mobile-product-table] td:nth-child(6)::before{content:"총수량"}[data-mobile-product-table] td:nth-child(7)::before{content:"입고 수량"}[data-mobile-product-table] td:nth-child(8)::before{content:"판매 수량"}[data-mobile-product-table] td:nth-child(9)::before{content:"현재 재고"}[data-mobile-product-table] td:nth-child(10)::before{content:"미도착"}[data-mobile-product-table] td:nth-child(11)::before{content:"온라인 판매가"}[data-mobile-product-table] td:nth-child(12)::before{content:"온라인 배송비"}[data-mobile-product-table] td:nth-child(13)::before{content:"예상 배송비"}[data-mobile-product-table] td:nth-child(14)::before{content:"온라인 이익"}[data-mobile-product-table] td:nth-child(15)::before{content:"오프라인 판매가"}[data-mobile-product-table] td:nth-child(16)::before{content:"오프라인 이익"}[data-mobile-product-table] td:nth-child(17)::before{content:"마지막 입고일"}[data-mobile-product-table] td:nth-child(18)::before{content:"상태"}[data-mobile-product-table] td:nth-child(19)::before{content:"관리"}}`}</style>
+    <div data-mobile-products ref={pageRef} style={styles.page}><style>{`[data-summary-mobile]{display:none}
+@media(max-width:699px){
+[data-products-topbar]{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:10px!important;min-width:0!important}
+[data-products-topbar]>div{min-width:0!important;width:100%!important}
+[data-products-bulk-actions]{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:5px!important}
+[data-products-bulk-actions]>button{width:100%!important;min-width:0!important;padding:7px 3px!important;font-size:10px!important;line-height:1.35!important;min-height:36px!important;height:auto!important;white-space:normal!important;word-break:keep-all!important;letter-spacing:-.4px}
+[data-products-filters]{display:grid!important;grid-template-columns:minmax(0,.85fr) minmax(0,1.35fr) auto!important;gap:6px!important;align-items:start!important}
+[data-products-filters]>input{grid-column:1/-1;width:100%!important;min-width:0!important;box-sizing:border-box!important;font-size:12px!important;padding:9px!important}
+[data-products-filters]>select{width:100%!important;min-width:0!important;box-sizing:border-box!important;font-size:11px!important;padding:8px 4px!important;height:35px!important}
+[data-products-filters]>span{min-width:0;max-width:88px;gap:3px!important}
+[data-products-filters]>span>button{font-size:11px!important;padding:8px!important;min-height:35px!important;height:35px!important;white-space:nowrap!important}
+[data-products-filters]>span>[role=status]{font-size:9px!important}
+[data-products-summary]{display:flex!important;flex-wrap:nowrap!important;justify-content:space-between!important;gap:4px!important;padding:10px 7px!important;min-width:0!important}
+[data-products-summary]>div{font-size:10px!important;letter-spacing:-.5px;white-space:nowrap!important;min-width:0!important}
+[data-products-summary] b{font-size:10px!important}
+[data-summary-desktop]{display:none!important}[data-summary-mobile]{display:inline!important}
+}
+@media(max-width:699px){[data-mobile-products]{min-width:0!important;padding:0!important}[data-mobile-product-table]{display:block!important;min-width:0!important;width:100%!important}[data-mobile-product-table] thead{display:none}[data-mobile-product-table] tbody{display:grid;gap:12px;padding:8px}[data-mobile-product-table] tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding:12px;border:1px solid #e9e5f5;border-radius:14px;background:#fff}[data-mobile-product-table] td{display:block!important;width:auto!important;min-width:0!important;padding:5px 0!important;border:0!important;white-space:normal!important;overflow-wrap:anywhere;font-size:12px!important;text-align:left!important}[data-mobile-product-table] td::before{display:block;color:#64748b;font-size:10px;font-weight:600;margin-bottom:3px}[data-mobile-product-table] td:nth-child(1){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2){grid-column:1/-1}[data-mobile-product-table] td:nth-child(19){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2)>div>div>div:first-child{white-space:normal!important;overflow:visible!important}[data-mobile-product-table] td:nth-child(2) b{white-space:normal!important}[data-mobile-product-table] td:nth-child(2)>div{min-width:0!important}[data-mobile-product-table] input:not([type=checkbox]),[data-mobile-product-table] select{width:100%!important;min-width:0!important;box-sizing:border-box}[data-mobile-product-table] button{white-space:nowrap;font-size:11px!important}[data-mobile-product-table] td:nth-child(3)::before{content:"매입일"}[data-mobile-product-table] td:nth-child(4)::before{content:"거래처"}[data-mobile-product-table] td:nth-child(5)::before{content:"개당 원가"}[data-mobile-product-table] td:nth-child(6)::before{content:"총수량"}[data-mobile-product-table] td:nth-child(7)::before{content:"입고 수량"}[data-mobile-product-table] td:nth-child(8)::before{content:"판매 수량"}[data-mobile-product-table] td:nth-child(9)::before{content:"현재 재고"}[data-mobile-product-table] td:nth-child(10)::before{content:"미도착"}[data-mobile-product-table] td:nth-child(11)::before{content:"온라인 판매가"}[data-mobile-product-table] td:nth-child(12)::before{content:"온라인 배송비"}[data-mobile-product-table] td:nth-child(13)::before{content:"예상 배송비"}[data-mobile-product-table] td:nth-child(14)::before{content:"온라인 이익"}[data-mobile-product-table] td:nth-child(15)::before{content:"오프라인 판매가"}[data-mobile-product-table] td:nth-child(16)::before{content:"오프라인 이익"}[data-mobile-product-table] td:nth-child(17)::before{content:"마지막 입고일"}[data-mobile-product-table] td:nth-child(18)::before{content:"상태"}[data-mobile-product-table] td:nth-child(19)::before{content:"관리"}}`}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
       <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
 
-      <div style={styles.topbar}>
+      <div data-products-topbar style={styles.topbar}>
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={styles.title}>상품 / 재고관리</div>
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div data-products-bulk-actions style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               style={styles.btn('primary')}
               onClick={openBulkModal}
@@ -1197,7 +1214,7 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div data-products-filters style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             style={{ ...styles.input, width: 240 }}
             placeholder="상품명 / 거래처 / 메모 검색"
@@ -1239,7 +1256,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <div
+      <div data-products-summary
         style={{
           ...styles.card,
           marginBottom: 12,
@@ -1250,13 +1267,13 @@ export default function ProductsPage() {
         }}
       >
         <div style={styles.small}>
-          상품 종류수 <b>{summary.totalKinds}개</b>
+          <span data-summary-desktop>상품 종류수 </span><span data-summary-mobile>종류 </span><b>{summary.totalKinds}개</b>
         </div>
         <div style={styles.small}>
-          상품 총수량 <b>{fmtNum(summary.totalQty)}개</b>
+          <span data-summary-desktop>상품 총수량 </span><span data-summary-mobile>총수량 </span><b>{fmtNum(summary.totalQty)}개</b>
         </div>
         <div style={styles.small}>
-          현재재고 <b>{fmtNum(summary.totalStock)}개</b>
+          <span data-summary-desktop>현재재고 </span><span data-summary-mobile>재고 </span><b>{fmtNum(summary.totalStock)}개</b>
         </div>
         <div style={styles.small}>
           미도착 <b>{fmtNum(summary.totalUndelivered)}개</b>
