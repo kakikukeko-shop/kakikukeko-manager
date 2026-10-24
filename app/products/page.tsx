@@ -13,6 +13,7 @@ type PurchaseRow = {
 }
 
 type ItemRow = {
+  attachment_url?: string | null
   id: string
   purchase_id: string
   item_name: string | null
@@ -319,11 +320,26 @@ export default function ProductsPage() {
       if (!f.item_id || !f.file_path) return
       if (m.has(f.item_id)) return
       const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(f.file_path)
-      m.set(f.item_id, data.publicUrl)
+      m.set(f.item_id, /^https?:\/\//i.test(f.file_path) ? f.file_path : data.publicUrl)
     })
 
     return m
   }, [files])
+
+  async function loadAllProductPhotos() {
+    const rows: FileRow[] = []
+    for (let offset = 0; ; offset += 500) {
+      const result = await supabase.from('purchase_files')
+        .select('id,item_id,file_type,file_path,created_at')
+        .eq('file_type', '상품사진')
+        .order('created_at', { ascending: false }).order('id', { ascending: false })
+        .range(offset, offset + 499)
+      if (result.error) return { data: null, error: result.error }
+      const page = (result.data || []) as FileRow[]
+      rows.push(...page)
+      if (page.length < 500) return { data: rows, error: null }
+    }
+  }
 
   async function load(options?: { preserveScroll?: boolean }) {
     if (options?.preserveScroll) {
@@ -340,7 +356,7 @@ export default function ProductsPage() {
           supabase
             .from('purchase_items')
             .select(
-              'id,purchase_id,item_name,qty,line_total,memo,is_preorder,online_price,online_shipping,online_shipping_general,online_shipping_convenience,online_received_shipping_general,online_expected_shipping_general,online_received_shipping_convenience,online_expected_shipping_convenience,offline_price,created_at'
+              'id,purchase_id,item_name,attachment_url,qty,line_total,memo,is_preorder,online_price,online_shipping,online_shipping_general,online_shipping_convenience,online_received_shipping_general,online_expected_shipping_general,online_received_shipping_convenience,online_expected_shipping_convenience,offline_price,created_at'
             )
             .order('created_at', { ascending: false }),
 
@@ -360,10 +376,7 @@ export default function ProductsPage() {
             .select('id,purchase_item_id,arrived_qty,arrived_date,memo,created_at')
             .order('created_at', { ascending: false }),
 
-          supabase
-            .from('purchase_files')
-            .select('id,item_id,file_type,file_path,created_at')
-            .order('created_at', { ascending: false }),
+          loadAllProductPhotos(),
 
           supabase
             .from('sale_items')
@@ -465,7 +478,7 @@ export default function ProductsPage() {
         remainingArrivalQty,
         lastArrivedDate,
         isComplete,
-        photoUrl: itemPhotoMap.get(item.id) ?? null,
+        photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null,
         isReservationOpen: !!item.is_preorder && !hasBalanceByItem.get(item.id),
       }
     })
@@ -1177,7 +1190,7 @@ export default function ProductsPage() {
 }
 `}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
-      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
+      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
 
       <div data-products-topbar style={styles.topbar}>
