@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '@/lib/supabase'
 import SafeModal from '../components/SafeModal'
 import BackupRestoreButtons from '../components/BackupRestoreButtons'
@@ -1462,8 +1463,7 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
 [data-calendar-modal]>div>b{font-size:11px!important}
 [data-calendar-modal]>div>div{font-size:12px!important;line-height:1.5!important}
 [data-calendar-modal] b{font-size:12px!important}
-[role=dialog]:has([data-calendar-modal]){max-width:calc(100vw - 24px)!important;max-height:85dvh!important;overflow-y:auto!important}
-[role=dialog]:has([data-calendar-modal]) h2{font-size:16px!important}
+
 [data-mobile-calendar]{padding:8px!important;border-radius:14px!important}
 [data-mobile-calendar] h2{font-size:15px!important}
 [data-mobile-calendar]>div:first-child{gap:8px!important}
@@ -1480,14 +1480,14 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
 [data-calendar-day]>div:nth-child(2){display:block!important;font-size:8px!important;line-height:1.4!important;letter-spacing:-.4px}
 [data-calendar-day] b{display:block;white-space:normal;overflow-wrap:anywhere}
 }`}</style>
-    <SafeModal open={monthSalesOpen} title={`${month} 판매 상품`} onClose={() => setMonthSalesOpen(false)}><div data-calendar-modal style={{ display: 'grid', gap: 10 }}>
+    <CalendarDetailModal open={monthSalesOpen} title={`${month} 판매 상품`} onClose={() => setMonthSalesOpen(false)}><div data-calendar-modal style={{ display: 'grid', gap: 10 }}>
       {!monthRows.length ? <p>이 달에는 판매 내역이 없어요.</p> : [...monthRows].sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ede9fe' }}><b style={{ color: '#6d28d9', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.sale_items?.length ? row.sale_items.map((item, index) => <div key={index}>{getSaleItemName(item)}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>매출 {fmtKRW(Number(row.final_amount || 0))}</b></div></div>)}
-    </div></SafeModal>
-    <SafeModal open={monthPurchasesOpen} title={`${month} 매입 상품`} onClose={() => setMonthPurchasesOpen(false)}><div data-calendar-modal style={{ display: 'grid', gap: 10 }}>
+    </div></CalendarDetailModal>
+    <CalendarDetailModal open={monthPurchasesOpen} title={`${month} 매입 상품`} onClose={() => setMonthPurchasesOpen(false)}><div data-calendar-modal style={{ display: 'grid', gap: 10 }}>
       <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>상품 매입금액 기준이에요. 달력의 월 매입 합계에는 추가비용·환불도 포함돼요.</p>
       {!purchases.some(row => row.normalizedDate.startsWith(`${month}-`)) ? <p>이 달에는 상품 매입 내역이 없어요.</p> : purchases.filter(row => row.normalizedDate.startsWith(`${month}-`)).sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ccfbf1' }}><b style={{ color: '#0f766e', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.purchase_items?.length ? row.purchase_items.map((item, index) => <div key={index}>{item.item_name || '상품명 기록 없음'}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>상품매입 {fmtKRW(Number(row.total_amount || 0))}</b></div></div>)}
-    </div></SafeModal>
-    <SafeModal open={!!selected} title={`${selected || ''} 매출 / 매입 내역`} onClose={() => setSelected(null)}><div data-calendar-modal style={{ display: 'grid', gap: 12 }}>
+    </div></CalendarDetailModal>
+    <CalendarDetailModal open={!!selected} title={`${selected || ''} 매출 / 매입 내역`} onClose={() => setSelected(null)}><div data-calendar-modal style={{ display: 'grid', gap: 12 }}>
       <b>매출 {fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))} · 매출이익 {fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b>
       {!(byDate.get(selected || '') || []).length ? <p>이 날짜에는 판매 내역이 없어요.</p> : (byDate.get(selected || '') || []).map(row => <div key={row.id} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <div style={{ fontWeight: 800 }}>{row.channel || row.sales_channel || '판매처 미입력'}</div>
@@ -1500,6 +1500,36 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
         {selectedPurchase.costs.map(row => <div key={row.id} style={{ padding: 10, background: '#f0fdfa', borderRadius: 10 }}>{row.cost_type || '추가비용'} · {row.vendor_name || '거래처 미입력'} · <b>{fmtKRW(row.amountKrw)}</b></div>)}
       </>}
       <div style={{ display: 'flex', gap: 16 }}><Link href="/sales">매출관리로 이동</Link><Link href="/documents">매입관리로 이동</Link></div>
-    </div></SafeModal>
+    </div></CalendarDetailModal>
   </section>
+}
+
+
+function CalendarDetailModal({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    if (!open) return
+    const previousFocus = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeRef.current?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Tab') { const body = closeRef.current?.closest('section')?.querySelector<HTMLElement>('[tabindex="0"]'); event.preventDefault(); if (document.activeElement === closeRef.current) body?.focus(); else closeRef.current?.focus() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', keydown); previousFocus?.focus() }
+  }, [open])
+  if (!open || typeof document === 'undefined') return null
+  return createPortal(<div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))', boxSizing: 'border-box' }}>
+    <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 640, height: 'min(78dvh, 680px)', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff', color: '#111827', borderRadius: 18, boxShadow: '0 20px 60px #0003', boxSizing: 'border-box' }}>
+      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexShrink: 0, padding: '12px 14px', borderBottom: '1px solid #ede9fe', background: '#fff' }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, minWidth: 0, overflowWrap: 'anywhere' }}>{title}</h2>
+        <button ref={closeRef} type="button" onClick={onClose} style={{ flexShrink: 0, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff', color: '#4338ca', padding: '10px 14px', fontSize: 13, fontWeight: 800, cursor: 'pointer' }}>닫기</button>
+      </header>
+      <div tabIndex={0} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '12px 14px', fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+    </section>
+  </div>, document.body)
 }
