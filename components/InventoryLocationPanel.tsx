@@ -92,19 +92,35 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
   }
   const printDate = new Date().toLocaleString('ko-KR')
   return <section data-mobile-location style={{ display: 'grid', gap: 14, background: '#fff', padding: 16, borderRadius: 16, border: '1px solid #e8e5f0' }}>
-    <div><h2 style={{ margin: '0 0 6px' }}>위치·재고실사</h2><div style={{ color: '#6b7280', fontSize: 13 }}>보관 위치를 확인하고 실사표를 출력하세요. 실제 수량과 차이는 종이에 직접 적어요. 이 화면에서는 재고 수량을 조정하지 않아요.</div></div>
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+    <div data-location-heading>      <button type="button" style={{ ...button, color: '#6d28d9' }} disabled={busy || !visible.length || showArchived} onClick={async () => { setBusy(true); try { const images = Array.from(document.querySelectorAll<HTMLImageElement>('#inventory-print-root img')); await Promise.all(images.map(img => img.decode().catch(() => undefined))); window.print() } finally { setBusy(false) } }}>실사표 인쇄 / PDF 저장</button><h2 style={{ margin: '0 0 6px' }}>위치·재고실사</h2><div style={{ color: '#6b7280', fontSize: 13 }}>보관 위치를 확인하고 실사표를 출력하세요. 실제 수량과 차이는 종이에 직접 적어요. 이 화면에서는 재고 수량을 조정하지 않아요.</div></div>
+    <div data-location-filters style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       <input style={{ ...input, maxWidth: 300 }} aria-label="실사 상품 검색" value={query} onChange={e => setQuery(e.target.value)} placeholder="상품명 / 거래처 / 위치 검색" />
       <select style={{ ...input, maxWidth: 260 }} aria-label="보관 위치 필터" value={location} onChange={e => setLocation(e.target.value)}><option value="all">모든 위치</option><option value="none">위치 미지정</option>{options.map(name => <option key={name} value={`loc:${name}`}>{name}</option>)}</select>
       <RefreshButton style={button} disabled={busy} run={async () => { await Promise.all([load(), onRefresh()]) }} />
-      <button type="button" style={{ ...button, color: '#6d28d9' }} disabled={busy || !visible.length || showArchived} onClick={async () => { setBusy(true); try { const images = Array.from(document.querySelectorAll<HTMLImageElement>('#inventory-print-root img')); await Promise.all(images.map(img => img.decode().catch(() => undefined))); window.print() } finally { setBusy(false) } }}>실사표 인쇄 / PDF 저장</button>
+
       <label style={{ padding: 8 }}><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> 보관 삭제한 상품 보기</label>
     </div>
     <div data-location-bulk style={{ display: 'flex', alignItems: 'center', gap: 8 }}><b>선택 {selectedItems.length}종</b><button style={button} disabled={busy || !selectedItems.length} onClick={() => openLocationEditor(selectedItems)}>선택 상품 위치 일괄 수정</button><button style={button} disabled={busy || !selected.length} onClick={() => setSelected([])}>선택 해제</button><span style={{ fontSize: 12, color: '#6b7280' }}>현재 검색·필터에 보이는 선택 상품만 수정해요.</span></div>
     <div style={{ fontSize: 12, color: '#6b7280' }}>현재 {visible.length}종 · 장부 수량 {visible.reduce((sum, item) => sum + item.bookQty, 0)}개. 여러 위치의 상품은 전체 위치의 수량을 합쳐 세세요. 위치별 출력도 상품 전체 수량 기준이며 같은 상품은 한 번만 나와요.</div>
     {error ? <div role="alert" style={{ color: '#b91c1c', whiteSpace: 'pre-wrap' }}>{error}</div> : null}
     {notice ? <div style={{ color: '#047857' }}>{notice}</div> : null}
-    <style>{`@media screen and (max-width:699px){
+    <style>{`
+[data-location-heading]{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+[data-location-heading]>h2{order:0}
+[data-location-heading]>button{order:1}
+[data-location-heading]>div{order:2;flex-basis:100%}
+@media screen and (max-width:699px){
+[data-location-heading]>h2{font-size:16px!important;margin:0!important}
+[data-location-heading]>button{font-size:10px!important;padding:7px 8px!important;white-space:nowrap;min-height:32px;letter-spacing:-.3px}
+[data-location-heading]>div{font-size:11px!important;line-height:1.5}
+[data-location-filters]{display:grid!important;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto!important;gap:5px!important;align-items:start}
+[data-location-filters]>input,[data-location-filters]>select{width:100%!important;min-width:0!important;max-width:100%!important;font-size:10px!important;padding:8px 4px!important;height:35px;box-sizing:border-box}
+[data-location-filters]>span{min-width:0;max-width:75px;gap:3px!important}
+[data-location-filters]>span>button{font-size:10px!important;padding:8px 6px!important;height:35px;white-space:nowrap}
+[data-location-filters]>span>[role=status]{font-size:9px!important}
+[data-location-filters]>label{grid-column:1/-1;font-size:11px!important;padding:3px 0!important}
+}
+@media screen and (max-width:699px){
 [data-mobile-location]{padding:10px!important;gap:10px!important;min-width:0}
 [data-location-bulk]{display:grid!important;grid-template-columns:auto minmax(0,1fr) auto!important;gap:6px!important}
 [data-location-bulk]>b{font-size:11px;white-space:nowrap}
