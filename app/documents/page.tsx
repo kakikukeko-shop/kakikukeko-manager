@@ -9,7 +9,7 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
-import SafeModal from "../../components/SafeModal";
+import SafeModal from "../../components/CompactFormModal";
 import RefreshButton from "../../components/RefreshButton";
 import ImportCertificatePanel from "../../components/ImportCertificatePanel";
 

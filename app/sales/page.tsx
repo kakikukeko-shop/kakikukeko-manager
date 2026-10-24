@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import RefreshButton from '../../components/RefreshButton'
-import SafeModal from '../../components/SafeModal'
+import SafeModal from '../../components/CompactFormModal'
 
 type PurchaseItemRow = {
   id: string
