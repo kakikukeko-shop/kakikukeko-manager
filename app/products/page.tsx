@@ -409,10 +409,11 @@ export default function ProductsPage() {
 
   useEffect(() => {
     const syncViewMode = () => {
-      setIsTabletMode(document.documentElement.dataset.viewMode === 'tablet')
+      setIsTabletMode(window.innerWidth >= 700 && document.documentElement.dataset.viewMode === 'tablet')
     }
 
     syncViewMode()
+    window.addEventListener('resize', syncViewMode)
 
     const observer = new MutationObserver(syncViewMode)
     observer.observe(document.documentElement, {
@@ -420,7 +421,7 @@ export default function ProductsPage() {
       attributeFilter: ['data-view-mode'],
     })
 
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); window.removeEventListener('resize', syncViewMode) }
   }, [])
 
   useEffect(() => {
@@ -1133,7 +1134,7 @@ export default function ProductsPage() {
   }
 
   return (
-    <div ref={pageRef} style={styles.page}>
+    <div data-mobile-products ref={pageRef} style={styles.page}><style>{`@media(max-width:699px){[data-mobile-products]{min-width:0!important;padding:0!important}[data-mobile-product-table]{display:block!important;min-width:0!important;width:100%!important}[data-mobile-product-table] thead{display:none}[data-mobile-product-table] tbody{display:grid;gap:12px;padding:8px}[data-mobile-product-table] tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding:12px;border:1px solid #e9e5f5;border-radius:14px;background:#fff}[data-mobile-product-table] td{display:block!important;width:auto!important;min-width:0!important;padding:5px 0!important;border:0!important;white-space:normal!important;overflow-wrap:anywhere;font-size:12px!important;text-align:left!important}[data-mobile-product-table] td::before{display:block;color:#64748b;font-size:10px;font-weight:600;margin-bottom:3px}[data-mobile-product-table] td:nth-child(1){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2){grid-column:1/-1}[data-mobile-product-table] td:nth-child(19){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2)>div>div>div:first-child{white-space:normal!important;overflow:visible!important}[data-mobile-product-table] td:nth-child(2) b{white-space:normal!important}[data-mobile-product-table] td:nth-child(2)>div{min-width:0!important}[data-mobile-product-table] input:not([type=checkbox]),[data-mobile-product-table] select{width:100%!important;min-width:0!important;box-sizing:border-box}[data-mobile-product-table] button{white-space:nowrap;font-size:11px!important}[data-mobile-product-table] td:nth-child(3)::before{content:"매입일"}[data-mobile-product-table] td:nth-child(4)::before{content:"거래처"}[data-mobile-product-table] td:nth-child(5)::before{content:"개당 원가"}[data-mobile-product-table] td:nth-child(6)::before{content:"총수량"}[data-mobile-product-table] td:nth-child(7)::before{content:"입고 수량"}[data-mobile-product-table] td:nth-child(8)::before{content:"판매 수량"}[data-mobile-product-table] td:nth-child(9)::before{content:"현재 재고"}[data-mobile-product-table] td:nth-child(10)::before{content:"미도착"}[data-mobile-product-table] td:nth-child(11)::before{content:"온라인 판매가"}[data-mobile-product-table] td:nth-child(12)::before{content:"온라인 배송비"}[data-mobile-product-table] td:nth-child(13)::before{content:"예상 배송비"}[data-mobile-product-table] td:nth-child(14)::before{content:"온라인 이익"}[data-mobile-product-table] td:nth-child(15)::before{content:"오프라인 판매가"}[data-mobile-product-table] td:nth-child(16)::before{content:"오프라인 이익"}[data-mobile-product-table] td:nth-child(17)::before{content:"마지막 입고일"}[data-mobile-product-table] td:nth-child(18)::before{content:"상태"}[data-mobile-product-table] td:nth-child(19)::before{content:"관리"}}`}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
       <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
@@ -1567,7 +1568,7 @@ export default function ProductsPage() {
         </div>
       ) : (
         <div style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table data-mobile-product-table style={styles.table}>
             <thead>
               <tr>
                 <th style={{ ...styles.th, ...styles.checkCell, width: 42 }}>

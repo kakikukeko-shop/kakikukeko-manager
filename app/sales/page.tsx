@@ -1300,7 +1300,7 @@ export default function SalesPage() {
         </div>
 
         <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
-          <div className="max-h-[620px] overflow-auto" data-tablet-role="sales-table-wrap">
+          <p className="text-xs text-slate-500 md:hidden">표를 좌우로 밀면 결제금액·이익·수정 버튼을 볼 수 있어요.</p><div className="max-h-[620px] overflow-auto" data-tablet-role="sales-table-wrap">
             <table className="w-full text-[13px]" data-tablet-role="sales-table">
               <thead className="bg-slate-50 text-slate-700">
                 <tr className="border-b border-slate-200">
@@ -1556,6 +1556,7 @@ export default function SalesPage() {
       </div>
 
       <style jsx global>{`
+        @media(max-width:699px){[data-page="sales"]{min-width:0!important;padding:0!important}[data-page="sales"] [data-tablet-role="sales-table-wrap"]{overflow-x:auto!important;-webkit-overflow-scrolling:touch}[data-page="sales"] [data-tablet-role="sales-table"]{min-width:1180px!important;table-layout:auto!important}[data-page="sales"] [data-tablet-role="sales-table"] th,[data-page="sales"] [data-tablet-role="sales-table"] td{white-space:nowrap!important;font-size:12px!important}[data-page="sales"] [data-tablet-role="sales-table"] th:first-child,[data-page="sales"] [data-tablet-role="sales-table"] td:first-child{min-width:200px;max-width:250px;white-space:normal!important}}
         [data-page="sales"] [data-tablet-role="sales-item-memo"] {
           display: none;
         }

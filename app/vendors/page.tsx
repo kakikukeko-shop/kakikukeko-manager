@@ -1363,6 +1363,7 @@ export default function VendorsPage() {
         [data-vendor-card] > summary span { flex-shrink: 0; }
         [data-vendor-actions] button { padding: 5px 9px !important; min-height: 28px !important; height: auto !important; min-width: 0 !important; font-size: 12px !important; width: auto !important; }
         [data-vendors-grid] { align-items: start !important; }
+@media(max-width:699px){[data-vendors-grid]{grid-template-columns:minmax(0,1fr)!important;gap:10px!important}[data-vendor-card]{padding:12px!important}[data-vendor-card]>summary{font-size:13px!important}[data-vendor-card] input,[data-vendor-card] select{max-width:100%;box-sizing:border-box}}
       `}</style>
 
       <SafeModal open={!!pointVendor} title={`${pointVendor?.name||''} 포인트 관리`} onClose={()=>{if(!pointSaving)setPointVendor(null)}}>

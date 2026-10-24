@@ -1425,7 +1425,7 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
   const total = (rows: NormalizedSaleRow[], field: 'final_amount' | 'profit_amount') => rows.reduce((sum, row) => sum + Number(row[field] || 0), 0)
   const move = (offset: number) => { const [year, number] = month.split('-').map(Number); const date = new Date(year, number - 1 + offset, 1); setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`) }
   const control = { border: '1px solid #ddd6fe', background: '#fff', borderRadius: 10, padding: '6px 10px', cursor: 'pointer', fontWeight: 800 } as const
-  return <section style={{ background: '#fff', padding: 14, borderRadius: 20, border: '1px solid #ede9fe', backgroundImage: 'linear-gradient(135deg, #ffffff, #faf8ff)', minWidth: 0 }}>
+  return <section data-mobile-calendar style={{ background: '#fff', padding: 14, borderRadius: 20, border: '1px solid #ede9fe', backgroundImage: 'linear-gradient(135deg, #ffffff, #faf8ff)', minWidth: 0 }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
       <h2 style={{ margin: 0, fontSize: 18 }}>월별 매출 / 매입 달력</h2>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><button style={control} aria-label="이전 달" onClick={() => move(-1)}>‹</button><input type="month" aria-label="조회 월" value={month} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value) }} style={{ ...control, minWidth: 140 }} /><button style={control} aria-label="다음 달" onClick={() => move(1)}>›</button><button style={control} onClick={() => { setToday(koreaDateKey()); setMonth(koreaDateKey().slice(0, 7)) }}>이번 달</button></div>
@@ -1440,13 +1440,13 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
       </div>
     </div>
     <p style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.4, margin: '8px 0' }}>판매일 기준 · 매출은 실입금액, 이익은 매출관리의 저장값이에요(운영비 차감 전). 매입은 매입일의 상품금액 + 비용일의 추가비용(환불 차감)이에요. 날짜를 누르면 내역을 볼 수 있어요.</p>
-    {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
+    {loading || error ? <div role="status" style={{ padding: 24 }}>{loading ? '매출 내역을 불러오는 중이에요.' : '매출을 불러오지 못했어요. 새로고침해 주세요.'}</div> : <div style={{ overflowX: 'auto' }}><div data-calendar-grid style={{ minWidth: 560, display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 4 }}>
       {['일', '월', '화', '수', '목', '금', '토'].map((day, index) => <div key={day} style={{ padding: 4, textAlign: 'center', fontWeight: 800, color: index === 0 ? '#b91c1c' : index === 6 ? '#2563eb' : '#6b7280' }}>{day}</div>)}
       {days.map((date, index) => {
         const rows = byDate.get(date) || []
         const purchase = purchaseByDate.get(date)
         const isToday = date === today
-        return date ? <button key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}, 매입 ${fmtKRW(purchase?.amount || 0)}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 72, minWidth: 0, padding: '6px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', border: isToday ? '2px solid #7c3aed' : '1px solid #eeeaf5', borderRadius: 12, background: isToday ? '#ede9fe' : rows.length || purchase ? '#fff' : '#faf9fc', cursor: 'pointer', overflowWrap: 'anywhere' }}>
+        return date ? <button data-calendar-day key={date} aria-label={`${date}${isToday ? ' 오늘' : ''}, 매출 ${fmtKRW(total(rows, 'final_amount'))}, 매출이익 ${fmtKRW(total(rows, 'profit_amount'))}, 매입 ${fmtKRW(purchase?.amount || 0)}`} aria-current={isToday ? 'date' : undefined} onClick={() => setSelected(date)} style={{ textAlign: 'left', minHeight: 72, minWidth: 0, padding: '6px 8px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', border: isToday ? '2px solid #7c3aed' : '1px solid #eeeaf5', borderRadius: 12, background: isToday ? '#ede9fe' : rows.length || purchase ? '#fff' : '#faf9fc', cursor: 'pointer', overflowWrap: 'anywhere' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, fontWeight: isToday ? 900 : 700, color: index % 7 === 0 ? '#b91c1c' : index % 7 === 6 ? '#2563eb' : '#111827' }}>{Number(date.slice(-2))}{isToday ? <span style={{ background: '#7c3aed', color: '#fff', padding: '2px 5px', borderRadius: 6, fontSize: 10 }}>오늘</span> : null}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '2px 8px', width: '100%', marginTop: 5, fontSize: 11, lineHeight: 1.5 }}>
             <div>{rows.length ? <><div>매출 <b>{fmtKRW(total(rows, 'final_amount'))}</b></div><div style={{ color: total(rows, 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9' }}>이익 <b>{fmtKRW(total(rows, 'profit_amount'))}</b></div></> : <span style={{ color: '#d1cbdc' }}>—</span>}</div>
@@ -1455,6 +1455,23 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
         </button> : <div key={`empty-${index}`} style={{ background: '#fafafa', borderRadius: 10 }} />
       })}
     </div></div>}
+    <style>{`@media(max-width:699px){
+[data-mobile-calendar]{padding:8px!important;border-radius:14px!important}
+[data-mobile-calendar] h2{font-size:15px!important}
+[data-mobile-calendar]>div:first-child{gap:8px!important}
+[data-mobile-calendar]>div:first-child>div{gap:4px!important;max-width:100%}
+[data-mobile-calendar] input[type=month]{min-width:0!important;width:126px;font-size:12px}
+[data-mobile-calendar]>div:first-child button{padding:6px 8px!important;font-size:12px}
+[data-mobile-calendar]>div:nth-child(2){font-size:12px;gap:8px!important;padding:8px!important}
+[data-mobile-calendar]>p{font-size:10px!important}
+[data-calendar-grid]{min-width:0!important;width:100%;gap:2px!important}
+[data-calendar-grid]>div{font-size:10px}
+[data-calendar-day]{padding:4px 2px!important;border-radius:7px!important;min-height:94px!important;font-size:11px;overflow:hidden;}
+[data-calendar-day]>div:first-child{gap:1px!important;font-size:11px}
+[data-calendar-day]>div:first-child span{font-size:8px!important;padding:1px 2px!important}
+[data-calendar-day]>div:nth-child(2){display:block!important;font-size:8px!important;line-height:1.4!important;letter-spacing:-.4px}
+[data-calendar-day] b{display:block;white-space:normal;overflow-wrap:anywhere}
+}`}</style>
     <SafeModal open={monthSalesOpen} title={`${month} 판매 상품`} onClose={() => setMonthSalesOpen(false)}><div style={{ display: 'grid', gap: 10 }}>
       {!monthRows.length ? <p>이 달에는 판매 내역이 없어요.</p> : [...monthRows].sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ede9fe' }}><b style={{ color: '#6d28d9', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.sale_items?.length ? row.sale_items.map((item, index) => <div key={index}>{getSaleItemName(item)}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>매출 {fmtKRW(Number(row.final_amount || 0))}</b></div></div>)}
     </div></SafeModal>
