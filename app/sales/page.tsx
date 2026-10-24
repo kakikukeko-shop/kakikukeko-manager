@@ -1266,7 +1266,7 @@ export default function SalesPage() {
           </div>
         </div>
 
-        <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
+        <div data-sales-mobile-filters className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_220px]">
           <input
             className={inputClass}
             placeholder="상품명 / 메모 / 판매일 검색"
@@ -1299,8 +1299,30 @@ export default function SalesPage() {
           </select>
         </div>
 
-        <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
-          <p className="text-xs text-slate-500 md:hidden">표를 좌우로 밀면 결제금액·이익·수정 버튼을 볼 수 있어요.</p><div className="max-h-[620px] overflow-auto" data-tablet-role="sales-table-wrap">
+        <div data-sales-mobile-list>
+          {loading ? <p>불러오는 중…</p> : !filteredSales.length ? <p>매출 내역이 없어요.</p> : filteredSales.map(row => {
+            const items = row.sale_items || []
+            const first = items[0]
+            const photo = first ? itemPhotoMap.get(String(first.purchase_item_id || '')) || String(first.purchase_items?.attachment_url || '') : ''
+            const receipt = (saleFileMap.get(row.id) || []).find(file => file.file_type === SALE_RECEIPT_TYPE && file.file_path)
+            const costs: Array<[string, number | null | undefined]> = [['매입금액', row.purchase_amount], ['총상품금액', row.total_product_amount], ['할인', row.discount_amount], ['미리배송비', row.prepaid_shipping_fee], ['실제배송비', row.actual_shipping_fee], ['수수료', row.selling_fee]]
+            return <details key={row.id} data-sale-mobile-card>
+              <summary>
+                <div data-sale-mobile-meta><span>{row.sale_date} · {getSaleChannelLabel(row)}</span><span>총 {items.reduce((sum, item) => sum + Number(item.qty || 0), 0)}개 · 상세 ⌄</span></div>
+                <div data-sale-mobile-product>{photo ? <img src={photo} alt="" loading="lazy" /> : <span data-sale-no-photo>사진 없음</span>}<b>{first?.purchase_items?.item_name || '상품명 없음'}{items.length > 1 ? <small> 외 {items.length - 1}종</small> : null}</b></div>
+                <div data-sale-mobile-money><span>실입금액 <b>{formatMoney(row.final_amount)}</b></span><span>실이익 <b style={{color:Number(row.profit_amount || 0) < 0 ? '#dc2626' : '#059669'}}>{formatMoney(row.profit_amount)}</b></span></div>
+              </summary>
+              <div data-sale-mobile-detail>
+                {items.map((item, index) => <div key={item.id || index} style={{padding:'5px 0',borderBottom:'1px solid #f1f5f9'}}><b>{item.purchase_items?.item_name || '상품명 없음'}</b><div>{Number(item.qty || 0)}개 · 상품금액 {formatMoney(Number(item.line_total ?? Number(item.sale_price || 0) * Number(item.qty || 0)))}</div></div>)}
+                <dl>{costs.map(([label, amount]) => <div key={label}><dt>{label}</dt><dd>{formatMoney(amount)}</dd></div>)}</dl>
+                <p>메모: {row.memo || '없음'}</p>
+                <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>{receipt ? <a href={publicUrl(receipt.file_path)} target="_blank" rel="noreferrer">영수증 보기</a> : <span>영수증 미업로드</span>}<button type="button" onClick={() => openEditModal(row)}>수정</button><button type="button" style={{color:'#dc2626'}} onClick={() => deleteSale(row)}>삭제</button></div>
+              </div>
+            </details>
+          })}
+        </div>
+        <div data-sales-desktop-list className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
+          <div className="max-h-[620px] overflow-auto" data-tablet-role="sales-table-wrap">
             <table className="w-full text-[13px]" data-tablet-role="sales-table">
               <thead className="bg-slate-50 text-slate-700">
                 <tr className="border-b border-slate-200">
@@ -1556,6 +1578,30 @@ export default function SalesPage() {
       </div>
 
       <style jsx global>{`
+[data-sales-mobile-list]{display:none}
+@media(max-width:699px){
+[data-sales-desktop-list]{display:none!important}
+[data-sales-mobile-filters]{display:grid!important;grid-template-columns:minmax(0,1.5fr) minmax(0,.75fr) minmax(0,1.1fr)!important;gap:5px!important}
+[data-sales-mobile-filters]>input,[data-sales-mobile-filters]>select{min-width:0!important;width:100%!important;font-size:10px!important;padding:8px 4px!important;border-radius:9px!important;height:36px;box-sizing:border-box}
+[data-sales-mobile-list]{display:grid;gap:8px}
+[data-sale-mobile-card]{border:1px solid #e5e7eb;border-radius:12px;background:#fff;overflow:hidden;min-width:0}
+[data-sale-mobile-card]>summary{display:block;list-style:none;padding:10px;cursor:pointer}
+[data-sale-mobile-card]>summary::-webkit-details-marker{display:none}
+[data-sale-mobile-meta]{display:flex;justify-content:space-between;gap:5px;font-size:10px;color:#64748b;margin-bottom:7px}
+[data-sale-mobile-product]{display:flex;gap:8px;align-items:center;min-width:0}
+[data-sale-mobile-product]>img,[data-sale-no-photo]{width:42px;height:42px;flex-shrink:0;object-fit:contain;border:1px solid #eee;border-radius:8px}
+[data-sale-no-photo]{display:grid;place-items:center;font-size:9px;color:#94a3b8}
+[data-sale-mobile-product]>b{font-size:12px;line-height:1.45;overflow-wrap:anywhere;min-width:0}
+[data-sale-mobile-product] small{font-size:10px;color:#64748b;font-weight:500}
+[data-sale-mobile-money]{display:flex;justify-content:space-between;gap:6px;margin-top:8px;font-size:10px;color:#64748b}
+[data-sale-mobile-money] b{font-size:12px;color:#111827;white-space:nowrap}
+[data-sale-mobile-detail]{padding:0 10px 10px;border-top:1px solid #f1f5f9;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+[data-sale-mobile-detail] dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:10px 0}
+[data-sale-mobile-detail] dt{color:#64748b;font-size:10px}
+[data-sale-mobile-detail] dd{margin:0;font-weight:700}
+[data-sale-mobile-detail] button{font-size:11px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff}
+}
+
         @media(max-width:699px){[data-page="sales"]{min-width:0!important;padding:0!important}[data-page="sales"] [data-tablet-role="sales-table-wrap"]{overflow-x:auto!important;-webkit-overflow-scrolling:touch}[data-page="sales"] [data-tablet-role="sales-table"]{min-width:1180px!important;table-layout:auto!important}[data-page="sales"] [data-tablet-role="sales-table"] th,[data-page="sales"] [data-tablet-role="sales-table"] td{white-space:nowrap!important;font-size:12px!important}[data-page="sales"] [data-tablet-role="sales-table"] th:first-child,[data-page="sales"] [data-tablet-role="sales-table"] td:first-child{min-width:200px;max-width:250px;white-space:normal!important}}
         [data-page="sales"] [data-tablet-role="sales-item-memo"] {
           display: none;
