@@ -91,8 +91,38 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
     } catch (e: any) { setError(e.message) } finally { busyRef.current = false; setBusy(false) }
   }
   const printDate = new Date().toLocaleString('ko-KR')
+  function openPrintPreview() {
+    setError(''); setNotice('')
+    const source = document.getElementById('inventory-print-root')
+    if (!source) { setError('실사표를 준비하지 못했어요. 위치·재고실사 탭을 다시 열어 주세요.'); return }
+    // Open during the original tap, without waiting for image downloads.
+    const preview = window.open('', '_blank')
+    if (!preview) { setNotice('인쇄 미리보기 창이 차단됐어요. Safari 또는 Chrome에서 사이트를 열고 팝업을 허용한 뒤 다시 눌러 주세요.'); return }
+    try {
+      const doc = preview.document
+      doc.title = '카키쿠케코 재고실사표'
+      doc.documentElement.lang = 'ko'
+      const viewport = doc.createElement('meta'); viewport.name = 'viewport'; viewport.content = 'width=device-width, initial-scale=1'; doc.head.append(viewport)
+      const toolbar = doc.createElement('div')
+      toolbar.id = 'inventory-preview-controls'
+      const printButton = doc.createElement('button'); printButton.type = 'button'; printButton.textContent = '사진 준비 중…'; printButton.disabled = true
+      printButton.onclick = () => { try { preview.focus(); preview.print() } catch { printButton.textContent = '브라우저 메뉴에서 인쇄해 주세요' } }
+      const hint = doc.createElement('p'); hint.textContent = '사진이 준비되면 인쇄 / PDF 저장을 눌러 주세요. 인쇄창이 열리지 않으면 Safari·Chrome에서 사이트를 열어 인쇄하거나 브라우저의 공유·인쇄 메뉴를 이용하세요.'
+      toolbar.append(printButton, hint)
+      const clone = doc.importNode(source, true)
+      clone.querySelectorAll('img').forEach(img => { img.loading = 'eager' })
+      doc.body.replaceChildren(toolbar, clone)
+      const style = doc.createElement('style')
+      style.textContent = `@media screen{body{margin:0;padding:12px;font-family:system-ui,sans-serif;background:#f5f3ff;color:#111827}#inventory-print-root{display:block!important;background:#fff;padding:12px;overflow-x:auto}#inventory-print-root table{width:100%;min-width:620px;border-collapse:collapse;font-size:12px}#inventory-print-root td,#inventory-print-root th{border:1px solid #bbb;padding:4px}#inventory-preview-controls{margin-bottom:12px}#inventory-preview-controls button{padding:12px 18px;border:0;border-radius:10px;background:#7c3aed;color:white;font-size:14px;font-weight:700}#inventory-preview-controls button:disabled{opacity:.5}#inventory-preview-controls p{font-size:12px;line-height:1.5}}`
+      doc.head.append(style)
+      const images = Array.from(clone.querySelectorAll<HTMLImageElement>('img'))
+      const ready = images.map(img => Promise.race([img.decode().catch(() => undefined), new Promise(resolve => setTimeout(resolve, 8000))]))
+      void Promise.all(ready).then(() => { if (!preview.closed) { printButton.disabled = false; printButton.textContent = '인쇄 / PDF 저장' } })
+      setNotice('실사표 미리보기를 열었어요. 새 창에서 인쇄 / PDF 저장을 눌러 주세요.')
+    } catch { preview.close(); setError('이 브라우저에서 인쇄 미리보기를 열지 못했어요. Safari 또는 Chrome에서 다시 시도해 주세요.') }
+  }
   return <section data-mobile-location style={{ display: 'grid', gap: 14, background: '#fff', padding: 16, borderRadius: 16, border: '1px solid #e8e5f0' }}>
-    <div data-location-heading>      <button type="button" style={{ ...button, color: '#6d28d9' }} disabled={busy || !visible.length || showArchived} onClick={async () => { setBusy(true); try { const images = Array.from(document.querySelectorAll<HTMLImageElement>('#inventory-print-root img')); await Promise.all(images.map(img => img.decode().catch(() => undefined))); window.print() } finally { setBusy(false) } }}>실사표 인쇄 / PDF 저장</button><h2 style={{ margin: '0 0 6px' }}>위치·재고실사</h2><div style={{ color: '#6b7280', fontSize: 13 }}>보관 위치를 확인하고 실사표를 출력하세요. 실제 수량과 차이는 종이에 직접 적어요. 이 화면에서는 재고 수량을 조정하지 않아요.</div></div>
+    <div data-location-heading>      <button type="button" style={{ ...button, color: '#6d28d9' }} disabled={busy || !visible.length || showArchived} onClick={openPrintPreview}>실사표 인쇄 / PDF 저장</button><h2 style={{ margin: '0 0 6px' }}>위치·재고실사</h2><div style={{ color: '#6b7280', fontSize: 13 }}>보관 위치를 확인하고 실사표를 출력하세요. 실제 수량과 차이는 종이에 직접 적어요. 이 화면에서는 재고 수량을 조정하지 않아요.</div></div>
     <div data-location-filters style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
       <input style={{ ...input, maxWidth: 300 }} aria-label="실사 상품 검색" value={query} onChange={e => setQuery(e.target.value)} placeholder="상품명 / 거래처 / 위치 검색" />
       <select style={{ ...input, maxWidth: 260 }} aria-label="보관 위치 필터" value={location} onChange={e => setLocation(e.target.value)}><option value="all">모든 위치</option><option value="none">위치 미지정</option>{options.map(name => <option key={name} value={`loc:${name}`}>{name}</option>)}</select>
