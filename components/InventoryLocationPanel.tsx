@@ -119,11 +119,13 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
       const table = clone.querySelector('table')
       if (table) {
         const rows = Array.from(table.tBodies[0]?.rows || [])
-        for (let offset = 0; offset < rows.length; offset += 20) {
+        for (let offset = 0; offset < rows.length; ) {
+          const pageSize = offset === 0 ? 14 : 18
           const part = table.cloneNode(false) as HTMLTableElement
           for (const child of Array.from(table.children)) if (child.tagName !== 'TBODY') part.append(child.cloneNode(true))
           const body = doc.createElement('tbody')
-          rows.slice(offset, offset + 20).forEach(row => body.append(row))
+          rows.slice(offset, offset + pageSize).forEach(row => body.append(row))
+          offset += pageSize
           part.append(body)
           table.before(part)
         }
@@ -132,6 +134,20 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
       doc.body.replaceChildren(toolbar, clone)
       const style = doc.createElement('style')
       style.textContent = `@media screen{body{margin:0;padding:12px;font-family:system-ui,sans-serif;background:#f5f3ff;color:#111827}#inventory-print-root{display:block!important;background:#fff;padding:12px;overflow-x:auto}#inventory-print-root img{width:32px!important;height:32px!important;object-fit:contain!important}#inventory-print-root table{width:100%;min-width:620px;border-collapse:collapse;font-size:12px}#inventory-print-root td,#inventory-print-root th{border:1px solid #bbb;padding:4px}#inventory-preview-controls{margin-bottom:12px}#inventory-preview-controls button{padding:12px 18px;border:0;border-radius:10px;background:#7c3aed;color:white;font-size:14px;font-weight:700}#inventory-preview-controls button:disabled{opacity:.5}#inventory-preview-controls p{font-size:12px;line-height:1.5}}`
+      style.textContent += `@media print{
+html,body{height:auto!important;min-height:0!important;overflow:visible!important;margin:0!important;padding:0!important}
+#inventory-print-root{height:auto!important;max-height:none!important;overflow:visible!important;padding:0!important;width:100%!important}
+#inventory-print-root table{width:100%!important;min-width:0!important;height:auto!important;table-layout:fixed!important;break-before:page;page-break-before:always;overflow:visible!important}
+#inventory-print-root table:first-of-type{break-before:auto;page-break-before:auto}
+#inventory-print-root thead{display:table-header-group!important}
+#inventory-print-root tbody{display:table-row-group!important}
+#inventory-print-root tr{height:auto!important;break-inside:avoid!important;page-break-inside:avoid!important}
+#inventory-print-root td,#inventory-print-root th{height:auto!important;max-height:none!important;overflow:visible!important;white-space:normal!important;word-break:normal!important;overflow-wrap:anywhere!important;line-height:1.35!important;vertical-align:middle!important;font-size:8pt!important;padding:4px!important}
+#inventory-print-root td:first-child>div{display:block!important;position:relative;min-height:32px!important;padding-left:38px!important;break-inside:avoid!important}
+#inventory-print-root td:first-child>div>img,#inventory-print-root td:first-child>div>span{position:absolute!important;left:0;top:0;width:32px!important;height:32px!important;object-fit:contain!important}
+#inventory-print-root td:first-child>div>div{display:block!important;overflow:visible!important;white-space:normal!important;line-height:1.35!important}
+#inventory-print-root small{font-size:7pt!important}
+}`
       doc.head.append(style)
       const preparePhotos = async () => {
         let cursor = 0, completed = 0, failed = 0
