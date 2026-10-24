@@ -110,17 +110,75 @@ export default function InventoryLocationPanel({ items, onRefresh, active = true
       const hint = doc.createElement('p'); hint.textContent = '사진이 준비되면 인쇄 / PDF 저장을 눌러 주세요. 인쇄창이 열리지 않으면 Safari·Chrome에서 사이트를 열어 인쇄하거나 브라우저의 공유·인쇄 메뉴를 이용하세요.'
       toolbar.append(printButton, hint)
       const clone = doc.importNode(source, true)
-      clone.querySelectorAll('img').forEach(img => {
+      const photos = Array.from(clone.querySelectorAll<HTMLImageElement>('img')).map(img => {
+        const url = img.src
+        img.removeAttribute('src')
         img.loading = 'eager'
-        img.onerror = () => { img.style.display = 'none'; const placeholder = doc.createElement('span'); placeholder.textContent = '사진 로딩 실패'; placeholder.style.cssText = 'display:grid;place-items:center;width:32px;height:32px;flex-shrink:0;font-size:8px;color:#b45309;border:1px solid #ddd'; img.after(placeholder) }
+        return { img, url }
       })
+      const table = clone.querySelector('table')
+      if (table) {
+        const rows = Array.from(table.tBodies[0]?.rows || [])
+        for (let offset = 0; offset < rows.length; offset += 20) {
+          const part = table.cloneNode(false) as HTMLTableElement
+          for (const child of Array.from(table.children)) if (child.tagName !== 'TBODY') part.append(child.cloneNode(true))
+          const body = doc.createElement('tbody')
+          rows.slice(offset, offset + 20).forEach(row => body.append(row))
+          part.append(body)
+          table.before(part)
+        }
+        table.remove()
+      }
       doc.body.replaceChildren(toolbar, clone)
       const style = doc.createElement('style')
       style.textContent = `@media screen{body{margin:0;padding:12px;font-family:system-ui,sans-serif;background:#f5f3ff;color:#111827}#inventory-print-root{display:block!important;background:#fff;padding:12px;overflow-x:auto}#inventory-print-root img{width:32px!important;height:32px!important;object-fit:contain!important}#inventory-print-root table{width:100%;min-width:620px;border-collapse:collapse;font-size:12px}#inventory-print-root td,#inventory-print-root th{border:1px solid #bbb;padding:4px}#inventory-preview-controls{margin-bottom:12px}#inventory-preview-controls button{padding:12px 18px;border:0;border-radius:10px;background:#7c3aed;color:white;font-size:14px;font-weight:700}#inventory-preview-controls button:disabled{opacity:.5}#inventory-preview-controls p{font-size:12px;line-height:1.5}}`
       doc.head.append(style)
-      const images = Array.from(clone.querySelectorAll<HTMLImageElement>('img'))
-      const ready = images.map(img => Promise.race([img.decode().catch(() => undefined), new Promise(resolve => setTimeout(resolve, 8000))]))
-      void Promise.all(ready).then(() => { if (!preview.closed) { printButton.disabled = false; printButton.textContent = '인쇄 / PDF 저장' } })
+      const preparePhotos = async () => {
+        let cursor = 0, completed = 0, failed = 0
+        const worker = async () => {
+          while (cursor < photos.length && !preview.closed) {
+            const { img, url } = photos[cursor++]
+            try {
+              const thumbnail = await new Promise<string>((resolve, reject) => {
+                const photo = new Image()
+                const timer = setTimeout(() => { photo.onload = null; photo.onerror = null; photo.src = ''; reject(new Error('사진 준비 시간 초과')) }, 12000)
+                photo.crossOrigin = 'anonymous'
+                photo.onload = () => {
+                  clearTimeout(timer)
+                  try {
+                    const canvas = document.createElement('canvas'); canvas.width = 96; canvas.height = 96
+                    const context = canvas.getContext('2d')
+                    if (!context) throw new Error('사진 변환 실패')
+                    context.fillStyle = '#fff'; context.fillRect(0, 0, 96, 96)
+                    const scale = Math.min(96 / photo.naturalWidth, 96 / photo.naturalHeight)
+                    const width = photo.naturalWidth * scale, height = photo.naturalHeight * scale
+                    context.drawImage(photo, (96 - width) / 2, (96 - height) / 2, width, height)
+                    resolve(canvas.toDataURL('image/jpeg', .8))
+                  } catch (error) { reject(error) }
+                  photo.src = ''
+                }
+                photo.onerror = () => { clearTimeout(timer); reject(new Error('사진 불러오기 실패')) }
+                photo.src = url
+              })
+              img.src = thumbnail
+              await img.decode()
+            } catch {
+              failed++
+              // Preserve the original image if thumbnail conversion is unavailable.
+              img.src = url
+            }
+            completed++
+            if (!preview.closed) printButton.textContent = `사진 준비 ${completed}/${photos.length}`
+          }
+        }
+        await Promise.all(Array.from({length: Math.min(3, photos.length)}, worker))
+        if (preview.closed) return
+        printButton.disabled = false
+        printButton.textContent = '인쇄 / PDF 저장'
+        if (failed) hint.textContent = `사진 ${failed}개는 작은 이미지로 변환하지 못해 원본으로 표시해요. 빈 사진이 있는지 확인한 뒤 인쇄하세요.`
+        else hint.textContent = '사진 준비가 끝났어요. 인쇄 / PDF 저장을 눌러 주세요. 사진 크기와 상품·수량은 기존과 같아요.'
+      }
+      void preparePhotos().catch(() => { if (!preview.closed) { printButton.textContent = '사진 준비 실패 · 창을 다시 열어 주세요'; hint.textContent = '사진 준비 중 오류가 발생했어요. 원래 화면에서 미리보기를 다시 열어 주세요.' } })
       setNotice('실사표 미리보기를 열었어요. 새 창에서 인쇄 / PDF 저장을 눌러 주세요.')
     } catch { preview.close(); setError('이 브라우저에서 인쇄 미리보기를 열지 못했어요. Safari 또는 Chrome에서 다시 시도해 주세요.') }
   }
