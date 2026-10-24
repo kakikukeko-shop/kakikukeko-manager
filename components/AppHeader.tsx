@@ -9,7 +9,6 @@ const MENUS = [
   { href: '/products', label: '상품 / 재고관리' },
   { href: '/sales', label: '매출관리' },
   { href: '/vendors', label: '거래처관리' },
-  { href: '/evidence', label: '증빙서류관리' },
 ]
 type ViewMode = 'pc' | 'tablet'
 const VIEW_MODE_STORAGE_KEY = 'kakikukeko-view-mode'

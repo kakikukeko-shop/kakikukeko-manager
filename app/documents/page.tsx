@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { supabase } from "@/lib/supabase";
 import SafeModal from "../../components/SafeModal";
+import ImportCertificatePanel from "../../components/ImportCertificatePanel";
 
 type PurchaseRow = {
   id: string;
@@ -6971,6 +6972,8 @@ export default function DocumentsPage() {
           </button>
         </div>
       </div>
+
+      <ImportCertificatePanel selectedIds={selectedItemIds} items={items.map(item => ({ id: item.id, name: item.item_name || "상품명 없음", vendor: purchaseMap.get(item.purchase_id)?.supplier || "" }))} />
 
       {msg && (
         <div
