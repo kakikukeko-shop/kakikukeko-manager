@@ -247,6 +247,7 @@ export default function ProductsPage() {
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
   const [bulkQtyMap, setBulkQtyMap] = useState<Record<string, string>>({})
   const [isTabletMode, setIsTabletMode] = useState(false)
+  const [expandedMobileItems, setExpandedMobileItems] = useState<string[]>([])
 
   const pageRef = useRef<HTMLDivElement | null>(null)
   const pendingScrollRestoreRef = useRef<number | null>(null)
@@ -1151,7 +1152,30 @@ export default function ProductsPage() {
 [data-products-summary] b{font-size:10px!important}
 [data-summary-desktop]{display:none!important}[data-summary-mobile]{display:inline!important}
 }
-@media(max-width:699px){[data-mobile-products]{min-width:0!important;padding:0!important}[data-mobile-product-table]{display:block!important;min-width:0!important;width:100%!important}[data-mobile-product-table] thead{display:none}[data-mobile-product-table] tbody{display:grid;gap:12px;padding:8px}[data-mobile-product-table] tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding:12px;border:1px solid #e9e5f5;border-radius:14px;background:#fff}[data-mobile-product-table] td{display:block!important;width:auto!important;min-width:0!important;padding:5px 0!important;border:0!important;white-space:normal!important;overflow-wrap:anywhere;font-size:12px!important;text-align:left!important}[data-mobile-product-table] td::before{display:block;color:#64748b;font-size:10px;font-weight:600;margin-bottom:3px}[data-mobile-product-table] td:nth-child(1){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2){grid-column:1/-1}[data-mobile-product-table] td:nth-child(19){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2)>div>div>div:first-child{white-space:normal!important;overflow:visible!important}[data-mobile-product-table] td:nth-child(2) b{white-space:normal!important}[data-mobile-product-table] td:nth-child(2)>div{min-width:0!important}[data-mobile-product-table] input:not([type=checkbox]),[data-mobile-product-table] select{width:100%!important;min-width:0!important;box-sizing:border-box}[data-mobile-product-table] button{white-space:nowrap;font-size:11px!important}[data-mobile-product-table] td:nth-child(3)::before{content:"매입일"}[data-mobile-product-table] td:nth-child(4)::before{content:"거래처"}[data-mobile-product-table] td:nth-child(5)::before{content:"개당 원가"}[data-mobile-product-table] td:nth-child(6)::before{content:"총수량"}[data-mobile-product-table] td:nth-child(7)::before{content:"입고 수량"}[data-mobile-product-table] td:nth-child(8)::before{content:"판매 수량"}[data-mobile-product-table] td:nth-child(9)::before{content:"현재 재고"}[data-mobile-product-table] td:nth-child(10)::before{content:"미도착"}[data-mobile-product-table] td:nth-child(11)::before{content:"온라인 판매가"}[data-mobile-product-table] td:nth-child(12)::before{content:"온라인 배송비"}[data-mobile-product-table] td:nth-child(13)::before{content:"예상 배송비"}[data-mobile-product-table] td:nth-child(14)::before{content:"온라인 이익"}[data-mobile-product-table] td:nth-child(15)::before{content:"오프라인 판매가"}[data-mobile-product-table] td:nth-child(16)::before{content:"오프라인 이익"}[data-mobile-product-table] td:nth-child(17)::before{content:"마지막 입고일"}[data-mobile-product-table] td:nth-child(18)::before{content:"상태"}[data-mobile-product-table] td:nth-child(19)::before{content:"관리"}}`}</style>
+@media(max-width:699px){[data-mobile-products]{min-width:0!important;padding:0!important}[data-mobile-product-table]{display:block!important;min-width:0!important;width:100%!important}[data-mobile-product-table] thead{display:none}[data-mobile-product-table] tbody{display:grid;gap:12px;padding:8px}[data-mobile-product-table] tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px;padding:12px;border:1px solid #e9e5f5;border-radius:14px;background:#fff}[data-mobile-product-table] td{display:block!important;width:auto!important;min-width:0!important;padding:5px 0!important;border:0!important;white-space:normal!important;overflow-wrap:anywhere;font-size:12px!important;text-align:left!important}[data-mobile-product-table] td::before{display:block;color:#64748b;font-size:10px;font-weight:600;margin-bottom:3px}[data-mobile-product-table] td:nth-child(1){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2){grid-column:1/-1}[data-mobile-product-table] td:nth-child(19){grid-column:1/-1}[data-mobile-product-table] td:nth-child(2)>div>div>div:first-child{white-space:normal!important;overflow:visible!important}[data-mobile-product-table] td:nth-child(2) b{white-space:normal!important}[data-mobile-product-table] td:nth-child(2)>div{min-width:0!important}[data-mobile-product-table] input:not([type=checkbox]),[data-mobile-product-table] select{width:100%!important;min-width:0!important;box-sizing:border-box}[data-mobile-product-table] button{white-space:nowrap;font-size:11px!important}[data-mobile-product-table] td:nth-child(3)::before{content:"매입일"}[data-mobile-product-table] td:nth-child(4)::before{content:"거래처"}[data-mobile-product-table] td:nth-child(5)::before{content:"개당 원가"}[data-mobile-product-table] td:nth-child(6)::before{content:"총수량"}[data-mobile-product-table] td:nth-child(7)::before{content:"입고 수량"}[data-mobile-product-table] td:nth-child(8)::before{content:"판매 수량"}[data-mobile-product-table] td:nth-child(9)::before{content:"현재 재고"}[data-mobile-product-table] td:nth-child(10)::before{content:"미도착"}[data-mobile-product-table] td:nth-child(11)::before{content:"온라인 판매가"}[data-mobile-product-table] td:nth-child(12)::before{content:"온라인 배송비"}[data-mobile-product-table] td:nth-child(13)::before{content:"예상 배송비"}[data-mobile-product-table] td:nth-child(14)::before{content:"온라인 이익"}[data-mobile-product-table] td:nth-child(15)::before{content:"오프라인 판매가"}[data-mobile-product-table] td:nth-child(16)::before{content:"오프라인 이익"}[data-mobile-product-table] td:nth-child(17)::before{content:"마지막 입고일"}[data-mobile-product-table] td:nth-child(18)::before{content:"상태"}[data-mobile-product-table] td:nth-child(19)::before{content:"관리"}}[data-product-summary-button]{display:none}
+@media(max-width:699px){
+[data-mobile-product-table] tbody{gap:7px!important;padding:0!important}
+[data-mobile-product-table] tbody>tr{grid-template-columns:24px minmax(0,1fr)!important;gap:0 6px!important;padding:10px 8px!important;border-radius:12px!important;align-items:start}
+[data-mobile-product-table] td:nth-child(1){grid-column:1!important;grid-row:1!important;padding-top:14px!important}
+[data-mobile-product-table] td:nth-child(1) input{width:17px!important;height:17px!important;margin:0!important}
+[data-mobile-product-table] td:nth-child(2){grid-column:2!important;grid-row:1!important;padding:0!important;overflow:visible!important}
+[data-mobile-product-table] [data-product-desktop-name]{display:none!important}
+[data-mobile-product-table] [data-product-summary-button]{display:flex!important;align-items:center;gap:8px;width:100%;min-width:0;background:transparent;border:0;padding:0!important;min-height:64px;color:#111827;text-align:left;font:inherit;cursor:pointer}
+[data-product-summary-button]>img,[data-product-no-photo]{width:46px!important;height:46px!important;flex-shrink:0;object-fit:contain;border:1px solid #eceaf3;border-radius:8px;background:#fff}
+[data-product-no-photo]{display:grid;place-items:center;font-size:9px;color:#9ca3af}
+[data-product-summary-text]{display:block;flex:1;min-width:0}
+[data-product-summary-text]>b{display:-webkit-box!important;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden!important;white-space:normal!important;line-height:1.4;font-size:12px!important;font-weight:800}
+[data-product-quick-stock]{display:flex;flex-wrap:wrap;gap:2px 8px;margin-top:5px;font-size:10px;color:#64748b;line-height:1.5}
+[data-product-quick-stock]>span{white-space:nowrap}
+[data-product-quick-stock] strong{color:#111827;font-size:10px}
+[data-product-chevron]{flex-shrink:0;font-size:15px;color:#7c3aed}
+[data-mobile-product-table] tbody>tr[data-mobile-expanded="false"]>td:nth-child(n+3){display:none!important}
+[data-mobile-product-table] tbody>tr[data-mobile-expanded="true"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+[data-mobile-product-table] tbody>tr[data-mobile-expanded="true"]>td:first-child{position:absolute;left:8px;top:10px}
+[data-mobile-product-table] tbody>tr[data-mobile-expanded="true"]{position:relative}
+[data-mobile-product-table] tbody>tr[data-mobile-expanded="true"]>td:nth-child(2){grid-column:1/-1!important;padding-left:30px!important;margin-bottom:8px;border-bottom:1px solid #eeeaf5!important;padding-bottom:8px!important}
+}
+`}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
       <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) ?? null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
@@ -1632,7 +1656,7 @@ export default function ProductsPage() {
                 const isChecked = selectedItemIds.includes(row.item.id)
 
                 return (
-                  <tr key={row.item.id}>
+                  <tr key={row.item.id} data-mobile-expanded={expandedMobileItems.includes(row.item.id) ? "true" : "false"}>
                     <td style={{ ...styles.td, ...styles.checkCell }}>
                       <input
                         type="checkbox"
@@ -1642,7 +1666,12 @@ export default function ProductsPage() {
                     </td>
 
                     <td style={{ ...styles.td, overflow: 'hidden' }}>
-                      <div style={styles.thumbCell}>
+                      <button type="button" data-product-summary-button aria-expanded={expandedMobileItems.includes(row.item.id)} aria-label={`${row.item.item_name || '상품'} 상세 ${expandedMobileItems.includes(row.item.id) ? '접기' : '펼치기'}`} onClick={() => setExpandedMobileItems(previous => previous.includes(row.item.id) ? previous.filter(id => id !== row.item.id) : [...previous, row.item.id])}>
+                        {row.photoUrl ? <img src={row.photoUrl} alt="" loading="lazy" /> : <span data-product-no-photo>사진 없음</span>}
+                        <span data-product-summary-text><b>{row.item.item_name || '(이름 없음)'}</b><span data-product-quick-stock><span>재고 <strong>{fmtNum(row.stockQty)}</strong></span><span>미도착 <strong>{fmtNum(row.remainingArrivalQty)}</strong></span><span>원가 <strong>{fmtKRW(row.finalUnitCost)}</strong></span></span></span>
+                        <span data-product-chevron aria-hidden="true">{expandedMobileItems.includes(row.item.id) ? '⌃' : '⌄'}</span>
+                      </button>
+                      <div data-product-desktop-name style={styles.thumbCell}>
                         {row.photoUrl ? (
                           <img
                             src={row.photoUrl}
