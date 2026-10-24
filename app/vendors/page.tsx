@@ -1128,12 +1128,12 @@ export default function VendorsPage() {
       <div style={styles.topbar}>
         <div style={styles.title}>거래처관리</div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div data-vendor-toolbar style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button style={styles.btnPrimary} onClick={openCreate}>
             + 거래처 등록
           </button>
           <RefreshButton style={styles.btnGhost} disabled={loading} run={load} />
-          <div style={{ width: 240 }}>
+          <div data-vendor-search style={{ width: 240 }}>
             <input
               style={styles.input}
               value={search}
@@ -1141,7 +1141,7 @@ export default function VendorsPage() {
               placeholder="거래처 검색"
             />
           </div>
-          <div style={{ width: 180 }}>
+          <div data-vendor-sort style={{ width: 180 }}>
             <select
               style={styles.input}
               value={sort}
@@ -1363,6 +1363,12 @@ export default function VendorsPage() {
         [data-vendor-card] > summary span { flex-shrink: 0; }
         [data-vendor-actions] button { padding: 5px 9px !important; min-height: 28px !important; height: auto !important; min-width: 0 !important; font-size: 12px !important; width: auto !important; }
         [data-vendors-grid] { align-items: start !important; }
+@media(max-width:699px){
+[data-vendor-toolbar]{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,.7fr)!important;gap:7px!important;width:100%!important;min-width:0}
+[data-vendor-toolbar]>button,[data-vendor-toolbar]>span{justify-self:start;max-width:100%;min-width:0}
+[data-vendor-search],[data-vendor-sort]{width:100%!important;min-width:0!important}
+[data-vendor-search] input,[data-vendor-sort] select{width:100%!important;min-width:0!important;box-sizing:border-box!important;font-size:12px!important;padding:9px 8px!important;height:37px!important;border-radius:10px!important}
+}
 @media(max-width:699px){[data-vendors-grid]{grid-template-columns:minmax(0,1fr)!important;gap:10px!important}[data-vendor-card]{padding:12px!important}[data-vendor-card]>summary{font-size:13px!important}[data-vendor-card] input,[data-vendor-card] select{max-width:100%;box-sizing:border-box}}
       `}</style>
 
