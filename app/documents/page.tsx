@@ -2405,11 +2405,11 @@ export default function DocumentsPage() {
     const rows = Array.from(allocationDetailsByItem.get(itemId) ?? [])
       .filter(([, amount]) => amount !== 0);
     return (
-      <div style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+      <div data-allocation-details style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
         {rows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
-          <div key={label} style={{ marginBottom: 6 }}><div>{label}:</div><b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
+          <div data-allocation-line key={label} style={{ marginBottom: 6 }}><div>{label}:</div><b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
         ))}
-        <div style={{ fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
+        <div data-allocation-total style={{ fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
         <div style={{ color: "#6b7280" }}>
           {qty > 0 ? `개당 ${fmtKRW(ceilInt(total / qty))}` : "전체환불 · 개당 계산 제외"}
         </div>
@@ -7934,7 +7934,7 @@ export default function DocumentsPage() {
                           <b style={{ fontSize: 13 }}>{fmtKRW(lineTotal)}</b>
                         </div>
                         <div>
-                          <div style={{ color: "#6b7280" }}>상품단가 · 개당</div>
+                          <div style={{ color: "#6b7280", whiteSpace: "nowrap", fontSize: 10 }}>상품단가 · 개당</div>
                           <b style={{ fontSize: 13 }}>
                             {isFullyRefunded ? "-" : fmtKRW(ceilInt(lineTotal / Math.max(1, n(it.qty))))}
                           </b>
@@ -8328,7 +8328,16 @@ export default function DocumentsPage() {
             min-width: max-content !important;
           }
 
-          /* 매입목록 + 상품목록은 휴대폰에서 세로로 */
+          [data-page="documents"] [data-mobile-role="documents-purchase-scroller"]{align-items:flex-start!important;align-content:start!important}
+[data-page="documents"] [data-mobile-role="documents-purchase-card"]{height:fit-content!important;align-self:flex-start!important;box-sizing:border-box!important}
+[data-page="documents"] [data-tablet-role="documents-sidebar"]{height:fit-content!important;align-self:start!important}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-details]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:6px;row-gap:4px;font-size:10px!important}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-line]{margin:0!important;min-width:0}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-line]>div{font-size:9px;letter-spacing:-.3px;white-space:nowrap}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-line] b{font-size:11px}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-total]{grid-column:1/-1;margin-top:4px;padding-top:4px;border-top:1px solid #eeeaf5}
+[data-page="documents"] [data-mobile-role="documents-item-card"] [data-allocation-total]+div{grid-column:1/-1}
+/* 매입목록 + 상품목록은 휴대폰에서 세로로 */
           [data-page="documents"] [data-tablet-layout="documents-main"] {
             display: grid !important;
             grid-template-columns: minmax(0, 1fr) !important;
