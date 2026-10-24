@@ -1173,30 +1173,9 @@ export default function VendorsPage() {
             const activeStatus = getActiveStatusLabel(v)
 
             return (
-              <div key={v.id} style={styles.card}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'flex-start',
-                    gap: 10,
-                    marginBottom: 10,
-                  }}
-                >
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div
-                      style={{
-                        fontSize: 18,
-                        fontWeight: 900,
-                        color: '#111827',
-                        lineHeight: 1.2,
-                        wordBreak: 'break-word',
-                        marginBottom: 8,
-                      }}
-                    >
-                      {v.name || '(이름 없음)'}
-                    </div>
-
+              <details key={v.id} data-vendor-card style={styles.card}>
+                <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'grid', gap: 10 }}>
+                  <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><b style={{fontSize:18,lineHeight:1.4,overflowWrap:'anywhere'}}>{v.name || '(이름 없음)'}</b><span style={{fontSize:12,color:'#6b7280',whiteSpace:'nowrap'}}>{usage.label} · 상세 ▾</span></div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {v.is_online ? (
                         <span style={styles.badge('#dbeafe', '#1d4ed8')}>온라인</span>
@@ -1226,29 +1205,13 @@ export default function VendorsPage() {
                       ) : (
                         <span style={styles.badge('#dcfce7', '#166534')}>사용중</span>
                       )}
-                      <span style={styles.badge('#f3f4f6', '#374151')}>{usage.label}</span>
+                      
                     </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'row',
-                      gap: 6,
-                      alignItems: 'center',
-                      justifyContent: 'flex-end',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <button style={styles.actionBtn} onClick={() => openEdit(v)}>
-                      수정
-                    </button>
-                    <button style={styles.actionDeleteBtn} onClick={() => deleteVendor(v.id)}>
-                      삭제
-                    </button>
-                  </div>
+                </summary>
+                <div data-vendor-actions style={{display:'flex',gap:6,justifyContent:'flex-end',margin:'12px 0',borderTop:'1px solid #eee',paddingTop:10}}>
+                  <button style={{...styles.actionBtn,padding:'5px 9px',height:'auto',minHeight:28,fontSize:12}} onClick={() => openEdit(v)}>수정</button>
+                  <button style={{...styles.actionDeleteBtn,padding:'5px 9px',height:'auto',minHeight:28,fontSize:12}} onClick={() => deleteVendor(v.id)}>삭제</button>
                 </div>
-
                 <div
                   style={{
                     display: 'grid',
@@ -1381,7 +1344,7 @@ export default function VendorsPage() {
                     <div style={styles.detailValue}>{fmtDateTime(v.created_at)}</div>
                   </div>
                 </div>
-              </div>
+              </details>
             )
           })}
 
@@ -1391,6 +1354,15 @@ export default function VendorsPage() {
         </div>
       )}
 
+
+      <style jsx global>{`
+        [data-vendor-card] > summary::-webkit-details-marker { display: none; }
+        [data-vendor-card] { min-width: 0 !important; align-self: start; }
+        [data-vendor-card] > summary > div { min-width: 0; }
+        [data-vendor-card] > summary span { flex-shrink: 0; }
+        [data-vendor-actions] button { padding: 5px 9px !important; min-height: 28px !important; height: auto !important; min-width: 0 !important; font-size: 12px !important; width: auto !important; }
+        [data-vendors-grid] { align-items: start !important; }
+      `}</style>
 
       <SafeModal open={!!pointVendor} title={`${pointVendor?.name||''} 포인트 관리`} onClose={()=>{if(!pointSaving)setPointVendor(null)}}>
         <div style={{display:'grid',gap:12}}>

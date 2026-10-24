@@ -2405,9 +2405,9 @@ export default function DocumentsPage() {
     return (
       <div style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
         {rows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
-          <div key={label}>{label}: {fmtKRW(amount)}</div>
+          <div key={label} style={{ marginBottom: 6 }}><div>{label}:</div><b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
         ))}
-        <div style={{ fontWeight: 800 }}>합계 {fmtKRW(total)}</div>
+        <div style={{ fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
         <div style={{ color: "#6b7280" }}>
           {qty > 0 ? `개당 ${fmtKRW(ceilInt(total / qty))}` : "전체환불 · 개당 계산 제외"}
         </div>
@@ -7252,7 +7252,7 @@ export default function DocumentsPage() {
                       </div>
                     </div>
 
-                    <div
+                    <div data-purchase-actions
                       style={{
                         display: "flex",
                         flexDirection: "column",
@@ -8573,6 +8573,21 @@ export default function DocumentsPage() {
           [data-page="documents"] input[type="checkbox"] {
             min-height: 0 !important;
           }
+        }
+
+        @media (min-width: 700px) {
+          html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-layout="documents-main"] { grid-template-columns: minmax(220px, 26%) minmax(0, 1fr) !important; gap: 10px !important; }
+          html[data-view-mode="tablet"] [data-purchase-actions] { gap: 4px !important; }
+          html[data-view-mode="tablet"] [data-purchase-actions] button { padding: 6px 7px !important; min-width: 0 !important; min-height: 30px !important; height: auto !important; font-size: 11px !important; border-radius: 8px !important; white-space: nowrap !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] table { width: 100% !important; min-width: 0 !important; table-layout: fixed !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(1) { width: 5% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(2) { width: 35% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(3) { width: 6% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(5) { width: 15% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(6) { width: 12% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(7) { width: 15% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] th:nth-child(8) { width: 12% !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-payment-date"] { display: none !important; }
         }
       `}</style>
 
