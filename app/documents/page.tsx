@@ -7196,7 +7196,7 @@ export default function DocumentsPage() {
                         </div>
                         <div>
                           결제수단: <b>{p.payment_met ?? "미입력"}</b> / 카드:{" "}
-                          <b>{p.card_name ?? "미입력"}</b>
+                          <b style={{ display: "inline-block", whiteSpace: "nowrap" }}>{p.card_name ?? "미입력"}</b>
                         </div>
                         <div>
                           상품 종류 수: <b>{cnt?.itemKinds ?? 0}개</b> / 총원화:{" "}
@@ -7437,10 +7437,10 @@ export default function DocumentsPage() {
                                 : "default",
                           }}
                         />
-                        <span>전체</span>
+                        <span className="sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>전체상품 선택</span>
                       </label>
                     </th>
-                    <th style={styles.th}>상품</th>
+                    <th style={{ ...styles.th, whiteSpace: "nowrap" }}>전체상품</th>
                     <th style={{ ...styles.th, width: 70 }}>수량</th>
                     <th
                       data-tablet-role="documents-payment-date"
@@ -8576,6 +8576,11 @@ export default function DocumentsPage() {
         }
 
         @media (min-width: 700px) {
+          html[data-view-mode="tablet"] [data-mobile-role="documents-purchase-card"] > div { flex-direction: column !important; gap: 7px !important; }
+          html[data-view-mode="tablet"] [data-mobile-role="documents-purchase-card"] > div > div:first-child { width: 100% !important; }
+          html[data-view-mode="tablet"] [data-purchase-actions] { flex-direction: row !important; align-self: flex-end !important; }
+          html[data-view-mode="tablet"] [data-tablet-role="documents-table-wrap"] thead th:nth-child(2) { white-space: nowrap !important; }
+
           html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-layout="documents-main"] { grid-template-columns: minmax(220px, 26%) minmax(0, 1fr) !important; gap: 10px !important; }
           html[data-view-mode="tablet"] [data-purchase-actions] { gap: 4px !important; }
           html[data-view-mode="tablet"] [data-purchase-actions] button { padding: 6px 7px !important; min-width: 0 !important; min-height: 30px !important; height: auto !important; font-size: 11px !important; border-radius: 8px !important; white-space: nowrap !important; }
