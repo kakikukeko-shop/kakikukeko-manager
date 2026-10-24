@@ -189,8 +189,37 @@ html,body{height:auto!important;min-height:0!important;overflow:visible!importan
         }
         await Promise.all(Array.from({length: Math.min(3, photos.length)}, worker))
         if (preview.closed) return
+        // Measure actual wrapped rows at the printable width before starting a new sheet.
+        const layoutStyle = doc.createElement('style')
+        layoutStyle.textContent = `#inventory-print-root{width:186mm!important;max-width:none!important;box-sizing:border-box!important;padding:0!important}#inventory-print-root table{width:100%!important;min-width:0!important;table-layout:fixed!important;font-size:8pt!important}#inventory-print-root td,#inventory-print-root th{font-size:8pt!important;line-height:1.35!important;padding:4px!important;box-sizing:border-box!important}#inventory-print-root td:first-child>div{display:block!important;position:relative;min-height:32px;padding-left:38px!important}#inventory-print-root td:first-child>div>img,#inventory-print-root td:first-child>div>span{position:absolute!important;left:0;top:0;width:32px!important;height:32px!important}#inventory-print-root small{font-size:7pt!important}`
+        doc.head.append(layoutStyle)
+        const allTables = Array.from(clone.querySelectorAll('table'))
+        const template = allTables[0]
+        if (template) {
+          const allRows = allTables.flatMap(part => Array.from(part.tBodies[0]?.rows || []))
+          const marker = doc.createElement('div'); template.before(marker)
+          const ruler = doc.createElement('div'); ruler.style.height = '245mm'; ruler.style.position = 'absolute'; ruler.style.visibility = 'hidden'; doc.body.append(ruler)
+          const pageHeight = ruler.getBoundingClientRect().height; ruler.remove()
+          const headingHeight = Math.max(0, marker.getBoundingClientRect().top - clone.getBoundingClientRect().top)
+          const makeTable = () => {
+            const next = template.cloneNode(false) as HTMLTableElement
+            for (const child of Array.from(template.children)) if (child.tagName !== 'TBODY') next.append(child.cloneNode(true))
+            next.append(doc.createElement('tbody')); marker.before(next); return next
+          }
+          allTables.forEach(part => part.remove())
+          let current = makeTable(), firstPage = true
+          for (const row of allRows) {
+            current.tBodies[0].append(row)
+            const available = pageHeight - (firstPage ? headingHeight : 0)
+            if (current.getBoundingClientRect().height > available && current.tBodies[0].rows.length > 1) {
+              row.remove(); firstPage = false; current = makeTable(); current.tBodies[0].append(row)
+            }
+          }
+          marker.remove()
+        }
+        layoutStyle.remove()
         printButton.disabled = false
-        printButton.textContent = '인쇄 / PDF 저장'
+        printButton.textContent = '인쇄 / PDF 저장' 
         if (failed) hint.textContent = `사진 ${failed}개는 작은 이미지로 변환하지 못해 원본으로 표시해요. 빈 사진이 있는지 확인한 뒤 인쇄하세요.`
         else hint.textContent = '사진 준비가 끝났어요. 인쇄 / PDF 저장을 눌러 주세요. 사진 크기와 상품·수량은 기존과 같아요.'
       }
