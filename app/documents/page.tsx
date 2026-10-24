@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import SafeModal from "../../components/SafeModal";
 import RefreshButton from "../../components/RefreshButton";
@@ -7381,7 +7382,7 @@ export default function DocumentsPage() {
             >
               <div><b>원화합계</b> · 해당 상품의 수량 전체 금액 (추가비용 제외)</div>
               <div><b>상품단가</b> · 상품 1개 가격 (추가비용 제외)</div>
-              <div><b>추가비용 내역</b> · 해당 상품에 배분된 배송비·수수료·관부가세 등의 금액</div>
+              <div data-cost-explanation><b>추가비용 내역</b> · 배분된 배송비·수수료·관부가세 금액</div>
               <div><b>최종단가</b> · 추가비용까지 포함한 상품 1개 가격</div>
               <div style={{ marginTop: 5, color: "#6b7280", fontSize: 11 }}>
                 예: 10개 상품값 80,000원 + 추가비용 15,000원 → 원화합계 80,000원 / 상품단가 8,000원 / 최종단가 9,500원
@@ -11390,7 +11391,7 @@ export default function DocumentsPage() {
         </div>
       </SafeModal>
 
-      <SafeModal
+      <ProductDetailModal
         open={itemDetailOpen}
         title="상품 상세"
         onClose={() => setItemDetailOpen(false)}
@@ -11687,7 +11688,7 @@ export default function DocumentsPage() {
             </div>
           </>
         ) : null}
-      </SafeModal>
+      </ProductDetailModal>
       <SafeModal open={editPointOpen} title="기존 결제에 포인트 추가 적용" onClose={() => { if (!editPointBusy) setEditPointOpen(false); }}>
         <div style={{ display: "grid", gap: 12 }}>
           {editPointBusy ? <div>잔액과 적용 금액을 확인하고 있어요…</div> : null}
@@ -11729,4 +11730,57 @@ export default function DocumentsPage() {
 
     </div>
   );
+}
+
+
+function ProductDetailModal({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
+  const [mobile, setMobile] = useState(false)
+  useEffect(() => { const media = window.matchMedia('(max-width:699px)'); const sync = () => setMobile(media.matches); sync(); media.addEventListener('change', sync); return () => media.removeEventListener('change', sync) }, [])
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    if (!open || !mobile) return
+    const previousFocus = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeRef.current?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Tab') { const body = closeRef.current?.closest('section')?.querySelector<HTMLElement>('[tabindex="0"]'); event.preventDefault(); if (document.activeElement === closeRef.current) body?.focus(); else closeRef.current?.focus() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', keydown); previousFocus?.focus() }
+  }, [open, mobile])
+  if (!open || typeof document === 'undefined') return null
+  if (!mobile) return <SafeModal open={open} title={title} onClose={onClose}>{children}</SafeModal>
+  return createPortal(<div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))', boxSizing: 'border-box' }}>
+    <section data-product-detail-modal role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 640, height: 'min(78dvh, 680px)', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff', color: '#111827', borderRadius: 18, boxShadow: '0 20px 60px #0003', boxSizing: 'border-box' }}>
+      <style>{`
+@media(max-width:699px){
+[data-cost-explanation]{font-size:clamp(8px,2.3vw,11px)!important;letter-spacing:-.4px;white-space:nowrap}
+[data-product-detail-modal]{font-size:12px;line-height:1.5}
+[data-product-detail-modal] *{min-width:0;box-sizing:border-box}
+[data-product-detail-modal] [data-detail-body]>div:first-child{padding:10px!important;box-shadow:none!important;border-radius:12px!important}
+[data-product-detail-modal] [data-detail-body]>div:first-child button{font-size:12px!important;min-height:30px!important;padding:5px 8px!important}
+[data-product-detail-modal] [data-detail-body]>div:first-child button:first-child{font-size:14px!important;padding:0!important}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-table"]{display:none!important}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-cards"]{display:grid!important;gap:8px!important}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-card"]{padding:10px!important;border:1px solid #e5e7eb;border-radius:12px;height:auto!important;min-height:0!important;display:grid;gap:7px}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-card-head"]{display:flex;justify-content:space-between;align-items:start;gap:8px}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-type"]{font-size:12px;font-weight:800}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-date"]{font-size:10px;color:#64748b}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-amount"]{font-size:14px;font-weight:800;text-align:right;white-space:nowrap}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-meta"]{display:grid;gap:3px;font-size:11px;color:#64748b;overflow-wrap:anywhere}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-meta"] b{margin-right:6px}
+[data-product-detail-modal] [data-tablet-role="item-detail-allocation-actions"]{display:flex;gap:6px}
+[data-product-detail-modal] button{font-size:11px!important;min-height:30px!important;height:auto!important;padding:6px 9px!important}
+}
+`}</style><header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexShrink: 0, padding: '12px 14px', borderBottom: '1px solid #ede9fe', background: '#fff' }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, minWidth: 0, overflowWrap: 'anywhere' }}>{title}</h2>
+        <button ref={closeRef} type="button" onClick={onClose} style={{ flexShrink: 0, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff', color: '#4338ca', padding: '10px 14px', fontSize: 13, fontWeight: 800, cursor: 'pointer' }}>닫기</button>
+      </header>
+      <div data-detail-body tabIndex={0} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '12px 14px', fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+    </section>
+  </div>, document.body)
 }
