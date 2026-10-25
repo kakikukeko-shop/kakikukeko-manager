@@ -247,6 +247,13 @@ export default function ProductsPage() {
   const [bulkArrivalMemo, setBulkArrivalMemo] = useState('')
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
   const [bulkQtyMap, setBulkQtyMap] = useState<Record<string, string>>({})
+  const [bulkShippingOpen, setBulkShippingOpen] = useState(false)
+  const [bulkShippingIds, setBulkShippingIds] = useState<string[]>([])
+  const [bulkShippingValues, setBulkShippingValues] = useState(['', '', '', ''])
+  const [bulkShippingError, setBulkShippingError] = useState('')
+  const [bulkShippingBusy, setBulkShippingBusy] = useState(false)
+  const bulkShippingBusyRef = useRef(false)
+
   const [isTabletMode, setIsTabletMode] = useState(false)
   const [expandedMobileItems, setExpandedMobileItems] = useState<string[]>([])
 
@@ -449,7 +456,7 @@ export default function ProductsPage() {
   }, [loading])
 
   const rows = useMemo(() => {
-    const mapped: FlatRow[] = items.filter(item => !archivedIds.has(item.id)).map((item) => {
+    const mapped: FlatRow[] = items.filter(item => !archivedIds.has(item.id) && n(item.qty) > 0).map((item) => {
       const purchase = purchaseMap.get(item.purchase_id) ?? null
       const totalQty = Math.max(0, n(item.qty))
       const alloc = allocationSumByItem.get(item.id) ?? 0
@@ -840,6 +847,53 @@ export default function ProductsPage() {
     setEditModalOpen(true)
   }
 
+  function openBulkShipping() {
+    const ids = selectedItemIds.filter(id => items.some(item => item.id === id && n(item.qty) > 0 && !archivedIds.has(id)))
+    if (!ids.length) { setErr('배송비를 수정할 상품을 선택해 주세요.'); return }
+    setBulkShippingIds(ids)
+    setBulkShippingValues(['', '', '', ''])
+    setBulkShippingError('')
+    setBulkShippingOpen(true)
+  }
+
+  async function saveBulkShipping() {
+    if (bulkShippingBusyRef.current) return
+    const fields = ['online_received_shipping_general', 'online_expected_shipping_general', 'online_received_shipping_convenience', 'online_expected_shipping_convenience']
+    const patch: Record<string, number> = {}
+    for (let index = 0; index < fields.length; index++) {
+      const value = bulkShippingValues[index].trim()
+      if (value === '') continue
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        setBulkShippingError('배송비는 0 이상의 정수로 입력해 주세요.'); return
+      }
+      patch[fields[index]] = Number(value)
+    }
+    if (!Object.keys(patch).length) { setBulkShippingError('변경할 배송비를 하나 이상 입력해 주세요.'); return }
+    if (patch.online_received_shipping_general !== undefined) {
+      patch.online_shipping = patch.online_received_shipping_general
+      patch.online_shipping_general = patch.online_received_shipping_general
+    }
+    if (patch.online_received_shipping_convenience !== undefined) patch.online_shipping_convenience = patch.online_received_shipping_convenience
+    const ids = bulkShippingIds.filter(id => items.some(item => item.id === id && n(item.qty) > 0 && !archivedIds.has(id)))
+    if (ids.length !== bulkShippingIds.length || !ids.length) { setBulkShippingError('선택 상품이 변경됐어요. 창을 닫고 다시 선택해 주세요.'); return }
+    bulkShippingBusyRef.current = true
+    setBulkShippingBusy(true)
+    setBulkShippingError('')
+    setLoading(true)
+    setErr(null)
+    setMsg(null)
+    try {
+      const result = await supabase.from('purchase_items').update(patch).in('id', ids).gt('qty', 0).select('id')
+      if (result.error) throw result.error
+      const updated = result.data?.length || 0
+      if (updated !== ids.length) throw new Error(`${updated}개 상품에 반영됐어요. 최신 목록을 새로고침해서 나머지 상품을 확인해 주세요.`)
+      setBulkShippingOpen(false)
+      await load({ preserveScroll: true })
+      setMsg(`선택 상품 ${updated}개 배송비 수정 완료`)
+    } catch (e: any) { setBulkShippingError(e?.message ?? String(e)) }
+    finally { bulkShippingBusyRef.current = false; setBulkShippingBusy(false); setLoading(false) }
+  }
+
   async function saveEdit() {
     if (!editTarget) return
 
@@ -1190,7 +1244,7 @@ export default function ProductsPage() {
 }
 `}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
-      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
+      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.filter(item => !archivedIds.has(item.id) && n(item.qty) > 0).map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
 
       <div data-products-topbar style={styles.topbar}>
@@ -1247,6 +1301,9 @@ export default function ProductsPage() {
               disabled={selectedItemIds.length === 0}
             >
               선택해제
+            </button>
+            <button style={styles.btn('ghost')} onClick={openBulkShipping} disabled={selectedItemIds.length === 0 || loading}>
+              배송비 일괄수정
             </button>
           </div>
         </div>
@@ -2035,6 +2092,24 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      <SafeModal open={bulkShippingOpen} title="선택 상품 배송비 일괄수정" onClose={() => { if (!bulkShippingBusy) setBulkShippingOpen(false) }}>
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div>선택 상품 <b>{bulkShippingIds.length}개</b>에 입력한 배송비를 각각 동일하게 적용해요. 빈칸은 기존 값을 유지하고, 0을 입력하면 무료배송으로 설정해요.</div>
+          <details><summary>적용할 상품 확인</summary><div style={{ maxHeight: 180, overflowY: 'auto' }}>{bulkShippingIds.map(id => <div key={id}>{items.find(item => item.id === id)?.item_name || '상품명 없음'}</div>)}</div></details>
+          <div style={styles.grid2}>
+            {['온라인배송비(일반택배)', '예상배송비(일반택배)', '온라인배송비(편의점택배)', '예상배송비(편의점택배)'].map((label, index) => <label key={label} style={styles.field}>
+              <span style={styles.label}>{label}</span>
+              <input style={styles.input} inputMode="numeric" value={bulkShippingValues[index]} disabled={bulkShippingBusy} placeholder="빈칸: 기존 값 유지 / 무료: 0" onChange={event => { const value = event.target.value; setBulkShippingValues(previous => previous.map((entry, i) => i === index ? value : entry)) }} />
+            </label>)}
+          </div>
+          {bulkShippingError ? <div role="alert" style={{ color: '#dc2626' }}>{bulkShippingError}</div> : null}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button style={styles.btn('ghost')} disabled={bulkShippingBusy} onClick={() => setBulkShippingOpen(false)}>닫기</button>
+            <button style={styles.btn('primary')} disabled={bulkShippingBusy} onClick={saveBulkShipping}>{bulkShippingBusy ? '저장 중…' : `${bulkShippingIds.length}개 상품에 적용`}</button>
+          </div>
+        </div>
+      </SafeModal>
 
       {editModalOpen && editTarget && (
         <div style={styles.modalOverlay} onMouseDown={() => setEditModalOpen(false)}>
