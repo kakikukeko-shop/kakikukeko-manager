@@ -1947,6 +1947,7 @@ export default function DocumentsPage() {
   const [costDirty, setCostDirty] = useState(false);
 
   const [costEditModalOpen, setCostEditModalOpen] = useState(false);
+  const [pointCostDetail, setPointCostDetail] = useState<PurchaseCostRow | null>(null);
   const [editingCost, setEditingCost] = useState<PurchaseCostRow | null>(null);
   const [ecType, setEcType] = useState("배송비(거래처)");
   const [ecAllocationBasis, setEcAllocationBasis] =
@@ -3879,6 +3880,9 @@ export default function DocumentsPage() {
     const hasLegacyCost = costs.some((cost) => {
       const type = normalizeCostType(cost.cost_type);
       if (!type || type === "환불" || type === "환불 진행중") return false;
+      // 사후 포인트 비용은 서버에서 잔액 복원과 원가 차감을 함께 처리한다.
+      // 일반 재배분에서 삭제하거나 메모를 수정하면 포인트 연결 보호에 걸린다.
+      if (cost.memo?.startsWith("[사후 포인트 사용]")) return false;
       return !hasCostAllocationBasisMeta(cost.memo);
     });
     if (!hasLegacyCost) return;
@@ -5359,6 +5363,9 @@ export default function DocumentsPage() {
     const legacyCosts = costs.filter((cost) => {
       const type = normalizeCostType(cost.cost_type);
       if (!type || type === "환불" || type === "환불 진행중") return false;
+      // 사후 포인트 비용은 서버에서 잔액 복원과 원가 차감을 함께 처리한다.
+      // 일반 재배분에서 삭제하거나 메모를 수정하면 포인트 연결 보호에 걸린다.
+      if (cost.memo?.startsWith("[사후 포인트 사용]")) return false;
       return !hasCostAllocationBasisMeta(cost.memo);
     });
 
@@ -5682,9 +5689,11 @@ export default function DocumentsPage() {
 
   function openCostEditModal(cost: PurchaseCostRow) {
     if (cost.memo?.startsWith("[사후 포인트 사용]")) {
-      setErr("포인트 연결 할인은 처리내역·취소에서 취소한 뒤 다시 등록해줘."); return;
+      setErr(null);
+      setPointCostDetail(cost);
+      return;
     }
-    if (cost.memo?.startsWith("[충전잔액 사용]")) { setErr("충전잔액이 연결된 비용은 처리내역·취소에서 취소한 뒤 다시 등록해줘."); return; }
+    if (cost.memo?.startsWith("[충전잔액 사용]")) { setErr(null); setPointCostDetail(cost); return; }
     const normalizedType =
       normalizeCostType(cost.cost_type) || "배송비(거래처)";
     const linkedAllocationRows = allocations.filter(
@@ -6250,10 +6259,11 @@ export default function DocumentsPage() {
     if (!target) return;
     if (closeDetail) {
       setItemDetailOpen(false);
-      setTimeout(() => openCostEditModal(target), 0);
+      setTimeout(() => { setErr(null); setPointCostDetail(target); }, 0);
       return;
     }
-    openCostEditModal(target);
+    setErr(null);
+    setPointCostDetail(target);
   }
 
   async function processCostPoints(apply: boolean) {
@@ -10132,6 +10142,31 @@ export default function DocumentsPage() {
         </div>
       </SafeModal>
 
+      <SafeModal open={!!pointCostDetail} title={pointCostDetail?.memo?.startsWith("[사후 포인트 사용]") ? "포인트 사용 내역" : `${pointCostDetail?.cost_type || "추가비용"} 내역`} onClose={() => setPointCostDetail(null)}>
+        {pointCostDetail ? <div style={{ display: "grid", gap: 12 }}>
+          <div><b>거래처</b> · {pointCostDetail.vendor_name || "미입력"}</div>
+          <div><b>처리일</b> · {pointCostDetail.cost_date || "미입력"}</div>
+          {pointCostDetail.memo?.startsWith("[사후 포인트 사용]") ? <div><b>사용 포인트</b> · {pointCostDetail.memo?.match(/\[사후 포인트 사용\]\s*([\d,]+)점/)?.[1] || "미확인"}점</div> : <div><b>비용 종류</b> · {pointCostDetail.cost_type}</div>}
+          <div><b>{pointCostDetail.memo?.startsWith("[사후 포인트 사용]") ? "원가 차감액" : "원화 비용"}</b> · {fmtKRW(n(pointCostDetail.amount) * n(pointCostDetail.fx_rate || 1))}</div>
+          <div><b>등록 금액</b> · {fmtNum(n(pointCostDetail.amount))} {pointCostDetail.currency || "KRW"}</div>
+          <div><b>적용 환율</b> · {fmtNum(n(pointCostDetail.fx_rate || 1))}</div>
+          <div style={{ background: "#faf5ff", padding: 12, borderRadius: 10 }}>
+            저장된 처리 내역을 보여주는 창이에요. 조회해도 포인트·충전잔액·상품 원가는 바뀌지 않아요.
+          </div>
+          <div><b>상품별 배분 내역</b></div>
+          {allocations.filter(row => row.purchase_cost_id === pointCostDetail.id).map(row => <div key={row.purchase_item_id} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span>{items.find(item => item.id === row.purchase_item_id)?.item_name || "상품"}</span>
+            <span style={{ whiteSpace: "nowrap" }}>{fmtKRW(n(row.allocated_amount))}</span>
+          </div>)}
+          <div style={{ ...styles.small, whiteSpace: "pre-wrap" }}>{stripCostAllocationBasisMeta(pointCostDetail.memo) || "메모 없음"}</div>
+          {pointCostDetail.memo?.startsWith("[사후 포인트 사용]") || pointCostDetail.memo?.startsWith("[충전잔액 사용]") ? <>
+            <div style={styles.small}>포인트·충전잔액과 연결된 비용이에요. 금액 변경은 처리 취소 후 다시 등록해 주세요.</div>
+            <button type="button" style={styles.btn("ghost")} onClick={() => { setPointCostDetail(null); setProcessingHistoryOpen(true); }}>처리내역·취소로 이동</button>
+          </> : <button type="button" style={styles.btn("primary")} onClick={() => { const cost = pointCostDetail; setPointCostDetail(null); openCostEditModal(cost); }}>수정</button>}
+          <button type="button" style={styles.btn("ghost")} onClick={() => setPointCostDetail(null)}>닫기</button>
+        </div> : null}
+      </SafeModal>
+
       <SafeModal open={processingHistoryOpen} title="처리내역·취소" onClose={() => setProcessingHistoryOpen(false)}>
         <div style={{ display: "grid", gap: 10 }}>
           <div style={styles.small}>전체환불로 수량이 0인 상품도 여기서 환불을 취소할 수 있어요. 배송비는 남은 수량, 관부과세는 남은 상품금액으로 자동 재배분하며, 직접 지정한 배분 기준이 있으면 그 기준을 따라요. 같은 상품을 여러 번 환불했다면 최근 기록부터 취소하세요. 취소는 실제 카드·송금에 영향을 주지 않아요.</div>
@@ -10141,7 +10176,7 @@ export default function DocumentsPage() {
               <b>{cost.cost_date || "날짜 없음"} · {cost.cost_type} · {cost.vendor_name || purchaseMap.get(cost.purchase_id || "")?.supplier || "거래처 미지정"}</b>
               {renderProcessingProducts(cost)}
               <div style={styles.small}>{stripCostAllocationBasisMeta(stripRefundMetaDetail(cost.memo)) || "메모 없음"}</div>
-              <div style={{ display: "flex", gap: 8 }}><button type="button" disabled={loading} style={styles.smallBtn} onClick={() => { setProcessingHistoryOpen(false); openCostEditModal(cost); }}>수정</button><button type="button" disabled={loading} style={styles.dangerSmallBtn} onClick={() => deleteCost(cost.id)}>{cost.cost_type === "환불" ? "환불 취소·수량 복구" : "처리 취소"}</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button type="button" disabled={loading} style={styles.smallBtn} onClick={() => { setProcessingHistoryOpen(false); setErr(null); setPointCostDetail(cost); }}>내역 보기</button><button type="button" disabled={loading} style={styles.dangerSmallBtn} onClick={() => deleteCost(cost.id)}>{cost.cost_type === "환불" ? "환불 취소·수량 복구" : "처리 취소"}</button></div>
             </div>
           ))}
           <strong>취소 이력 · 최근 100건</strong>
