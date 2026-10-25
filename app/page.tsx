@@ -1487,20 +1487,40 @@ function SalesCalendar({ sales, purchases, costs, loading, error }: { sales: Nor
       <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>상품 매입금액 기준이에요. 달력의 월 매입 합계에는 추가비용·환불도 포함돼요.</p>
       {!purchases.some(row => row.normalizedDate.startsWith(`${month}-`)) ? <p>이 달에는 상품 매입 내역이 없어요.</p> : purchases.filter(row => row.normalizedDate.startsWith(`${month}-`)).sort((a, b) => b.normalizedDate.localeCompare(a.normalizedDate) || a.id.localeCompare(b.id)).map(row => <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 12, padding: '12px 0', borderBottom: '1px solid #ccfbf1' }}><b style={{ color: '#0f766e', fontSize: 13 }}>{row.normalizedDate}</b><div style={{ overflowWrap: 'anywhere', lineHeight: 1.6 }}>{row.purchase_items?.length ? row.purchase_items.map((item, index) => <div key={index}>{item.item_name || '상품명 기록 없음'}</div>) : '상품명 기록 없음'}<b style={{ display: 'block', marginTop: 5 }}>상품매입 {fmtKRW(Number(row.total_amount || 0))}</b></div></div>)}
     </div></CalendarDetailModal>
-    <CalendarDetailModal open={!!selected} title={`${selected || ''} 매출 / 매입 내역`} onClose={() => setSelected(null)}><div data-calendar-modal style={{ display: 'grid', gap: 12 }}>
-      <b>매출 {fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))} · 매출이익 {fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b>
-      {!(byDate.get(selected || '') || []).length ? <p>이 날짜에는 판매 내역이 없어요.</p> : (byDate.get(selected || '') || []).map(row => <div key={row.id} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 10 }}>
-        <div style={{ fontWeight: 800 }}>{row.channel || row.sales_channel || '판매처 미입력'}</div>
-        {(row.sale_items || []).map((item, index) => <div key={index} style={{ marginTop: 5 }}>{getSaleItemName(item)} · {item.qty || 0}개</div>)}
-        <div style={{ marginTop: 8 }}>매출 {fmtKRW(Number(row.final_amount || 0))} · 매출이익 {fmtKRW(Number(row.profit_amount || 0))}</div>
-      </div>)}
-      <h3 style={{ margin: '8px 0 0', color: '#0f766e' }}>매입 {fmtKRW(selectedPurchase?.amount || 0)}</h3>
-      {!selectedPurchase ? <p>이 날짜에는 매입 내역이 없어요.</p> : <>
-        {selectedPurchase.goods.map(row => <div key={row.id} style={{ padding: 10, background: '#f0fdfa', borderRadius: 10 }}><b>{row.supplier || '거래처 미입력'} · 상품매입 {fmtKRW(Number(row.total_amount || 0))}</b>{(row.purchase_items || []).map((item, index) => <div key={index}>{item.item_name || '상품명 없음'} · {item.qty || 0}개</div>)}</div>)}
-        {selectedPurchase.costs.map(row => <div key={row.id} style={{ padding: 10, background: '#f0fdfa', borderRadius: 10 }}>{row.cost_type || '추가비용'} · {row.vendor_name || '거래처 미입력'} · <b>{fmtKRW(row.amountKrw)}</b></div>)}
-      </>}
-      <div style={{ display: 'flex', gap: 16 }}><Link href="/sales">매출관리로 이동</Link><Link href="/documents">매입관리로 이동</Link></div>
-    </div></CalendarDetailModal>
+    <CalendarDetailModal open={!!selected} title={`${selected ? `${Number(selected.slice(5,7))}월 ${Number(selected.slice(8,10))}일` : ''} 거래 내역`} onClose={() => setSelected(null)}>
+      <div data-calendar-day-detail>
+        <p className="day-intro">{selected} · 판매와 매입 관련 내역을 한눈에 확인하세요.</p>
+        <div className="day-totals">
+          <div><span>매출</span><b>{fmtKRW(total(byDate.get(selected || '') || [], 'final_amount'))}</b><small>실입금액 기준</small></div>
+          <div><span>매출이익</span><b style={{color:total(byDate.get(selected || '') || [], 'profit_amount') < 0 ? '#b91c1c' : '#6d28d9'}}>{fmtKRW(total(byDate.get(selected || '') || [], 'profit_amount'))}</b><small>운영비 차감 전</small></div>
+          <div><span>매입 합계</span><b>{fmtKRW(selectedPurchase?.amount || 0)}</b><small>상품 + 추가비용·환불</small></div>
+        </div>
+        <section className="day-group day-sales">
+          <div className="day-group-heading"><h3>판매</h3><span>{(byDate.get(selected || '') || []).length}건</span><Link href="/sales">매출관리 ↗</Link></div>
+          {!(byDate.get(selected || '') || []).length ? <p className="day-empty">이날 판매한 상품이 없어요.</p> : (byDate.get(selected || '') || []).map((row,index) => <article className="day-record" key={row.id}>
+            <div className="day-record-heading"><span className="day-badge">{row.sales_channel || row.channel || '판매'}</span><small>판매 {index + 1}</small></div>
+            {(row.sale_items || []).length ? (row.sale_items || []).map((item,itemIndex) => <div className="day-product" key={itemIndex}><b>{getSaleItemName(item)}</b><span>{item.qty || 0}개</span></div>) : <p className="day-empty">상품명 기록 없음</p>}
+            <div className="day-record-money"><span>실입금액 <b>{fmtKRW(Number(row.final_amount || 0))}</b></span><span>이익 <b style={{color:Number(row.profit_amount || 0) < 0 ? '#b91c1c' : '#6d28d9'}}>{fmtKRW(Number(row.profit_amount || 0))}</b></span></div>
+          </article>)}
+        </section>
+        <section className="day-group day-purchases">
+          <div className="day-group-heading"><h3>상품 매입</h3><span>{selectedPurchase?.goods.length || 0}건</span><Link href="/documents">매입관리 ↗</Link></div>
+          {!selectedPurchase?.goods.length ? <p className="day-empty">이날 새로 등록한 상품 매입이 없어요.</p> : selectedPurchase.goods.map(row => <article className="day-record" key={row.id}>
+            <div className="day-record-heading"><span className="day-badge">상품 매입</span><b>{row.supplier || '거래처 미입력'}</b></div>
+            {(row.purchase_items || []).map((item,index) => <div className="day-product" key={index}><b>{item.item_name || '상품명 없음'}</b><span>{item.qty || 0}개</span></div>)}
+            <div className="day-record-money"><span>상품 매입금액</span><b>{fmtKRW(Number(row.total_amount || 0))}</b></div>
+          </article>)}
+        </section>
+        <section className="day-group day-costs">
+          <div className="day-group-heading"><h3>추가비용 · 환불</h3><span>{selectedPurchase?.costs.length || 0}건</span></div>
+          <p className="day-note">상품 매입과 별도로 기록된 내역이에요. 아래 반영금액은 매입 합계에 포함돼요.</p>
+          {!selectedPurchase?.costs.length ? <p className="day-empty">이날 기록한 추가비용·환불이 없어요.</p> : selectedPurchase.costs.map(row => <article className="day-cost-record" key={row.id}>
+            <div><span className="day-badge" data-refund={row.cost_type?.includes('환불') ? 'true' : undefined}>{row.cost_type || '추가비용'}</span><b>{row.vendor_name || '거래처 미입력'}</b></div>
+            <div><small>매입 반영금액</small><b>{fmtKRW(row.amountKrw)}</b></div>
+          </article>)}
+        </section>
+      </div>
+    </CalendarDetailModal>
   </section>
 }
 
@@ -1517,19 +1537,69 @@ function CalendarDetailModal({ open, title, onClose, children }: { open: boolean
     closeRef.current?.focus()
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCloseRef.current()
-      if (event.key === 'Tab') { const body = closeRef.current?.closest('section')?.querySelector<HTMLElement>('[tabindex="0"]'); event.preventDefault(); if (document.activeElement === closeRef.current) body?.focus(); else closeRef.current?.focus() }
+      if (event.key === 'Tab') {
+        const controls = Array.from(closeRef.current?.closest('section')?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],[tabindex="0"]') || []).filter(el => el.getClientRects().length > 0)
+        const first = controls[0], last = controls[controls.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+      }
     }
     document.addEventListener('keydown', keydown)
     return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', keydown); previousFocus?.focus() }
   }, [open])
   if (!open || typeof document === 'undefined') return null
   return createPortal(<div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))', boxSizing: 'border-box' }}>
-    <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 640, height: 'min(78dvh, 680px)', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff', color: '#111827', borderRadius: 18, boxShadow: '0 20px 60px #0003', boxSizing: 'border-box' }}>
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexShrink: 0, padding: '12px 14px', borderBottom: '1px solid #ede9fe', background: '#fff' }}>
+    <section role="dialog" aria-modal="true" aria-label={title} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 720, maxHeight: 'min(84dvh, 800px)', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff', color: '#111827', borderRadius: 18, boxShadow: '0 20px 60px #0003', boxSizing: 'border-box' }}>
+      <style>{`
+[data-calendar-day-detail]{font-size:13px;line-height:1.5;color:#1f2937}
+[data-calendar-day-detail] *{box-sizing:border-box;min-width:0}
+[data-calendar-day-detail] .day-intro{margin:0 0 10px;color:#64748b;font-size:12px}
+[data-calendar-day-detail] .day-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:18px}
+[data-calendar-day-detail] .day-totals>div{display:grid;gap:3px;background:#f5f3ff;border:1px solid #ede9fe;border-radius:12px;padding:12px}
+[data-calendar-day-detail] .day-totals>div:last-child{background:#f0fdfa;border-color:#ccfbf1}
+[data-calendar-day-detail] .day-totals span{font-size:12px;font-weight:700;color:#475569}
+[data-calendar-day-detail] .day-totals b{font-size:19px;font-weight:900;overflow-wrap:anywhere}
+[data-calendar-day-detail] small{font-size:11px;color:#64748b}
+[data-calendar-day-detail] .day-group{margin-top:16px}
+[data-calendar-day-detail] .day-group-heading{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+[data-calendar-day-detail] h3{margin:0;font-size:15px;font-weight:900}
+[data-calendar-day-detail] .day-group-heading>span{font-size:11px;padding:2px 7px;border-radius:20px;background:#f1f5f9;color:#475569}
+[data-calendar-day-detail] .day-group-heading>a{margin-left:auto;color:#64748b;text-decoration:none;font-size:11px;padding:5px 0}
+[data-calendar-day-detail] .day-record{border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-top:8px;background:#fff}
+[data-calendar-day-detail] .day-record-heading{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+[data-calendar-day-detail] .day-record-heading>small{margin-left:auto}
+[data-calendar-day-detail] .day-badge{display:inline-block;background:#ede9fe;color:#6d28d9;font-size:11px;font-weight:800;padding:3px 8px;border-radius:7px;white-space:nowrap}
+[data-calendar-day-detail] .day-purchases .day-badge{background:#ccfbf1;color:#0f766e}
+[data-calendar-day-detail] .day-product{display:flex;align-items:start;justify-content:space-between;gap:12px;padding:5px 0}
+[data-calendar-day-detail] .day-product>b{font-size:13px;font-weight:700;overflow-wrap:anywhere}
+[data-calendar-day-detail] .day-product>span{flex-shrink:0;color:#64748b;font-size:12px;white-space:nowrap}
+[data-calendar-day-detail] .day-record-money{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid #f1f5f9;margin-top:8px;padding-top:9px;font-size:12px;color:#64748b}
+[data-calendar-day-detail] .day-record-money b{color:#111827;font-size:14px;margin-left:4px}
+[data-calendar-day-detail] .day-note{margin:0 0 8px;font-size:11px;color:#64748b}
+[data-calendar-day-detail] .day-empty{margin:0;background:#f8fafc;border-radius:9px;padding:10px;font-size:12px;color:#64748b}
+[data-calendar-day-detail] .day-cost-record{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:10px;margin-top:6px}
+[data-calendar-day-detail] .day-cost-record>div:first-child{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+[data-calendar-day-detail] .day-cost-record>div:last-child{display:grid;gap:2px;text-align:right;flex-shrink:0}
+[data-calendar-day-detail] .day-cost-record .day-badge{background:#f1f5f9;color:#475569}
+[data-calendar-day-detail] .day-cost-record .day-badge[data-refund=true]{background:#fff7ed;color:#b45309}
+@media(max-width:699px){
+[data-calendar-day-detail]{font-size:12px}
+[data-calendar-day-detail] .day-totals{gap:5px;margin-bottom:12px}
+[data-calendar-day-detail] .day-totals>div{padding:8px 6px;border-radius:9px}
+[data-calendar-day-detail] .day-totals b{font-size:14px;letter-spacing:-.5px}
+[data-calendar-day-detail] .day-totals span{font-size:10px}
+[data-calendar-day-detail] .day-totals small{font-size:9px}
+[data-calendar-day-detail] .day-record{padding:10px}
+[data-calendar-day-detail] .day-product>b{font-size:12px}
+[data-calendar-day-detail] .day-record-money b{font-size:13px}
+[data-calendar-day-detail] .day-cost-record{padding:9px;gap:6px}
+[data-calendar-day-detail] .day-cost-record>div:first-child>b{font-size:11px}
+}
+`}</style><header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexShrink: 0, padding: '12px 14px', borderBottom: '1px solid #ede9fe', background: '#fff' }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, minWidth: 0, overflowWrap: 'anywhere' }}>{title}</h2>
         <button ref={closeRef} type="button" onClick={onClose} style={{ flexShrink: 0, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff', color: '#4338ca', padding: '10px 14px', fontSize: 13, fontWeight: 800, cursor: 'pointer' }}>닫기</button>
       </header>
-      <div tabIndex={0} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '12px 14px', fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+      <div tabIndex={0} style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '12px 14px', fontSize: 13, lineHeight: 1.5 }}>{children}</div>
     </section>
   </div>, document.body)
 }
