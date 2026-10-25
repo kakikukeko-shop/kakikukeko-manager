@@ -1141,7 +1141,7 @@ export default function VendorsPage() {
 
         <div data-vendor-toolbar style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button style={styles.btnPrimary} onClick={openCreate}>
-            + 거래처 등록
+            <span data-vendor-register-full>+ 거래처 등록</span><span data-vendor-register-short>+ 등록</span>
           </button>
           <RefreshButton style={styles.btnGhost} disabled={loading} run={load} />
           <div data-vendor-search style={{ width: 240 }}>
@@ -1368,6 +1368,7 @@ export default function VendorsPage() {
 
 
       <style jsx global>{`
+        [data-vendor-register-short]{display:none}
         [data-vendor-card] > summary::-webkit-details-marker { display: none; }
         [data-vendor-card] { min-width: 0 !important; min-height: 0 !important; height: auto !important; display: block !important; padding: 12px !important; align-self: start; }
         [data-vendor-card] > summary > div { min-width: 0; }
@@ -1375,10 +1376,14 @@ export default function VendorsPage() {
         [data-vendor-actions] button { padding: 5px 9px !important; min-height: 28px !important; height: auto !important; min-width: 0 !important; font-size: 12px !important; width: auto !important; }
         [data-vendors-grid] { align-items: start !important; }
 @media(max-width:699px){
-[data-vendor-toolbar]{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,.7fr)!important;gap:7px!important;width:100%!important;min-width:0}
-[data-vendor-toolbar]>button,[data-vendor-toolbar]>span{justify-self:start;max-width:100%;min-width:0}
+[data-vendor-toolbar]{display:grid!important;grid-template-columns:auto auto minmax(0,1fr) minmax(65px,.75fr)!important;gap:5px!important;width:100%!important;min-width:0}
+[data-vendor-toolbar]>button,[data-vendor-toolbar]>span{justify-self:stretch;max-width:100%;min-width:0}
+[data-vendor-toolbar]>button,[data-vendor-toolbar]>span>button{height:34px!important;min-height:34px!important;font-size:10px!important;line-height:1.2!important;padding:7px 6px!important;white-space:nowrap!important;border-radius:9px!important}
+[data-vendor-toolbar]>span{position:relative;gap:0!important}
+[data-vendor-toolbar]>span>[role=status]{position:absolute;top:100%;right:0;z-index:2;background:#fff;border-radius:5px;font-size:9px!important;padding:2px 4px;white-space:nowrap}
+[data-vendor-register-full]{display:none!important}[data-vendor-register-short]{display:inline!important}
 [data-vendor-search],[data-vendor-sort]{width:100%!important;min-width:0!important}
-[data-vendor-search] input,[data-vendor-sort] select{width:100%!important;min-width:0!important;box-sizing:border-box!important;font-size:12px!important;padding:9px 8px!important;height:37px!important;border-radius:10px!important}
+[data-vendor-search] input,[data-vendor-sort] select{width:100%!important;min-width:0!important;box-sizing:border-box!important;font-size:10px!important;padding:7px 4px!important;height:34px!important;border-radius:10px!important}
 }
 @media(max-width:699px){[data-vendors-grid]{grid-template-columns:minmax(0,1fr)!important;gap:10px!important}[data-vendor-card]{padding:12px!important}[data-vendor-card]>summary{font-size:13px!important}[data-vendor-card] input,[data-vendor-card] select{max-width:100%;box-sizing:border-box}}
       `}</style>
