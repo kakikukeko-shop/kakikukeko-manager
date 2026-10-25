@@ -117,7 +117,7 @@ function formatDateInput(raw: string) {
 
 
 const VENDOR_SORT_OPTIONS = [
-  { value: 'name', label: '이름순' },
+  { value: 'name', label: '가나다순' },
   { value: 'usage_desc', label: '이용횟수 많은순' },
   { value: 'usage_asc', label: '이용횟수 적은순' },
 ] as const
@@ -808,6 +808,17 @@ export default function VendorsPage() {
     return list
   }, [vendors, search, sort, purchaseUsageCountMap, costUsageCountMap])
 
+  const vendorGroups = useMemo(() => {
+    const categories: Array<{ key: string; label: string; color: string; matches: (vendor: VendorRow) => boolean }> = [
+      { key: 'products', label: '상품거래처', color: '#6d28d9', matches: vendor => !!vendor.is_product_supplier },
+      { key: 'forwarders', label: '배대지', color: '#4338ca', matches: vendor => !!vendor.is_forwarder },
+      { key: 'customs', label: '관세사', color: '#be185d', matches: vendor => !!vendor.is_customs_broker },
+      { key: 'carry', label: '휴대품반입', color: '#a21caf', matches: vendor => !!vendor.is_carry_in },
+      { key: 'other', label: '기타 · 미분류', color: '#64748b', matches: vendor => !vendor.is_product_supplier && !vendor.is_forwarder && !vendor.is_customs_broker && !vendor.is_carry_in },
+    ]
+    return categories.map(category => ({ ...category, vendors: filtered.filter(category.matches) })).filter(category => category.vendors.length > 0)
+  }, [filtered])
+
   function resetForm() {
     setEditingId(null)
     setName('')
@@ -1163,13 +1174,11 @@ export default function VendorsPage() {
       {loading && vendors.length === 0 ? (
         <div style={styles.card}>불러오는 중...</div>
       ) : (
-        <div
-          data-vendors-grid="true"
-          style={{
-            ...styles.grid,
-          }}
-        >
-          {filtered.map((v) => {
+        <div style={{display:'grid',gap:22}}>
+          {vendorGroups.map(group => <section key={group.key} aria-label={group.label} style={{minWidth:0}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,paddingBottom:8,borderBottom:'1px solid #e5e7eb'}}><h2 style={{fontSize:16,fontWeight:900,color:group.color,margin:0}}>{group.label}</h2><span style={{fontSize:12,color:'#64748b',background:'#fff',padding:'2px 8px',borderRadius:20}}>{group.vendors.length}곳</span></div>
+            <div data-vendors-grid="true" style={{...styles.grid}}>
+          {group.vendors.map((v) => {
             const usage = getUsageInfo(v)
             const activeStatus = getActiveStatusLabel(v)
 
@@ -1348,6 +1357,8 @@ export default function VendorsPage() {
               </details>
             )
           })}
+            </div>
+          </section>)}
 
           {!loading && filtered.length === 0 ? (
             <div style={styles.card}>조건에 맞는 거래처가 없어.</div>
