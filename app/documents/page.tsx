@@ -186,6 +186,7 @@ type DraftItem = {
 };
 
 type ItemAllocationView = {
+  informational?: boolean;
   cost_id?: string | null;
   cost_type: string | null;
   amount_krw: number;
@@ -799,8 +800,19 @@ type CombinedPaymentMeta = {
   fee_krw: number;
   shipping_vendor: string;
   discount_foreign?: number;
+  discount_mode?: "cost";
+  discount_krw?: number;
+  gross_product_krw?: number;
   gross_product_foreign?: number;
   gross_item_totals?: Record<string, number>;
+  entry_total_foreign?: string;
+  entry_items?: Record<string, { foreign_total: string; foreign_unit_price: string }>;
+};
+
+type IncludedCostInput = {
+  cost_type: string; amount: number; currency: string; fx_rate: number;
+  memo: string; vendor_name: string | null; cost_date: string | null;
+
 };
 
 function parseCombinedPaymentMeta(
@@ -828,6 +840,15 @@ function parseCombinedPaymentMeta(
       shipping_krw: Math.max(0, Math.round(n(parsed?.shipping_krw))),
       fee_krw: Math.max(0, Math.round(n(parsed?.fee_krw))),
       shipping_vendor: String(parsed?.shipping_vendor ?? ""),
+      entry_total_foreign: typeof parsed?.entry_total_foreign === "string" ? parsed.entry_total_foreign : undefined,
+      entry_items: parsed?.entry_items && typeof parsed.entry_items === "object"
+        ? Object.fromEntries(Object.entries(parsed.entry_items).map(([id, value]) => {
+            const row = value as any;
+            return [id, { foreign_total: String(row?.foreign_total ?? ""), foreign_unit_price: String(row?.foreign_unit_price ?? "") }];
+          })) : {},
+      discount_mode: parsed?.discount_mode === "cost" ? "cost" : undefined,
+      discount_krw: Math.max(0, n(parsed?.discount_krw)),
+      gross_product_krw: Math.max(0, n(parsed?.gross_product_krw)),
       discount_foreign: Math.max(0, n(parsed?.discount_foreign)),
       gross_product_foreign: Math.max(0, n(parsed?.gross_product_foreign)),
       gross_item_totals: parsed?.gross_item_totals && typeof parsed.gross_item_totals === "object"
@@ -2387,6 +2408,69 @@ export default function DocumentsPage() {
     return selectedItems.reduce((acc, it) => acc + n(it.line_total), 0);
   }, [selectedItems]);
 
+  const includedCostDisplayByItem = useMemo(() => {
+    const result = new Map<string, ItemAllocationView[]>();
+    for (const purchase of purchases) {
+      const meta = parseCombinedPaymentMeta(purchase.memo);
+      if (!meta?.enabled) continue;
+      const siblings = items.filter((item) => item.purchase_id === purchase.id);
+      if (!siblings.length) continue;
+      const siblingIds = new Set(siblings.map((item) => item.id));
+      const refunded = costs.some((cost) => normalizeCostType(cost.cost_type) === "환불" &&
+        (cost.purchase_id === purchase.id || parseRefundMeta(cost.memo).items.some((item) => siblingIds.has(item.item_id))));
+      const weights = siblings.map((item) => Math.max(0,
+        meta.gross_item_totals?.[item.id] ?? n(item.foreign_total)));
+      function add(label: string, total: number, itemWeights: number[], informational: boolean, marker?: string) {
+        if (!total) return;
+        const matchingCosts = costs.filter((cost) => cost.purchase_id === purchase.id &&
+          (marker ? String(cost.memo ?? "").includes(marker) :
+            normalizeCostType(cost.cost_type) === "수수료" &&
+            (String(cost.memo ?? "").includes("[결제금액 포함 수수료]") || String(cost.memo ?? "").includes("[충전잔액 수수료]"))));
+        const costIds = new Set(matchingCosts.map((cost) => cost.id));
+        // When any real allocations exist, they are authoritative (including refund redistributions).
+        if (!informational && allocations.some((row) => costIds.has(row.purchase_cost_id))) return;
+        if (!informational && refunded) return;
+        const sign = total < 0 ? -1 : 1;
+        const parts = allocateExactKRW(Math.abs(total), itemWeights);
+        siblings.forEach((item, index) => {
+          const amount = sign * (parts[index] ?? 0);
+          if (!amount) return;
+          const rows = result.get(item.id) ?? [];
+          rows.push({ cost_id: null, cost_type: label, amount_krw: amount,
+            informational, created_at: purchase.created_at, vendor_name: purchase.supplier,
+            cost_date: purchase.purchase_date, related_item_names: siblings.filter((other) => other.id !== item.id).map((other) => other.item_name || "상품"),
+            memo: informational ? "매입등록 할인 · 상품금액에서 이미 차감됨 · 추가비용 합계에서 다시 차감하지 않음"
+              : "매입등록에 포함된 비용 · 저장된 결제정보 기준 · 변경은 매입 수정에서 해주세요.",
+          });
+          result.set(item.id, rows);
+        });
+      }
+      add("포함 배송비", n(meta.shipping_krw), siblings.map((item) => Math.max(0, n(item.qty))), false, INCLUDED_SHIPPING_MEMO_HEADER);
+      add("포함 수수료", n(meta.fee_krw), weights, false);
+      if (meta.discount_mode === "cost") {
+        const discountCostIds = new Set(costs.filter((cost) => cost.purchase_id === purchase.id &&
+          String(cost.memo ?? "").includes("[매입 결제 할인]")).map((cost) => cost.id));
+        if (!allocations.some((row) => discountCostIds.has(row.purchase_cost_id)) && !refunded) {
+          const parts = allocateExactKRW(n(meta.discount_krw), weights);
+          siblings.forEach((item, index) => {
+            if (!parts[index]) return;
+            const rows = result.get(item.id) ?? [];
+            rows.push({cost_id: null, cost_type: "할인/쿠폰", amount_krw: -parts[index],
+              created_at: purchase.created_at, vendor_name: purchase.supplier,
+              cost_date: purchase.purchase_date, related_item_names: [],
+              memo: "매입등록 할인 · 추가비용에서 차감 · 변경은 매입 수정에서 해주세요."});
+            result.set(item.id, rows);
+          });
+        }
+      } else {
+        const discountKRW = n(meta.product_foreign) > 0
+          ? Math.round(n(meta.product_krw) * n(meta.discount_foreign) / n(meta.product_foreign)) : 0;
+        add("이전 방식 할인 · 상품금액에 반영", -discountKRW, weights, true);
+      }
+    }
+    return result;
+  }, [purchases, items, costs, allocations]);
+
   const allocationSumByItem = useMemo(() => {
     const map = new Map<string, number>();
     for (const a of allocations) {
@@ -2395,8 +2479,11 @@ export default function DocumentsPage() {
         (map.get(a.purchase_item_id) ?? 0) + n(a.allocated_amount),
       );
     }
+    for (const [itemId, rows] of includedCostDisplayByItem) {
+      map.set(itemId, (map.get(itemId) ?? 0) + rows.reduce((sum, row) => sum + (row.informational ? 0 : row.amount_krw), 0));
+    }
     return map;
-  }, [allocations]);
+  }, [allocations, includedCostDisplayByItem]);
 
   // 저장된 배분금액을 비용 종류별로 합산한다. 할인 등 음수도 그대로 표시한다.
   const allocationDetailsByItem = useMemo(() => {
@@ -2415,10 +2502,18 @@ export default function DocumentsPage() {
   function renderAllocationDetails(itemId: string, qty: number, total: number) {
     const rows = Array.from(allocationDetailsByItem.get(itemId) ?? [])
       .filter(([, amount]) => amount !== 0);
+    const includedRows = includedCostDisplayByItem.get(itemId) ?? [];
     return (
       <div data-allocation-details style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
-        {rows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
+        {rows.length === 0 && includedRows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
           <div data-allocation-line key={label} style={{ marginBottom: 6 }}><div>{label}:</div><b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
+        ))}
+        {includedRows.map((row, index) => (
+          <div data-allocation-line key={`included-${index}`} style={{ marginBottom: 6 }}>
+            <div>{row.cost_type}:</div>
+            <b style={{ whiteSpace: "nowrap", display: "block", color: row.informational ? "#15803d" : undefined }}>{fmtKRW(row.amount_krw)}</b>
+            {row.informational ? <div style={{ color: "#6b7280" }}>이미 상품금액에서 차감 · 아래 합계 제외</div> : null}
+          </div>
         ))}
         <div data-allocation-total style={{ fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
         <div style={{ color: "#6b7280" }}>
@@ -3511,20 +3606,35 @@ export default function DocumentsPage() {
   ]);
 
   const draftPreview = useMemo(() => {
-    const previewForeign = netProductForeign;
-    const previewKRW = fUseWallet && buyMode === "create" ? walletQuote.productKRW : editingPurchaseHasRefund
-      ? previewForeign * purchasePaymentComposition.productFx
-      : purchasePaymentComposition.productKRW;
-
-    const preview = computeDraftPreviewRows(discountedDraftItems, previewForeign, previewKRW);
-    if ((appliedPoints > 0 || appliedDiscountForeign > 0) && preview.rows.length) {
-      const parts = allocateExactKRW(previewKRW, preview.rows.map((row) => row.previewForeignTotal));
+    const previewForeign = grossProductForeign;
+    const netKRW = fUseWallet && buyMode === "create" ? walletQuote.productKRW : editingPurchaseHasRefund
+      ? previewForeign * purchasePaymentComposition.productFx : purchasePaymentComposition.productKRW;
+    const previewKRW = !editingPurchaseHasRefund && netProductForeign > 0
+      ? Math.round(netKRW * grossProductForeign / netProductForeign) : netKRW;
+    const preview = computeDraftPreviewRows(draftItems, previewForeign, previewKRW);
+    if (!editingPurchaseHasRefund && preview.rows.length) {
+      const weights = preview.rows.map((row) => row.previewForeignTotal);
+      const discount = allocateExactKRW(Math.max(0, previewKRW - netKRW), weights);
+      let net = allocateExactKRW(netKRW, weights);
+      const existing = editingPurchaseId ? itemsByPurchase.get(editingPurchaseId) ?? [] : [];
+      const meta = parseCombinedPaymentMeta(editingPurchase?.memo);
+      if (buyMode === "edit" && meta?.discount_mode !== "cost" && existing.length === preview.rows.length &&
+          Math.abs(existing.reduce((sum, item) => sum + n(item.line_total), 0) - netKRW) < 0.00001 &&
+          preview.rows.every((row) => {
+            const draft = draftItems.find((item) => item.key === row.key);
+            const old = existing.find((item) => item.id === draft?.id);
+            return old && n(old.qty) === row.qty && Math.abs(n(old.foreign_total) - row.previewForeignTotal * netProductForeign / Math.max(0.0001, grossProductForeign)) <= 0.0002;
+          })) {
+        net = preview.rows.map((row) => n(existing.find((item) => item.id === draftItems.find((item) => item.key === row.key)?.id)?.line_total));
+      }
+      const parts = net.map((value, index) => value + discount[index]);
       preview.rows = preview.rows.map((row, index) => ({...row, previewKRWTotal: parts[index], previewKRWUnit: row.qty > 0 ? parts[index] / row.qty : 0}));
     }
     return preview;
   }, [
     draftItems,
     discountedDraftItems,
+    grossProductForeign,
     enteredDraftItemForeignSum,
     netProductForeign,
     fTotalForeign,
@@ -3536,6 +3646,9 @@ export default function DocumentsPage() {
     walletQuote.productKRW,
     appliedPoints,
     appliedDiscountForeign,
+    editingPurchaseId,
+    editingPurchase,
+    itemsByPurchase,
   ]);
 
   // 안내 전용: 기존 자동계산 및 저장 로직은 변경하지 않는다.
@@ -3548,6 +3661,23 @@ export default function DocumentsPage() {
       totals.set(currency, round4((totals.get(currency) ?? 0) + Math.max(0, amount)));
     }
     return Array.from(totals);
+  })();
+
+  const purchasePaymentComparison = (() => {
+    const shipping = fShippingIncluded
+      ? Math.max(0, fUseWallet ? n(fShippingForeign) : purchasePaymentComposition.shippingForeign) : 0;
+    const fee = fFeeIncluded ? Math.max(0, n(fFeeForeign)) : 0;
+    // productForeign already has the purchase discount deducted. Never subtract it twice.
+    const points = fUseWallet && buyMode === "create" ? appliedPointForeign : 0;
+    const expected = round4(purchasePaymentComposition.productForeign + shipping + fee - points);
+    const currency = normalizeCurrencyCode(currencyValue(fCurrency, fCurrencyCustom));
+    const actual = round4(paymentTotalsByCurrency.reduce((sum, [code, amount]) =>
+      normalizeCurrencyCode(code) === currency ? sum + amount : sum, 0));
+    const hasPayment = draftPayments.some((row) => n(row.krw_amount) > 0 || n(row.foreign_amount) > 0) || fullyPointPaid;
+    const comparable = !editingPurchaseHasRefund && !hasCrossCurrencyPayments && hasPayment && expected > 0;
+    const difference = round4(expected - actual);
+    return { shipping, fee, points, expected, actual, comparable, difference,
+      matches: comparable && Math.abs(difference) <= 0.0001 };
   })();
 
   const purchaseEntryGuide = (() => {
@@ -3593,7 +3723,7 @@ export default function DocumentsPage() {
     const invoiceDiff = round4(n(fTotalForeign) - enteredDraftItemForeignSum);
     const blankCount = named.filter((item) => item.foreign_total.trim() === "").length;
     return { namedCount: named.length, qty, currency, notes, invoiceDiff, blankCount,
-      productKRW: fUseWallet && buyMode === "create" ? walletQuote.productKRW : purchasePaymentComposition.productKRW,
+      productKRW: netProductForeign > 0 ? Math.round((fUseWallet && buyMode === "create" ? walletQuote.productKRW : purchasePaymentComposition.productKRW) * grossProductForeign / netProductForeign) : 0,
       totalKRW: fUseWallet && buyMode === "create" ? walletQuote.totalKRW : paymentKRWSum,
       separateCostKRW: draftPurchaseCosts.reduce((sum, cost) => sum + signedCostAmountByType(cost.cost_type, Math.max(0, n(cost.krw_amount))), 0),
     };
@@ -4457,6 +4587,7 @@ export default function DocumentsPage() {
     const hasRefund = costs.some((cost) => normalizeCostType(cost.cost_type) === "환불" &&
       (cost.purchase_id === p.id || parseRefundMeta(cost.memo).items.some((it) => purchaseItemIdSet.has(it.item_id))));
     const grossItemTotals = !hasRefund ? combinedMeta?.gross_item_totals ?? {} : {};
+    const entryItems = !hasRefund ? combinedMeta?.entry_items ?? {} : {};
     setFDiscountForeign(hasRefund ? "" : String(combinedMeta?.discount_foreign || ""));
     setFShippingIncluded(!!combinedMeta?.enabled && n(combinedMeta?.shipping_foreign) > 0);
     setFFeeIncluded(!!combinedMeta?.enabled && n(combinedMeta?.fee_foreign) > 0);
@@ -4469,7 +4600,7 @@ export default function DocumentsPage() {
     setFTotalForeign(
       String(
         combinedMeta?.enabled
-          ? (!hasRefund && n(combinedMeta.gross_product_foreign) > 0 ? combinedMeta.gross_product_foreign : combinedMeta.product_foreign)
+          ? (!hasRefund && combinedMeta.entry_total_foreign != null ? combinedMeta.entry_total_foreign : !hasRefund && n(combinedMeta.gross_product_foreign) > 0 ? combinedMeta.gross_product_foreign : combinedMeta.product_foreign)
           : p.total_foreign ?? "",
       ),
     );
@@ -4532,11 +4663,10 @@ export default function DocumentsPage() {
             item_name: it.item_name ?? "",
             qty: String(it.qty ?? 1),
             foreign_unit_price: String(
-              grossItemTotals[it.id] != null ? "" :
-              it.foreign_unit_price ??
-                (n(it.qty) > 0 ? ceil4(n(it.foreign_total) / n(it.qty)) : ""),
+              entryItems[it.id]?.foreign_unit_price ?? "",
+              // Older records use their exact line total. Rounded unit prices must not overwrite it.
             ),
-            foreign_total: String(grossItemTotals[it.id] ?? it.foreign_total ?? ""),
+            foreign_total: String(entryItems[it.id]?.foreign_total ?? grossItemTotals[it.id] ?? it.foreign_total ?? ""),
             memo: it.memo ?? "",
             is_preorder: !!it.is_preorder,
             product_type: (it.product_type ?? "기타") as ProductType,
@@ -4847,7 +4977,7 @@ export default function DocumentsPage() {
             }))
             .filter((d) => d.item_name.length > 0),
         }
-      : computeDraftForeignTotals(discountedDraftItems, productForeign);
+      : computeDraftForeignTotals(draftItems, grossProductForeign);
 
     if (!computed.ok) {
       setErr(computed.message);
@@ -4860,7 +4990,35 @@ export default function DocumentsPage() {
     }
 
     const cleaned = computed.rows;
+    const grossProductKRW = !isRefundedPurchaseEdit && productForeign > 0
+      ? Math.round(productKRW * grossProductForeign / productForeign) : productKRW;
+    const discountKRW = Math.max(0, grossProductKRW - productKRW);
     const originalGrossRows = resolveDraftForeignTotals(draftItems, grossProductForeign);
+    const originalItems = currentEditingPurchase ? itemsByPurchase.get(currentEditingPurchase.id) ?? [] : [];
+    const originalMeta = parseCombinedPaymentMeta(currentEditingPurchase?.memo);
+    const oldPayments = purchasePayments.filter((row) => row.purchase_id === currentEditingPurchase?.id);
+    const sameNumber = (a: unknown, b: unknown) => Math.abs(n(a) - n(b)) < 0.00001;
+    const paymentsUnchanged = oldPayments.length > 0 && oldPayments.length === validPayments.length &&
+      validPayments.every((row) => oldPayments.some((old) => old.id === row.key &&
+        normalizeCurrencyCode(old.currency) === normalizeCurrencyCode(currencyValue(row.currency, row.currency_custom)) &&
+        sameNumber(old.foreign_amount, row.foreign_amount) && sameNumber(old.krw_amount, row.krw_amount)));
+    const settlementItems = originalMeta?.discount_mode === "cost" ? cleaned
+      : computeDraftForeignTotals(discountedDraftItems, productForeign).rows;
+    const preserveSettlementAmounts = buyMode === "edit" && !isRefundedPurchaseEdit && !!currentEditingPurchase &&
+      paymentsUnchanged && normalizeCurrencyCode(currentEditingPurchase.currency) === normalizeCurrencyCode(cur) &&
+      sameNumber(appliedDiscountForeign, originalMeta?.discount_foreign) &&
+      sameNumber(shippingForeign, originalMeta?.shipping_foreign) && sameNumber(feeForeign, originalMeta?.fee_foreign) &&
+      (originalMeta?.discount_mode === "cost" || sameNumber(originalItems.reduce((sum, row) => sum + n(row.line_total), 0), productKRW)) &&
+      originalItems.length === settlementItems.length && settlementItems.every((row) => originalItems.some((old) =>
+        old.id === row.id && sameNumber(old.qty, row.qty) && Math.abs(n(old.foreign_total) - row.foreign_total) <= 0.0002));
+    const preserveOriginalAmounts = preserveSettlementAmounts &&
+      (appliedDiscountForeign <= 0 || originalMeta?.discount_mode === "cost");
+    const discountItemParts = allocateExactKRW(discountKRW, cleaned.map((row) => Math.max(0, row.foreign_total)));
+    const netItemParts = preserveSettlementAmounts && originalMeta?.discount_mode !== "cost"
+      ? cleaned.map((row) => n(originalItems.find((old) => old.id === row.id)?.line_total))
+      : allocateExactKRW(Math.round(productKRW), cleaned.map((row) => Math.max(0, row.foreign_total)));
+    const grossItemParts = netItemParts.map((value, index) => value + (discountItemParts[index] ?? 0));
+
 
     const totalForeignToSave = isRefundedPurchaseEdit
       ? Math.max(
@@ -5127,9 +5285,7 @@ export default function DocumentsPage() {
       }
 
       const savedPurchaseItemIds: string[] = [];
-      const crossCurrencyProductParts = (hasCrossCurrencyPayments || appliedPoints > 0 || appliedDiscountForeign > 0) && !isRefundedPurchaseEdit
-        ? allocateExactKRW(Math.round(productKRW), cleaned.map((row) => Math.max(0, row.foreign_total)))
-        : null;
+      const crossCurrencyProductParts = !isRefundedPurchaseEdit ? grossItemParts : null;
 
       for (let idx = 0; idx < cleaned.length; idx++) {
         const d = cleaned[idx];
@@ -5141,7 +5297,7 @@ export default function DocumentsPage() {
           : Math.max(1, n(d.qty));
         const ft = Math.max(0, d.foreign_total);
         const foreignUnit =
-          q > 0
+          preserveOriginalAmounts && previousItem ? n(previousItem.foreign_unit_price) : q > 0
             ? ceil4(ft / q)
             : Math.max(0, n(previousItem?.foreign_unit_price));
         const previousItemFx =
@@ -5153,9 +5309,9 @@ export default function DocumentsPage() {
         const itemFx = isRefundedPurchaseEdit
           ? previousItemFx || historicalProductFx
           : fx;
-        const lineKRW = q > 0 ? (crossCurrencyProductParts ? crossCurrencyProductParts[idx] : ceil4(ft * itemFx)) : 0;
+        const lineKRW = preserveOriginalAmounts && previousItem ? n(previousItem.line_total) : q > 0 ? (crossCurrencyProductParts ? crossCurrencyProductParts[idx] : ceil4(ft * itemFx)) : 0;
         const unitKRW =
-          q > 0
+          preserveOriginalAmounts && previousItem ? n(previousItem.unit_price) : q > 0
             ? ceil4(lineKRW / q)
             : Math.max(0, n(previousItem?.unit_price));
 
@@ -5212,129 +5368,99 @@ export default function DocumentsPage() {
           const byKey = new Map(originalGrossRows.rows.map((row) => [row.key, row.foreign_total]));
           cleaned.forEach((row, index) => { grossTotals[savedPurchaseItemIds[index]] = byKey.get(row.key) ?? row.foreign_total; });
         }
-        const meta: CombinedPaymentMeta | null = (baseMeta || appliedDiscountForeign > 0) ? {
+        const entryItems: NonNullable<CombinedPaymentMeta["entry_items"]> = {};
+        cleaned.forEach((row, index) => {
+          const input = draftItems.find((item) => item.key === row.key);
+          if (input) entryItems[savedPurchaseItemIds[index]] = {
+            foreign_total: input.foreign_total, foreign_unit_price: input.foreign_unit_price,
+          };
+        });
+        const meta: CombinedPaymentMeta | null = {
+
           ...(baseMeta ?? { enabled: true, product_foreign: productForeign, shipping_foreign: shippingForeign,
             fee_foreign: feeForeign, total_foreign: combinedForeign, product_krw: productKRW,
             shipping_krw: shippingKRW, fee_krw: feeKRW, shipping_vendor: fShippingVendor.trim() }),
+          ...(preserveOriginalAmounts && originalMeta ? originalMeta : {}),
+          entry_total_foreign: fTotalForeign,
+          entry_items: entryItems,
+          discount_mode: "cost",
+          discount_krw: discountKRW,
+          gross_product_krw: grossProductKRW,
           discount_foreign: appliedDiscountForeign,
           gross_product_foreign: grossProductForeign,
           gross_item_totals: grossTotals,
-        } : null;
+        };
         const discountMemo = await supabase.from("purchase").update({memo: buildCombinedPaymentMemo(fMemo, meta)}).eq("id", purchaseId);
         if (discountMemo.error) throw discountMemo.error;
       }
 
-      if (!isRefundedPurchaseEdit) {
-        const previousIncludedShippingCosts = costs.filter(
-          (cost) =>
-            cost.purchase_id === purchaseId &&
-            normalizeCostType(cost.cost_type) === "배송비(거래처)" &&
-            String(cost.memo ?? "").includes(INCLUDED_SHIPPING_MEMO_HEADER),
-        );
-  
-        for (const oldCost of previousIncludedShippingCosts) {
-          const delAlloc = await supabase
-            .from("cost_allocations")
-            .delete()
-            .eq("purchase_cost_id", oldCost.id);
-          if (delAlloc.error) throw delAlloc.error;
-  
-          const delCost = await supabase
-            .from("purchase_costs")
-            .delete()
-            .eq("id", oldCost.id);
-          if (delCost.error) throw delCost.error;
+      if (!isRefundedPurchaseEdit && !preserveOriginalAmounts) {
+        async function syncIncludedCost(previous: PurchaseCostRow[], enabled: boolean,
+          input: IncludedCostInput, krw: number, weights: number[], exactParts?: number[]) {
+          const primary = previous[0];
+          const payload = { ...input, purchase_id: purchaseId, amount: enabled ? input.amount : 0 };
+          let costId = primary?.id;
+          if (!costId && !enabled) return;
+          if (costId) {
+            const update = await supabase.from("purchase_costs").update(payload).eq("id", costId);
+            if (update.error) throw update.error;
+          } else {
+            const insert = await supabase.from("purchase_costs").insert(payload).select("id").single();
+            if (insert.error) throw insert.error;
+            costId = insert.data.id;
+          }
+          if (!costId) throw new Error("포함 비용의 ID를 찾을 수 없어.");
+          // The parent cost is never deleted: existing related history keeps its ID.
+          const remove = await supabase.from("cost_allocations").delete().eq("purchase_cost_id", costId);
+          if (remove.error) throw remove.error;
+          const sign = krw < 0 ? -1 : 1;
+          const amounts = exactParts ?? allocateExactKRW(enabled ? Math.abs(krw) : 0, weights).map((value) => sign * value);
+          if (enabled && savedPurchaseItemIds.length) {
+            const insert = await supabase.from("cost_allocations").insert(savedPurchaseItemIds.map((id, i) => ({
+              purchase_cost_id: costId, purchase_item_id: id, allocated_amount: amounts[i] ?? 0,
+            })));
+            if (insert.error) throw insert.error;
+          }
+          const sync = await supabase.rpc("sync_cost_allocation_targets", {
+            p_cost_id: costId, p_item_ids: enabled ? savedPurchaseItemIds : [],
+          });
+          if (sync.error) throw sync.error;
+          // Legacy duplicates are neutralized in place rather than deleting linked history.
+          for (const duplicate of previous.slice(1)) {
+            const zero = await supabase.from("purchase_costs").update({amount: 0}).eq("id", duplicate.id);
+            if (zero.error) throw zero.error;
+            const clear = await supabase.from("cost_allocations").delete().eq("purchase_cost_id", duplicate.id);
+            if (clear.error) throw clear.error;
+            const reset = await supabase.rpc("sync_cost_allocation_targets", {p_cost_id: duplicate.id, p_item_ids: []});
+            if (reset.error) throw reset.error;
+          }
         }
-  
-        if (fShippingIncluded && shippingForeign > 0 && shippingKRW > 0) {
-          const shippingCost = await supabase
-            .from("purchase_costs")
-            .insert({
-              purchase_id: purchaseId,
-              cost_type: "배송비(거래처)",
-              amount: shippingForeign,
-              currency: cur,
-              fx_rate: calcFxRate(shippingKRW, shippingForeign),
-              memo: `${INCLUDED_SHIPPING_MEMO_HEADER}
-  상품값과 같은 결제로 지급`,
-              vendor_name: fShippingVendor.trim() || fSupplier || null,
-              cost_date: validPayments[0]?.payment_date || null,
-            })
-            .select("id")
-            .single();
-          if (shippingCost.error) throw shippingCost.error;
-  
-          const shippingAllocated = (appliedPoints > 0 ? allocateExactKRW : distributeByWeightsCeilIntSigned)(
-            shippingKRW,
-            cleaned.map((row) => Math.max(0, row.qty)),
-          );
-  
-          const shippingAllocationInsert = await supabase
-            .from("cost_allocations")
-            .insert(
-              savedPurchaseItemIds.map((itemId, index) => ({
-                purchase_cost_id: shippingCost.data.id,
-                purchase_item_id: itemId,
-                allocated_amount: shippingAllocated[index] ?? 0,
-              })),
-            );
-          if (shippingAllocationInsert.error)
-            throw shippingAllocationInsert.error;
-        }
-      }
-
-
-      if (!isRefundedPurchaseEdit) {
-        const previousIncludedFees = costs.filter((cost) =>
-          cost.purchase_id === purchaseId && normalizeCostType(cost.cost_type) === "수수료" &&
-          (String(cost.memo ?? "").includes("[결제금액 포함 수수료]") ||
-           String(cost.memo ?? "").includes("[충전잔액 수수료]")),
-        );
-        for (const cost of previousIncludedFees) {
-          const delAlloc = await supabase.from("cost_allocations").delete().eq("purchase_cost_id", cost.id);
-          if (delAlloc.error) throw delAlloc.error;
-          const delCost = await supabase.from("purchase_costs").delete().eq("id", cost.id);
-          if (delCost.error) throw delCost.error;
-        }
-      }
-      if (!isRefundedPurchaseEdit && fFeeIncluded && feeForeign > 0 && feeKRW > 0) {
-        const feeCost = await supabase
-          .from("purchase_costs")
-          .insert({
-            purchase_id: purchaseId,
-            cost_type: "수수료",
-            amount: feeForeign,
-            currency: cur,
-            fx_rate: calcFxRate(feeKRW, feeForeign),
-            memo: fUseWallet
-              ? "[충전잔액 수수료]\n상품 매입과 함께 충전잔액에서 차감"
-              : "[결제금액 포함 수수료]\n실제 결제금액에 포함 · 별도 결제 아님",
-            vendor_name: fSupplier || null,
-            cost_date:
-              validPayments[0]?.payment_date || fPurchaseDate || null,
-          })
-          .select("id")
-          .single();
-
-        if (feeCost.error) throw feeCost.error;
-
-        const feeAllocated = allocateExactKRW(
-          feeKRW,
-          cleaned.map((row) => Math.max(0, row.foreign_total)),
-        );
-
-        const feeAllocationInsert = await supabase
-          .from("cost_allocations")
-          .insert(
-            savedPurchaseItemIds.map((itemId, index) => ({
-              purchase_cost_id: feeCost.data.id,
-              purchase_item_id: itemId,
-              allocated_amount: feeAllocated[index] ?? 0,
-            })),
-          );
-
-        if (feeAllocationInsert.error)
-          throw feeAllocationInsert.error;
+        const includedShipping = costs.filter((cost) => cost.purchase_id === purchaseId &&
+          normalizeCostType(cost.cost_type) === "배송비(거래처)" &&
+          String(cost.memo ?? "").includes(INCLUDED_SHIPPING_MEMO_HEADER));
+        await syncIncludedCost(includedShipping, fShippingIncluded && shippingForeign > 0 && shippingKRW > 0, {
+          cost_type: "배송비(거래처)", amount: shippingForeign, currency: cur,
+          fx_rate: calcFxRate(shippingKRW, shippingForeign),
+          memo: `${INCLUDED_SHIPPING_MEMO_HEADER}\n상품값과 같은 결제로 지급`,
+          vendor_name: fShippingVendor.trim() || fSupplier || null,
+          cost_date: validPayments[0]?.payment_date || null,
+        }, shippingKRW, cleaned.map((row) => Math.max(0, row.qty)));
+        const includedFees = costs.filter((cost) => cost.purchase_id === purchaseId &&
+          normalizeCostType(cost.cost_type) === "수수료" &&
+          (String(cost.memo ?? "").includes("[결제금액 포함 수수료]") || String(cost.memo ?? "").includes("[충전잔액 수수료]")));
+        await syncIncludedCost(includedFees, fFeeIncluded && feeForeign > 0 && feeKRW > 0, {
+          cost_type: "수수료", amount: feeForeign, currency: cur, fx_rate: calcFxRate(feeKRW, feeForeign),
+          memo: fUseWallet ? "[충전잔액 수수료]\n상품 매입과 함께 충전잔액에서 차감" : "[결제금액 포함 수수료]\n실제 결제금액에 포함 · 별도 결제 아님",
+          vendor_name: fSupplier || null, cost_date: validPayments[0]?.payment_date || fPurchaseDate || null,
+        }, feeKRW, cleaned.map((row) => Math.max(0, row.foreign_total)));
+        const includedDiscounts = costs.filter((cost) => cost.purchase_id === purchaseId &&
+          String(cost.memo ?? "").includes("[매입 결제 할인]"));
+        await syncIncludedCost(includedDiscounts, appliedDiscountForeign > 0 && discountKRW > 0, {
+          cost_type: "할인/쿠폰", amount: -appliedDiscountForeign, currency: cur,
+          fx_rate: calcFxRate(discountKRW, appliedDiscountForeign),
+          memo: "[매입 결제 할인]\n상품단가는 할인 전 가격 · 이 비용을 상품금액 비율로 차감",
+          vendor_name: fSupplier || null, cost_date: validPayments[0]?.payment_date || fPurchaseDate || null,
+        }, -discountKRW, cleaned.map((row) => Math.max(0, row.foreign_total)), discountItemParts.map((value) => -value));
       }
 
       if (buyMode === "create" && draftPurchaseCosts.length > 0) {
@@ -5773,6 +5899,10 @@ export default function DocumentsPage() {
   async function deleteCost(costId: string) { await cancelProcessing("cost", costId); }
 
   function openCostEditModal(cost: PurchaseCostRow) {
+    if (String(cost.memo ?? "").includes("[매입 결제 할인]")) {
+      const purchase = purchases.find((row) => row.id === cost.purchase_id);
+      if (purchase) { setItemDetailOpen(false); openPurchaseEditModal(purchase); return; }
+    }
     if (cost.memo?.startsWith("[사후 포인트 사용]")) {
       setErr(null);
       setPointCostDetail(cost);
@@ -6224,7 +6354,7 @@ export default function DocumentsPage() {
 
       const myAllocRows = (allocRes.data ?? []) as CostAllocationRow[];
       if (myAllocRows.length === 0) {
-        setDetailAlloc([]);
+        setDetailAlloc(includedCostDisplayByItem.get(it.id) ?? []);
         return;
       }
 
@@ -6278,7 +6408,7 @@ export default function DocumentsPage() {
         })
         .sort((x, y) => (x.created_at < y.created_at ? 1 : -1));
 
-      setDetailAlloc(view);
+      setDetailAlloc([...view, ...(includedCostDisplayByItem.get(it.id) ?? [])]);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     }
@@ -7477,7 +7607,7 @@ export default function DocumentsPage() {
             >
               <div><b>원화합계</b> · 해당 상품의 수량 전체 금액 (추가비용 제외)</div>
               <div><b>상품단가</b> · 상품 1개 가격 (추가비용 제외)</div>
-              <div data-cost-explanation><b>추가비용 내역</b> · 배분된 배송비·수수료·관부가세 금액</div>
+              <div data-cost-explanation><b>추가비용 내역</b> · 배분된 배송비·수수료·관부가세·할인 금액</div>
               <div><b>최종단가</b> · 추가비용까지 포함한 상품 1개 가격</div>
               <div style={{ marginTop: 5, color: "#6b7280", fontSize: 11 }}>
                 예: 10개 상품값 80,000원 + 추가비용 15,000원 → 원화합계 80,000원 / 상품단가 8,000원 / 최종단가 9,500원
@@ -8990,6 +9120,7 @@ export default function DocumentsPage() {
                       />
                       배송비 충전잔액 사용
                     </label>
+                    {fShippingIncluded ? <div style={styles.small}>배송비는 상품 수량 비율로 배분해요. 별도 추가비용에 다시 입력하지 마세요.</div> : null}
 
                     <label
                       style={{
@@ -9215,6 +9346,7 @@ export default function DocumentsPage() {
                     />
                     위 결제금액에 배송비가 포함되어 있어요
                   </label>
+                  {fShippingIncluded ? <div style={styles.small}>이미 결제한 금액 안에서 구분해요. 상품 수량 비율로 배분하며, 아래 별도 추가비용에 다시 입력하지 마세요.</div> : null}
                   <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
                     <input type="checkbox" checked={fFeeIncluded} onChange={(e) => {
                       setFFeeIncluded(e.target.checked);
@@ -9293,7 +9425,7 @@ export default function DocumentsPage() {
                   <div style={styles.label}>결제 시 받은 전체 할인</div>
                   <input style={styles.input} inputMode="decimal" value={fDiscountForeign} disabled={editingPurchaseHasRefund}
                     onChange={(e) => { setFDiscountForeign(e.target.value); setBuyDirty(true); }} placeholder="할인이 없으면 비워두세요" />
-                  <div style={styles.small}>상품별 가격과 위 상품금액은 할인 전 가격으로 입력하세요. 전체 할인을 상품금액 비율로 자동 차감해요. 별도 추가비용의 할인/쿠폰에 다시 입력하지 마세요.</div>
+                  <div style={styles.small}>상품별 가격과 위 상품금액은 할인 전 가격으로 입력하세요. 전체 할인을 추가비용에서 상품금액 비율로 나눠 차감해요. 별도 추가비용의 할인/쿠폰에 다시 입력하지 마세요.</div>
                   <div style={styles.small}>할인 전 {fmtNum(grossProductForeign)} − 할인 {fmtNum(appliedDiscountForeign)} = 상품 실결제 {fmtNum(netProductForeign)} {currencyValue(fCurrency, fCurrencyCustom)}</div>
                   {editingPurchaseHasRefund ? <div style={styles.small}>환불된 매입은 기존 할인과 원결제 기준을 유지해요.</div> : null}
                 </div>
@@ -9838,9 +9970,28 @@ export default function DocumentsPage() {
                 <div style={styles.small}>상품명을 입력한 항목 기준</div>
               </div>
               <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
-                <div style={styles.small}>상품금액 · 추가비용 제외</div>
-                <b>{fmtNum(purchasePaymentComposition.productForeign)} {purchaseEntryGuide.currency}</b>
+                <div style={styles.small}>상품금액 · 할인 전 / 추가비용 제외</div>
+                <b>{fmtNum(grossProductForeign)} {purchaseEntryGuide.currency}</b>
                 <div style={styles.small}>원화 {fmtKRW(purchaseEntryGuide.productKRW)}</div>
+              </div>
+              <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
+                <div style={styles.small}>할인·배송비·수수료 적용 합계</div>
+                <b>{fmtNum(purchasePaymentComparison.expected)} {purchaseEntryGuide.currency}</b>
+                <div style={styles.small}>
+                  상품 {fmtNum(grossProductForeign)} − 할인 {fmtNum(appliedDiscountForeign)}
+                  {" + 배송비 "}{fmtNum(purchasePaymentComparison.shipping)}
+                  {" + 수수료 "}{fmtNum(purchasePaymentComparison.fee)}
+                  {purchasePaymentComparison.points > 0 ? ` − 포인트 ${fmtNum(purchasePaymentComparison.points)}` : ""}
+                </div>
+                <div style={{ ...styles.small, marginTop: 6, fontWeight: 800,
+                  color: purchasePaymentComparison.comparable ? purchasePaymentComparison.matches ? "#15803d" : "#b91c1c" : "#6b7280" }}>
+                  {editingPurchaseHasRefund ? "환불 건 · 원결제와 현재 상품금액은 별도 확인" : hasCrossCurrencyPayments
+                    ? "통화가 달라 직접 비교할 수 없어요" : !purchasePaymentComparison.comparable
+                    ? "실제 결제금액을 입력하면 비교해요" : purchasePaymentComparison.matches
+                    ? "✓ 실제 결제합계와 일치 · 차이 0" : `실제 결제합계와 차이 ${fmtNum(Math.abs(purchasePaymentComparison.difference))} ${purchaseEntryGuide.currency} (${purchasePaymentComparison.difference > 0 ? "계산 합계가 큼" : "실제 결제액이 큼"})`}
+                </div>
+                <div style={styles.small}>함께 결제한 비용 기준 · 별도 추가비용 제외</div>
+                {fShippingIncluded && !fUseWallet && !hasCrossCurrencyPayments ? <div style={styles.small}>배송비는 결제액의 차액으로 자동계산돼요.</div> : null}
               </div>
               <div style={{ background: "white", borderRadius: 10, padding: 10 }}>
                 <div style={styles.small}>{fUseWallet ? "충전잔액 차감 합계" : "결제내역의 통화별 합계"}</div>
@@ -11706,6 +11857,7 @@ export default function DocumentsPage() {
                             )}
                           </td>
                           <td style={styles.td}>
+                            {a.informational ? <span style={styles.small}>상품금액에 반영 · 합계 제외</span> : null}
                             {a.cost_id ? (
                               <div
                                 style={{
@@ -11795,6 +11947,7 @@ export default function DocumentsPage() {
                         </div>
                       </div>
 
+                      {a.informational ? <div style={styles.small}>상품금액에 반영 · 합계 제외</div> : null}
                       {a.cost_id ? (
                         <div data-tablet-role="item-detail-allocation-actions">
                           <button
@@ -11834,7 +11987,7 @@ export default function DocumentsPage() {
                       ceilInt(
                         (n(detailItem.line_total) +
                           detailAlloc.reduce(
-                            (acc, x) => acc + n(x.amount_krw),
+                            (acc, x) => acc + (x.informational ? 0 : n(x.amount_krw)),
                             0,
                           )) /
                           n(detailItem.qty),
