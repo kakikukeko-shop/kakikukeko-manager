@@ -2503,14 +2503,15 @@ export default function DocumentsPage() {
     const rows = Array.from(allocationDetailsByItem.get(itemId) ?? [])
       .filter(([, amount]) => amount !== 0);
     const includedRows = includedCostDisplayByItem.get(itemId) ?? [];
-    const renderCostLabel = (label: string) => {
-      const shipping = /^배송비\s*\((거래처|배대지)\)$/.exec(label.trim());
+    const renderCostLabel = (label: string | null | undefined) => {
+      const displayLabel = label?.trim() || "항목 미확인";
+      const shipping = /^배송비\s*\((거래처|배대지)\)$/.exec(displayLabel);
       return shipping ? (
         <div data-allocation-label style={{ whiteSpace: "normal", overflow: "visible" }}>
           <span style={{ display: "block", whiteSpace: "nowrap" }}>배송비</span>
           <span style={{ display: "block", whiteSpace: "nowrap" }}>({shipping[1]})</span>
         </div>
-      ) : <div data-allocation-label>{label}:</div>;
+      ) : <div data-allocation-label>{displayLabel}:</div>;
     };
     return (
       <div data-allocation-details style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 8, rowGap: 6, fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
