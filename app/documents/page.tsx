@@ -2503,20 +2503,29 @@ export default function DocumentsPage() {
     const rows = Array.from(allocationDetailsByItem.get(itemId) ?? [])
       .filter(([, amount]) => amount !== 0);
     const includedRows = includedCostDisplayByItem.get(itemId) ?? [];
+    const renderCostLabel = (label: string) => {
+      const shipping = /^배송비\s*\((거래처|배대지)\)$/.exec(label.trim());
+      return shipping ? (
+        <div data-allocation-label style={{ whiteSpace: "normal", overflow: "visible" }}>
+          <span style={{ display: "block", whiteSpace: "nowrap" }}>배송비</span>
+          <span style={{ display: "block", whiteSpace: "nowrap" }}>({shipping[1]})</span>
+        </div>
+      ) : <div data-allocation-label>{label}:</div>;
+    };
     return (
-      <div data-allocation-details style={{ fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
-        {rows.length === 0 && includedRows.length === 0 ? <div style={{ color: "#6b7280" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
-          <div data-allocation-line key={label} style={{ marginBottom: 6 }}><div>{label}:</div><b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
+      <div data-allocation-details style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 8, rowGap: 6, fontSize: 11, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+        {rows.length === 0 && includedRows.length === 0 ? <div style={{ color: "#6b7280", gridColumn: "1 / -1" }}>추가비용 없음</div> : rows.map(([label, amount]) => (
+          <div data-allocation-line key={label} style={{ minWidth: 0 }}>{renderCostLabel(label)}<b style={{ whiteSpace: "nowrap", display: "block" }}>{fmtKRW(amount)}</b></div>
         ))}
         {includedRows.map((row, index) => (
-          <div data-allocation-line key={`included-${index}`} style={{ marginBottom: 6 }}>
-            <div>{row.cost_type}:</div>
+          <div data-allocation-line key={`included-${index}`} style={{ minWidth: 0 }}>
+            {renderCostLabel(row.cost_type)}
             <b style={{ whiteSpace: "nowrap", display: "block", color: row.informational ? "#15803d" : undefined }}>{fmtKRW(row.amount_krw)}</b>
             {row.informational ? <div style={{ color: "#6b7280" }}>이미 상품금액에서 차감 · 아래 합계 제외</div> : null}
           </div>
         ))}
-        <div data-allocation-total style={{ fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
-        <div style={{ color: "#6b7280" }}>
+        <div data-allocation-total style={{ gridColumn: "1 / -1", marginTop: 4, paddingTop: 4, borderTop: "1px solid #eeeaf5", fontWeight: 800 }}>합계<br /><span style={{ whiteSpace: "nowrap" }}>{fmtKRW(total)}</span></div>
+        <div style={{ color: "#6b7280", gridColumn: "1 / -1" }}>
           {qty > 0 ? `개당 ${fmtKRW(ceilInt(total / qty))}` : "전체환불 · 개당 계산 제외"}
         </div>
       </div>
@@ -8366,6 +8375,36 @@ export default function DocumentsPage() {
       </div>
 
       <style jsx global>{`
+          /* 추가비용: 모든 화면에서 항목 2열, 합계는 별도 행 */
+          [data-page="documents"] [data-allocation-details] {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            column-gap: 8px !important;
+            row-gap: 6px !important;
+          }
+          [data-page="documents"] [data-allocation-details] > [data-allocation-line] {
+            min-width: 0 !important;
+            margin: 0 !important;
+            grid-column: auto !important;
+          }
+          [data-page="documents"] [data-allocation-line] > [data-allocation-label] {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+          }
+          [data-page="documents"] [data-allocation-label] > span {
+            display: block !important;
+            white-space: nowrap !important;
+          }
+          [data-page="documents"] [data-allocation-line] > b {
+            display: block !important;
+            white-space: nowrap !important;
+          }
+          [data-page="documents"] [data-allocation-details] > [data-allocation-total],
+          [data-page="documents"] [data-allocation-details] > [data-allocation-total] + div {
+            grid-column: 1 / -1 !important;
+          }
+
         /* 매입관리 태블릿 전용: 매입목록과 상품목록을 위아래로 쌓지 않고 좌우로 유지 */
         @media (min-width: 700px) and (max-width: 1180px) {
           html[data-view-mode="tablet"] [data-page="documents"] [data-tablet-layout="documents-main"] {
