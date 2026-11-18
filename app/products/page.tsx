@@ -82,6 +82,10 @@ type SortMode =
   | 'stock_asc'
   | 'cost_desc'
   | 'cost_asc'
+  | 'online_margin_desc'
+  | 'online_margin_asc'
+  | 'offline_margin_desc'
+  | 'offline_margin_asc'
   | 'created_recent'
   | 'created_old'
 
@@ -98,6 +102,16 @@ function ceilInt(v: number) {
 
 function fmtKRW(v: number) {
   return `${Math.round(v).toLocaleString('ko-KR')}원`
+}
+
+function getProductMargin(price: number, unitCost: number) {
+  if (price <= 0 || unitCost <= 0 || !Number.isFinite(price) || !Number.isFinite(unitCost)) return null
+  return (price - unitCost) / price * 100
+}
+
+function formatProductMargin(price: number, unitCost: number) {
+  const margin = getProductMargin(price, unitCost)
+  return margin == null ? '—' : `${margin.toFixed(1)}%`
 }
 
 function fmtNum(v: number) {
@@ -226,6 +240,17 @@ export default function ProductsPage() {
 
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<ItemRow | null>(null)
+  const [editUnitCost, setEditUnitCost] = useState(0)
+  const [targetMargin, setTargetMargin] = useState('')
+  const [editOffset, setEditOffset] = useState({ x: 0, y: 0 })
+  const editDialogRef = useRef<HTMLDivElement>(null)
+  const editDragRef = useRef<{
+    pointerId: number
+    x: number
+    y: number
+    bounds: DOMRect
+    offset: { x: number; y: number }
+  } | null>(null)
   const [eOnlinePrice, setEOnlinePrice] = useState('')
   const [eOnlineReceivedShippingGeneral, setEOnlineReceivedShippingGeneral] = useState('')
   const [eOnlineExpectedShippingGeneral, setEOnlineExpectedShippingGeneral] = useState('')
@@ -510,6 +535,21 @@ export default function ProductsPage() {
     })
 
     filtered.sort((a, b) => {
+      if (
+        sortMode === 'online_margin_desc' || sortMode === 'online_margin_asc' ||
+        sortMode === 'offline_margin_desc' || sortMode === 'offline_margin_asc'
+      ) {
+        const priceKey = sortMode.startsWith('online') ? 'online_price' : 'offline_price'
+        const marginA = getProductMargin(n(a.item[priceKey]), a.finalUnitCost)
+        const marginB = getProductMargin(n(b.item[priceKey]), b.finalUnitCost)
+
+        if (marginA == null && marginB != null) return 1
+        if (marginA != null && marginB == null) return -1
+        if (marginA != null && marginB != null && marginA !== marginB) {
+          return sortMode.endsWith('_desc') ? marginB - marginA : marginA - marginB
+        }
+        return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
+      }
       if (sortMode === 'name_asc') {
         return (a.item.item_name ?? '').localeCompare(b.item.item_name ?? '', 'ko')
       }
@@ -808,7 +848,11 @@ export default function ProductsPage() {
   async function revertSelectedAll() { await requestInventoryAction('all', selectedItemIds) }
   async function deleteSelectedItems() { await requestInventoryAction('archive', selectedItemIds) }
 
-  function openEditModal(item: ItemRow) {
+  function openEditModal(item: ItemRow, unitCost: number) {
+    editDragRef.current = null
+    setEditOffset({ x: 0, y: 0 })
+    setEditUnitCost(unitCost)
+    setTargetMargin('')
     setEditTarget(item)
     setEOnlinePrice(String(item.online_price ?? ''))
     setEOnlineReceivedShippingGeneral(
@@ -893,6 +937,52 @@ export default function ProductsPage() {
     } catch (e: any) { setBulkShippingError(e?.message ?? String(e)) }
     finally { bulkShippingBusyRef.current = false; setBulkShippingBusy(false); setLoading(false) }
   }
+
+  function startEditDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!event.isPrimary || event.button !== 0 || !editDialogRef.current) return
+    if ((event.target as HTMLElement).closest('button')) return
+
+    event.currentTarget.setPointerCapture(event.pointerId)
+    editDragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      bounds: editDialogRef.current.getBoundingClientRect(),
+      offset: editOffset,
+    }
+  }
+
+  function moveEditDialog(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = editDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+
+    const { bounds, offset } = drag
+    setEditOffset({
+      x: offset.x + Math.min(
+        Math.max(event.clientX - drag.x, -bounds.left),
+        document.documentElement.clientWidth - bounds.right
+      ),
+      y: offset.y + Math.min(
+        Math.max(event.clientY - drag.y, -bounds.top),
+        document.documentElement.clientHeight - bounds.bottom
+      ),
+    })
+  }
+
+  function endEditDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (editDragRef.current?.pointerId === event.pointerId) editDragRef.current = null
+  }
+
+  const targetMarginPercent = Number(targetMargin)
+  const calculatedPrice = Math.ceil(editUnitCost / (1 - targetMarginPercent / 100))
+  const targetPrice =
+    editUnitCost > 0 &&
+    targetMargin.trim() !== '' &&
+    targetMarginPercent >= 0 &&
+    targetMarginPercent < 100 &&
+    Number.isSafeInteger(calculatedPrice)
+      ? calculatedPrice
+      : null
 
   async function saveEdit() {
     if (!editTarget) return
@@ -1244,7 +1334,41 @@ export default function ProductsPage() {
 }
 `}</style>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}><button style={styles.btn(activeTab === 'products' ? 'primary' : 'ghost')} onClick={() => setActiveTab('products')}>상품·재고</button><button style={styles.btn(activeTab === 'inventory' ? 'primary' : 'ghost')} onClick={() => setActiveTab('inventory')}>위치·재고실사</button></div>
-      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}><InventoryLocationPanel refreshRef={inventoryRefreshRef} active={activeTab === 'inventory'} items={items.filter(item => !archivedIds.has(item.id) && n(item.qty) > 0).map(item => ({ id: item.id, name: item.item_name || '상품명 없음', photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null, supplier: purchaseMap.get(item.purchase_id)?.supplier || '', date: (arrivalsByItem.get(item.id) || []).map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '', orderedQty: n(item.qty), bookQty: archivedIds.has(item.id) || n(item.qty) <= 0 ? 0 : Math.min(n(item.qty), (arrivalsByItem.get(item.id) || []).reduce((sum, row) => sum + n(row.arrived_qty), 0)) + (stockAdjustmentMap.get(item.id) || 0) - (soldQtyByItem.get(item.id) || 0) }))} onRefresh={async () => { if (await load({ preserveScroll: true }) === false) throw new Error("최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.") }} /></div>
+      <div style={{ display: activeTab === 'inventory' ? 'block' : 'none' }}>
+        <InventoryLocationPanel
+          refreshRef={inventoryRefreshRef}
+          active={activeTab === 'inventory'}
+          items={items
+            .filter(item => !archivedIds.has(item.id) && n(item.qty) > 0)
+            .map(item => {
+              const orderedQty = n(item.qty)
+              const arrivals = arrivalsByItem.get(item.id) ?? []
+              const arrivedQty = arrivals.reduce((sum, row) => sum + n(row.arrived_qty), 0)
+              const bookQty = Math.max(
+                0,
+                Math.min(orderedQty, arrivedQty) +
+                  (stockAdjustmentMap.get(item.id) ?? 0) -
+                  (soldQtyByItem.get(item.id) ?? 0)
+              )
+
+              return {
+                id: item.id,
+                name: item.item_name || '상품명 없음',
+                photoUrl: itemPhotoMap.get(item.id) || item.attachment_url || null,
+                supplier: purchaseMap.get(item.purchase_id)?.supplier || '',
+                date: arrivals.map(row => row.arrived_date || '').filter(Boolean).sort().reverse()[0] || '',
+                orderedQty,
+                bookQty,
+              }
+            })
+            .filter(item => item.bookQty > 0)}
+          onRefresh={async () => {
+            if (await load({ preserveScroll: true }) === false) {
+              throw new Error('최신 재고를 다시 불러오지 못했어요. 새로고침해 주세요.')
+            }
+          }}
+        />
+      </div>
       <div style={{ display: activeTab === 'products' ? 'block' : 'none' }}>
 
       <div data-products-topbar style={styles.topbar}>
@@ -1342,6 +1466,10 @@ export default function ProductsPage() {
             <option value="stock_asc">재고 적은순</option>
             <option value="cost_desc">원가 높은순</option>
             <option value="cost_asc">원가 낮은순</option>
+            <option value="online_margin_desc">온라인 마진율 높은순</option>
+            <option value="online_margin_asc">온라인 마진율 낮은순</option>
+            <option value="offline_margin_desc">오프라인 마진율 높은순</option>
+            <option value="offline_margin_asc">오프라인 마진율 낮은순</option>
             <option value="created_recent">등록 최근순</option>
             <option value="created_old">등록 오래된순</option>
           </select>
@@ -1590,7 +1718,14 @@ export default function ProductsPage() {
                       <div style={{ color: '#64748b', fontSize: 9 }}>배분포함</div>
                     </td>
                     <td style={compactTd}>
-                      {n(row.item.online_price) > 0 ? fmtKRW(n(row.item.online_price)) : '미입력'}
+                      {n(row.item.online_price) > 0 ? (
+                        <>
+                          <div>{fmtKRW(n(row.item.online_price))}</div>
+                          {row.finalUnitCost > 0 && (
+                            <div style={styles.small}>마진율 {formatProductMargin(n(row.item.online_price), row.finalUnitCost)}</div>
+                          )}
+                        </>
+                      ) : '미입력'}
                     </td>
                     <td style={compactTd}>
                       <div>일반 {receivedGeneralShipping > 0 ? fmtKRW(receivedGeneralShipping) : '-'}</div>
@@ -1609,7 +1744,14 @@ export default function ProductsPage() {
                       ) : '미입력'}
                     </td>
                     <td style={compactTd}>
-                      {n(row.item.offline_price) > 0 ? fmtKRW(n(row.item.offline_price)) : '미입력'}
+                      {n(row.item.offline_price) > 0 ? (
+                        <>
+                          <div>{fmtKRW(n(row.item.offline_price))}</div>
+                          {row.finalUnitCost > 0 && (
+                            <div style={styles.small}>마진율 {formatProductMargin(n(row.item.offline_price), row.finalUnitCost)}</div>
+                          )}
+                        </>
+                      ) : '미입력'}
                     </td>
                     <td style={{ ...compactTd, color: n(row.item.offline_price) > 0 ? '#166534' : '#6b7280', fontWeight: 800 }}>
                       {n(row.item.offline_price) > 0 ? fmtKRW(offlineProfit) : '미입력'}
@@ -1665,7 +1807,7 @@ export default function ProductsPage() {
                         </button>
                         <button
                           style={{ ...styles.smallBtn, width: '100%', padding: '5px 3px', fontSize: 10 }}
-                          onClick={() => openEditModal(row.item)}
+                          onClick={() => openEditModal(row.item, row.finalUnitCost)}
                         >
                           수정
                         </button>
@@ -1799,9 +1941,14 @@ export default function ProductsPage() {
                     </td>
                     <td style={styles.td}>{fmtNum(row.remainingArrivalQty)}</td>
                     <td style={styles.td}>
-                      {n(row.item.online_price) > 0
-                        ? fmtKRW(n(row.item.online_price))
-                        : '미입력'}
+                      {n(row.item.online_price) > 0 ? (
+                        <>
+                          <div>{fmtKRW(n(row.item.online_price))}</div>
+                          {row.finalUnitCost > 0 && (
+                            <div style={styles.small}>마진율 {formatProductMargin(n(row.item.online_price), row.finalUnitCost)}</div>
+                          )}
+                        </>
+                      ) : '미입력'}
                     </td>
                     <td style={styles.td}>
                       {receivedGeneralShipping > 0 || receivedConvenienceShipping > 0 ? (
@@ -1834,9 +1981,14 @@ export default function ProductsPage() {
                       )}
                     </td>
                     <td style={styles.td}>
-                      {n(row.item.offline_price) > 0
-                        ? fmtKRW(n(row.item.offline_price))
-                        : '미입력'}
+                      {n(row.item.offline_price) > 0 ? (
+                        <>
+                          <div>{fmtKRW(n(row.item.offline_price))}</div>
+                          {row.finalUnitCost > 0 && (
+                            <div style={styles.small}>마진율 {formatProductMargin(n(row.item.offline_price), row.finalUnitCost)}</div>
+                          )}
+                        </>
+                      ) : '미입력'}
                     </td>
                     <td style={styles.td}>
                       {n(row.item.offline_price) > 0 ? (
@@ -1896,7 +2048,7 @@ export default function ProductsPage() {
                         >
                           입고이력
                         </button>
-                        <button style={styles.smallBtn} onClick={() => openEditModal(row.item)}>
+                        <button style={styles.smallBtn} onClick={() => openEditModal(row.item, row.finalUnitCost)}>
                           수정
                         </button>
                       </div>
@@ -2113,24 +2265,50 @@ export default function ProductsPage() {
 
       {editModalOpen && editTarget && (
         <div style={styles.modalOverlay} onMouseDown={() => setEditModalOpen(false)}>
-          <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>
-              <div style={{ fontSize: 16, fontWeight: 900 }}>상품 / 재고 정보 수정</div>
+          <div
+            ref={editDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-edit-title"
+            style={{
+              ...styles.modal,
+              boxSizing: 'border-box',
+              maxWidth: '100%',
+              transform: `translate(${editOffset.x}px, ${editOffset.y}px)`,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{ ...styles.modalHeader, cursor: 'move', touchAction: 'none', userSelect: 'none' }}
+              onPointerDown={startEditDrag}
+              onPointerMove={moveEditDialog}
+              onPointerUp={endEditDrag}
+              onPointerCancel={endEditDrag}
+              onLostPointerCapture={endEditDrag}
+            >
+              <div id="product-edit-title" style={{ fontSize: 16, fontWeight: 900 }}>
+                상품 / 재고 정보 수정
+              </div>
               <button style={styles.btn('ghost')} onClick={() => setEditModalOpen(false)}>
                 닫기
               </button>
             </div>
 
             <div style={{ ...styles.card, marginBottom: 12 }}>
-              <div style={{ fontWeight: 900 }}>{editTarget.item_name ?? '(이름 없음)'}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 12px' }}>
+                <strong>{editTarget.item_name ?? '(이름 없음)'}</strong>
+                <span style={styles.label}>개당 원가 {fmtKRW(editUnitCost)} (배분 포함)</span>
+              </div>
               <div style={styles.small}>매입줄 기준으로 저장돼.</div>
             </div>
 
             <div style={styles.grid2}>
               <div style={styles.field}>
-                <div style={styles.label}>온라인판매가</div>
+                <label htmlFor="edit-online-price" style={styles.label}>온라인판매가</label>
+                <div style={styles.small}>상품 마진율 {formatProductMargin(n(eOnlinePrice), editUnitCost)}</div>
                 <input
                   style={styles.input}
+                  id="edit-online-price"
                   value={eOnlinePrice}
                   onChange={(e) => setEOnlinePrice(e.target.value)}
                   placeholder="숫자만"
@@ -2138,9 +2316,11 @@ export default function ProductsPage() {
               </div>
 
               <div style={styles.field}>
-                <div style={styles.label}>오프라인판매가</div>
+                <label htmlFor="edit-offline-price" style={styles.label}>오프라인판매가</label>
+                <div style={styles.small}>상품 마진율 {formatProductMargin(n(eOfflinePrice), editUnitCost)}</div>
                 <input
                   style={styles.input}
+                  id="edit-offline-price"
                   value={eOfflinePrice}
                   onChange={(e) => setEOfflinePrice(e.target.value)}
                   placeholder="숫자만"
@@ -2186,6 +2366,46 @@ export default function ProductsPage() {
                   placeholder="내가 예상하는 실제 배송비"
                 />
               </div>
+            </div>
+
+            <div style={{ ...styles.card, marginTop: 12 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 8 }}>
+                <div style={styles.field}>
+                  <label htmlFor="edit-target-margin" style={styles.label}>목표 마진율 (%)</label>
+                  <input
+                    id="edit-target-margin"
+                    style={{ ...styles.input, width: 130, boxSizing: 'border-box' }}
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="any"
+                    value={targetMargin}
+                    onChange={(event) => setTargetMargin(event.target.value)}
+                    placeholder="예: 40"
+                  />
+                </div>
+                <div aria-live="polite">
+                  <strong>목표 판매가 {targetPrice == null ? '—' : fmtKRW(targetPrice)}</strong>
+                  <div style={styles.small}>
+                    개당 이익 {targetPrice == null ? '—' : fmtKRW(targetPrice - editUnitCost)}
+                  </div>
+                </div>
+                <button type="button" style={styles.btn('ghost')} disabled={targetPrice == null}
+                  onClick={() => targetPrice != null && setEOnlinePrice(String(targetPrice))}>
+                  온라인에 적용
+                </button>
+                <button type="button" style={styles.btn('ghost')} disabled={targetPrice == null}
+                  onClick={() => targetPrice != null && setEOfflinePrice(String(targetPrice))}>
+                  오프라인에 적용
+                </button>
+              </div>
+              <div style={{ ...styles.small, marginTop: 6 }}>
+                상품 판매가와 배분 포함 원가 기준 · 판매 배송비 및 판매 수수료 제외
+              </div>
+              {editUnitCost <= 0 && <div style={styles.small}>원가가 0원이면 목표 판매가를 계산할 수 없어요.</div>}
+              {editUnitCost > 0 && targetMargin !== '' && targetPrice == null && (
+                <div role="status" style={styles.small}>0% 이상 100% 미만의 계산 가능한 마진율을 입력해 주세요.</div>
+              )}
             </div>
 
             <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
